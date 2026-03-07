@@ -29,6 +29,10 @@ export const machineApi = {
     const { data } = await apiClient.put(`${ENDPOINTS.machines}/${id}`, payload);
     return data;
   },
+  updateTarget: async (id, payload) => {
+    const { data } = await apiClient.patch(ENDPOINTS.machineTarget(id), payload);
+    return data;
+  },
   testPlc: async (payload) => {
     const { data } = await apiClient.post(ENDPOINTS.machineTestPlc, payload);
     return data;
@@ -75,6 +79,14 @@ export const plcConfigApi = {
 export const scannerApi = {
   list: async () => {
     const { data } = await apiClient.get(ENDPOINTS.scanners);
+    return data;
+  },
+  listConnections: async () => {
+    const { data } = await apiClient.get(ENDPOINTS.scannerConnections);
+    return data;
+  },
+  testConnection: async (id) => {
+    const { data } = await apiClient.post(ENDPOINTS.scannerTestConnection(id));
     return data;
   },
   create: async (payload) => {
@@ -133,6 +145,17 @@ export const stationSettingsApi = {
   },
   save: async (settings) => {
     const { data } = await apiClient.put(ENDPOINTS.stationSettings, { settings });
+    return data;
+  },
+};
+
+export const roleAccessApi = {
+  list: async () => {
+    const { data } = await apiClient.get(ENDPOINTS.roleAccessSettings);
+    return data;
+  },
+  save: async (settings) => {
+    const { data } = await apiClient.put(ENDPOINTS.roleAccessSettings, { settings });
     return data;
   },
 };
@@ -265,6 +288,10 @@ export const qrFormatApi = {
   },
 };
 
+function isNotFoundError(error) {
+  return Number(error?.response?.status || 0) === 404;
+}
+
 export const packingApi = {
   overview: async () => {
     const { data } = await apiClient.get(ENDPOINTS.packing.overview);
@@ -289,5 +316,53 @@ export const packingApi = {
   deleteBox: async (sessionId) => {
     const { data } = await apiClient.delete(ENDPOINTS.packing.deleteBox(sessionId));
     return data;
+  },
+  managementSettings: async () => {
+    try {
+      const { data } = await apiClient.get(ENDPOINTS.packing.managementSettings);
+      return data;
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        throw error;
+      }
+      const { data } = await apiClient.get(ENDPOINTS.packing.managementSettingsLegacy);
+      return data;
+    }
+  },
+  updateManagementSettings: async (payload) => {
+    try {
+      const { data } = await apiClient.put(ENDPOINTS.packing.managementSettings, payload);
+      return data;
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        throw error;
+      }
+      const { data } = await apiClient.put(ENDPOINTS.packing.managementSettingsLegacy, payload);
+      return data;
+    }
+  },
+  managementBoxes: async (params = {}) => {
+    try {
+      const { data } = await apiClient.get(ENDPOINTS.packing.managementBoxes, { params });
+      return data;
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        throw error;
+      }
+      const { data } = await apiClient.get(ENDPOINTS.packing.managementBoxesLegacy, { params });
+      return data;
+    }
+  },
+  generateNext: async () => {
+    try {
+      const { data } = await apiClient.post(ENDPOINTS.packing.generateNext);
+      return data;
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        throw error;
+      }
+      const { data } = await apiClient.post(ENDPOINTS.packing.generateNextLegacy);
+      return data;
+    }
   },
 };

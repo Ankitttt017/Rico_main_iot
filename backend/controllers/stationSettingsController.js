@@ -6,6 +6,14 @@ function normalizeStation(value) {
     .toUpperCase();
 }
 
+function normalizePlcPartCount(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return 1;
+  }
+  return Math.min(Math.max(Math.trunc(parsed), 1), 20);
+}
+
 function normalizeInputMap(rawSettings = {}) {
   if (!rawSettings || typeof rawSettings !== "object" || Array.isArray(rawSettings)) {
     return {};
@@ -21,6 +29,10 @@ function normalizeInputMap(rawSettings = {}) {
       qr: rawValue.qr !== false,
       operation: rawValue.operation !== false,
       rejectionBin: rawValue.rejectionBin !== false,
+      plcConfirmation: rawValue.plcConfirmation !== false,
+      manualResult: rawValue.manualResult === true,
+      plcPartCount: normalizePlcPartCount(rawValue.plcPartCount ?? rawValue.plc_part_count),
+      finalPacking: rawValue.finalPacking === true,
     };
     return acc;
   }, {});
@@ -36,6 +48,10 @@ function rowsToMap(rows = []) {
       qr: Boolean(row.qr_enabled),
       operation: Boolean(row.operation_enabled),
       rejectionBin: Boolean(row.rejection_bin_enabled),
+      plcConfirmation: row.plc_confirmation_enabled !== false,
+      manualResult: row.manual_result_enabled === true,
+      plcPartCount: normalizePlcPartCount(row.plc_part_count),
+      finalPacking: row.final_packing_enabled === true,
     };
     return acc;
   }, {});
@@ -68,6 +84,10 @@ exports.saveSettings = async (req, res) => {
           qr_enabled: payload[stationNo].qr,
           operation_enabled: payload[stationNo].operation,
           rejection_bin_enabled: payload[stationNo].rejectionBin,
+          plc_confirmation_enabled: payload[stationNo].plcConfirmation,
+          manual_result_enabled: payload[stationNo].manualResult === true,
+          plc_part_count: payload[stationNo].plcPartCount,
+          final_packing_enabled: payload[stationNo].finalPacking === true,
           updated_by: req.user?.id || null,
         })
       )

@@ -32,7 +32,13 @@ function parseAck(message) {
 
 function normalizeProtocol(value) {
   const protocol = String(value || "").trim().toUpperCase();
-  return protocol === "MODBUS_TCP" ? "MODBUS_TCP" : "TCP_TEXT";
+  if (protocol === "MODBUS_TCP") {
+    return "MODBUS_TCP";
+  }
+  if (protocol === "SLMP") {
+    return "SLMP";
+  }
+  return "TCP_TEXT";
 }
 
 function getCircuitKey(machineId, ip, port) {
@@ -298,7 +304,7 @@ function waitForMatchingAck(socket, partId, acceptedTypes, timeoutMs) {
   );
 }
 
-async function runTextHandshakeOnce({ ip, port, partId, stationNo }) {
+async function runTextHandshakeOnce({ ip, port, partId, stationNo, protocol = "TCP_TEXT" }) {
   const socket = await createSocketClient({ ip, port });
   try {
     socket.write(`START_OPERATION|${partId}|${stationNo}\n`);
@@ -315,7 +321,7 @@ async function runTextHandshakeOnce({ ip, port, partId, stationNo }) {
       ok: true,
       startAck,
       endAck,
-      protocol: "TCP_TEXT",
+      protocol,
     };
   } finally {
     try {
@@ -443,17 +449,17 @@ async function runHandshakeOnceByProtocol({ protocol, ip, port, partId, stationN
   if (protocol === "MODBUS_TCP") {
     return runModbusHandshakeOnce({ ip, port, partId, stationNo, machine });
   }
-  return runTextHandshakeOnce({ ip, port, partId, stationNo });
+  return runTextHandshakeOnce({ ip, port, partId, stationNo, protocol });
 }
 
-async function runTextResetOnce({ ip, port, stationNo }) {
+async function runTextResetOnce({ ip, port, stationNo, protocol = "TCP_TEXT" }) {
   const socket = await createSocketClient({ ip, port });
   try {
     const station = String(stationNo || "").trim();
     const command = station ? `RESET_OPERATION|${station}\n` : "RESET_OPERATION\n";
     socket.write(command);
     return {
-      protocol: "TCP_TEXT",
+      protocol,
       connected: true,
       resetCommand: command.trim(),
     };
@@ -515,11 +521,11 @@ async function runModbusResetOnce({ ip, port, machine }) {
   }
 }
 
-async function runTextProbeOnce({ ip, port, timeoutMs }) {
+async function runTextProbeOnce({ ip, port, timeoutMs, protocol = "TCP_TEXT" }) {
   const socket = await createSocketClient({ ip, port, timeoutMs });
   try {
     return {
-      protocol: "TCP_TEXT",
+      protocol,
       connected: true,
     };
   } finally {
@@ -593,7 +599,7 @@ async function testPlcConnection({ ip, port, protocol = "TCP_TEXT", machine = {}
       const probe =
         normalizedProtocol === "MODBUS_TCP"
           ? await runModbusProbeOnce({ ip, port, machine, timeoutMs })
-          : await runTextProbeOnce({ ip, port, timeoutMs });
+          : await runTextProbeOnce({ ip, port, timeoutMs, protocol: normalizedProtocol });
 
       return {
         ...probe,
@@ -622,7 +628,7 @@ async function resetPlcState({ ip, port, protocol = "TCP_TEXT", machine = {}, st
     return runModbusResetOnce({ ip, port, machine });
   }
 
-  return runTextResetOnce({ ip, port, stationNo });
+  return runTextResetOnce({ ip, port, stationNo, protocol: normalizedProtocol });
 }
 
 async function executePlcHandshake({

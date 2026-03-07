@@ -1,6 +1,8 @@
 const { Sequelize } = require("sequelize");
 const Scanner = require("../models/Scanner");
 const Machine = require("../models/Machine");
+const { normalizeIp } = require("../utils/networkAddress");
+const { listScannerConnectionSnapshots, probeScannerEndpoint } = require("../services/scannerConnectionService");
 
 function toInt(value) {
   if (value === undefined || value === null || value === "") {
@@ -13,7 +15,7 @@ function toInt(value) {
 function toPayload(body = {}) {
   return {
     scanner_name: String(body.scannerName ?? body.scanner_name ?? "").trim(),
-    scanner_ip: String(body.scannerIp ?? body.scanner_ip ?? "").trim(),
+    scanner_ip: normalizeIp(body.scannerIp ?? body.scanner_ip),
     scanner_port: toInt(body.scannerPort ?? body.scanner_port),
     mapped_machine_id: toInt(body.mappedMachineId ?? body.mapped_machine_id),
     is_active:
@@ -47,6 +49,27 @@ async function toResponse(scanner) {
   };
 }
 
+function toConnectionResponse(connection) {
+  if (!connection) {
+    return {
+      status: "DISCONNECTED",
+      connected: false,
+      connectedAt: null,
+      lastDataAt: null,
+      openSockets: 0,
+      source: "NONE",
+    };
+  }
+  return {
+    status: String(connection.status || "DISCONNECTED").toUpperCase(),
+    connected: Boolean(connection.connected),
+    connectedAt: connection.connectedAt || null,
+    lastDataAt: connection.lastDataAt || null,
+    openSockets: Number(connection.openSockets || 0),
+    source: connection.source || "UNKNOWN",
+  };
+}
+
 function handleError(error, res) {
   if (error.name === "SequelizeUniqueConstraintError") {
     return res.status(409).json({
@@ -68,6 +91,82 @@ exports.listScanners = async (_req, res) => {
     const scanners = await Scanner.findAll({ order: [["id", "ASC"]] });
     const rows = await Promise.all(scanners.map((scanner) => toResponse(scanner)));
     res.json(rows);
+  } catch (error) {
+    handleError(error, res);
+  }
+};
+
+exports.listScannerConnections = async (_req, res) => {
+  try {
+    const [scanners, connectionRows] = await Promise.all([
+      Scanner.findAll({ order: [["id", "ASC"]] }),
+      listScannerConnectionSnapshots(),
+    ]);
+
+    const connectionMap = new Map(
+      (connectionRows || []).map((row) => [normalizeIp(row.scannerIp), row])
+    );
+
+    const configuredRows = await Promise.all(
+      scanners.map(async (scanner) => {
+        const base = await toResponse(scanner);
+        const connection = connectionMap.get(normalizeIp(scanner.scanner_ip)) || null;
+        return {
+          ...base,
+          connection: toConnectionResponse(connection),
+        };
+      })
+    );
+
+    const configuredIps = new Set(configuredRows.map((row) => normalizeIp(row.scannerIp)));
+    const unmanagedRows = (connectionRows || [])
+      .filter((row) => !configuredIps.has(normalizeIp(row.scannerIp)))
+      .map((row, index) => ({
+        id: `unmanaged-${index}-${row.scannerIp}`,
+        scannerName: "UNMAPPED_SCANNER",
+        scannerIp: row.scannerIp,
+        scannerPort: null,
+        mappedMachineId: null,
+        isActive: false,
+        mappedMachine: null,
+        connection: toConnectionResponse(row),
+      }));
+
+    res.json({
+      configured: configuredRows,
+      unmanaged: unmanagedRows,
+      totalConnected: [...configuredRows, ...unmanagedRows].filter((row) => row.connection.connected).length,
+    });
+  } catch (error) {
+    handleError(error, res);
+  }
+};
+
+exports.testScannerConnection = async (req, res) => {
+  try {
+    const scanner = await Scanner.findByPk(req.params.id);
+    if (!scanner) {
+      return res.status(404).json({ error: "Scanner not found" });
+    }
+
+    const result = await probeScannerEndpoint({
+      ip: scanner.scanner_ip,
+      port: scanner.scanner_port,
+    });
+
+    const reachable = Boolean(result?.reachable);
+    res.json({
+      scannerId: scanner.id,
+      scannerIp: scanner.scanner_ip,
+      scannerPort: scanner.scanner_port,
+      reachable,
+      status: reachable ? "REACHABLE" : "UNREACHABLE",
+      checkedAt: new Date().toISOString(),
+      error: result?.error || null,
+      message: reachable
+        ? "Scanner endpoint is reachable over TCP"
+        : result?.error || "Scanner endpoint is unreachable",
+    });
   } catch (error) {
     handleError(error, res);
   }

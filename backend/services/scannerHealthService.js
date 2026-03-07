@@ -1,13 +1,10 @@
 const { emitRealtime } = require("./realtimeService");
+const { normalizeIp } = require("../utils/networkAddress");
 
 const HEARTBEAT_STALE_MS = Math.max(Number(process.env.SCANNER_HEARTBEAT_STALE_MS || 30000), 5000);
 const HEARTBEAT_RETAIN_MS = Math.max(Number(process.env.SCANNER_HEARTBEAT_RETAIN_MS || 6 * 60 * 60 * 1000), HEARTBEAT_STALE_MS * 2);
 
 const scannerStateMap = new Map();
-
-function normalizeIp(ip) {
-  return String(ip || "").replace("::ffff:", "").trim();
-}
 
 function toSnapshot(entry) {
   if (!entry) {
@@ -61,7 +58,8 @@ function markScannerHeartbeat({ scannerId, scannerIp, scannerName, machineId } =
   pruneOldEntries();
 
   const wasConnected = previous ? Date.now() - Number(previous.lastSeenMs || 0) <= HEARTBEAT_STALE_MS : false;
-  if (!wasConnected) {
+  const machineChanged = previous ? Number(previous.machineId || 0) !== Number(next.machineId || 0) : false;
+  if (!wasConnected || machineChanged) {
     emitRealtime("scanner_health", toSnapshot(next));
   }
   return toSnapshot(next);
@@ -85,4 +83,3 @@ module.exports = {
   markScannerHeartbeat,
   getScannerHealthSnapshot,
 };
-

@@ -14,6 +14,7 @@ function createEmptyForm() {
     lineName: "",
     sequenceNo: "",
     operationNo: "",
+    dailyTargetQty: "0",
     plcIp: "",
     plcPort: "",
     plcProtocol: "TCP_TEXT",
@@ -29,6 +30,7 @@ function createEmptyForm() {
       endOkValue: "3",
       endNgValue: "4",
     },
+    plcSignalMap: "",
     status: "ACTIVE",
   };
 }
@@ -53,6 +55,22 @@ function toNumberWithDefault(value, fallback) {
   return Number.isFinite(numeric) ? numeric : fallback;
 }
 
+function parseSignalMapInput(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed) || (parsed && typeof parsed === "object")) {
+      return parsed;
+    }
+    return null;
+  } catch (_error) {
+    return null;
+  }
+}
+
 function clearRangeAssignments(config = {}) {
   return {
     ...config,
@@ -73,6 +91,7 @@ function buildFormFromMachine(machine) {
     lineName: machine.lineName || "",
     sequenceNo: toFormValue(machine.sequenceNo, ""),
     operationNo: machine.operationNo || "",
+    dailyTargetQty: toFormValue(machine.dailyTargetQty, "0"),
     plcIp: machine.plcIp || "",
     plcPort: toFormValue(machine.plcPort, ""),
     plcProtocol: machine.plcProtocol || "TCP_TEXT",
@@ -88,6 +107,7 @@ function buildFormFromMachine(machine) {
       endOkValue: toFormValue(config.endOkValue ?? machine.plcEndOkValue, "3"),
       endNgValue: toFormValue(config.endNgValue ?? machine.plcEndNgValue, "4"),
     },
+    plcSignalMap: machine.plcSignalMap ? JSON.stringify(machine.plcSignalMap, null, 2) : "",
     status: machine.status || "ACTIVE",
   };
 }
@@ -115,11 +135,13 @@ function toSubmitPayload(formData) {
     lineName: String(formData.lineName || "").trim(),
     sequenceNo: toNullableNumber(formData.sequenceNo),
     operationNo: String(formData.operationNo || "").trim().toUpperCase(),
+    dailyTargetQty: Math.max(toNullableNumber(formData.dailyTargetQty) ?? 0, 0),
     plcIp,
     plcPort,
     plcProtocol: formData.plcProtocol,
     plcRangeId,
     plcConfig,
+    plcSignalMap: parseSignalMapInput(formData.plcSignalMap),
     status: formData.status || "ACTIVE",
     machineIp: plcIp,
     machinePort: plcPort,
@@ -350,14 +372,18 @@ const MachinePage = () => {
     event.preventDefault();
 
     try {
+      if (String(formData.plcSignalMap || "").trim() && !parseSignalMapInput(formData.plcSignalMap)) {
+        alert("Invalid PLC Signal Map JSON. Provide valid object/array or leave blank.");
+        return;
+      }
       const payload = toSubmitPayload(formData);
       if (String(payload.plcProtocol || "").toUpperCase() === "MODBUS_TCP" && !payload.plcRangeId) {
         alert("Select PLC register range for MODBUS_TCP machine");
         return;
       }
-      if (String(payload.plcProtocol || "").toUpperCase() === "TCP_TEXT") {
+      if (["TCP_TEXT", "SLMP"].includes(String(payload.plcProtocol || "").toUpperCase())) {
         if (!payload.plcIp || !Number.isFinite(Number(payload.plcPort))) {
-          alert("For TCP_TEXT, PLC IP and PLC Port are required.");
+          alert("For TCP_TEXT/SLMP, PLC IP and PLC Port are required.");
           return;
         }
       }
@@ -410,6 +436,7 @@ const MachinePage = () => {
         "Protocol",
         "PLC IP",
         "PLC Port",
+        "Daily Target Qty",
         "PLC Range",
         "Trigger Register",
         "Interlock Register",
@@ -435,6 +462,7 @@ const MachinePage = () => {
         machine.plcProtocol || "",
         machine.plcIp || "",
         machine.plcPort ?? "",
+        machine.dailyTargetQty ?? "",
         range ? `${range.rangeName} (${range.rangeStart}-${range.rangeEnd})` : rangeId || "",
         cfg.startRegister ?? "",
         cfg.statusRegister ?? "",
@@ -490,6 +518,7 @@ const MachinePage = () => {
         machine.lineName,
         machine.operationNo,
         String(machine.sequenceNo ?? ""),
+        String(machine.dailyTargetQty ?? ""),
         machine.plcIp,
         machine.plcProtocol,
         machine.plcRangeId,
@@ -707,7 +736,7 @@ const MachinePage = () => {
       }
 
       if (String(machine.plcProtocol || "").toUpperCase() !== "MODBUS_TCP") {
-        return <span className="font-mono text-xs text-text-main">TCP_TEXT</span>;
+        return <span className="font-mono text-xs text-text-main">{machine.plcProtocol || "TCP_TEXT"}</span>;
       }
 
       return (
@@ -1105,6 +1134,20 @@ const MachinePage = () => {
                 </div>
               </div>
             )}
+
+            <div className="mt-6 border border-border rounded-2xl p-4 bg-bg-dark/40 space-y-2">
+              <p className="text-sm font-bold text-text-main uppercase tracking-wide">Advanced Signal Map (Optional)</p>
+              <p className="text-xs text-text-muted">
+                For protocol-specific I/O mapping (including SLMP), provide JSON array/object. If blank, default TRIGGER/INTERLOCK/COMPLETE/RESET mapping is used.
+              </p>
+              <textarea
+                rows={8}
+                value={formData.plcSignalMap}
+                onChange={(event) => updateField("plcSignalMap", event.target.value)}
+                placeholder={'[{"key":"TRIGGER","label":"START_CMD","register":100,"direction":"PC -> PLC","writable":true}]'}
+                className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main font-mono text-xs focus:border-primary/50 outline-none"
+              />
+            </div>
 
             <div className="flex justify-end mt-8 gap-4 pt-6 border-t border-border">
               <button

@@ -19,6 +19,24 @@ const PackingSession = sequelize.define("PackingSession", {
     type: DataTypes.ENUM("OPEN", "CLOSED"),
     defaultValue: "OPEN",
   },
+  label_code: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    unique: true,
+  },
+  serial_no: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  },
+  generation_source: {
+    type: DataTypes.ENUM("AUTO", "MANUAL"),
+    allowNull: false,
+    defaultValue: "AUTO",
+  },
+  closed_at: {
+    type: DataTypes.DATE,
+    allowNull: true,
+  },
 });
 
 module.exports = PackingSession;

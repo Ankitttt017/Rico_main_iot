@@ -19,7 +19,7 @@ const PlcRegisterRange = sequelize.define("PlcRegisterRange", {
     allowNull: true,
   },
   plc_protocol: {
-    type: DataTypes.ENUM("TCP_TEXT", "MODBUS_TCP"),
+    type: DataTypes.ENUM("TCP_TEXT", "MODBUS_TCP", "SLMP"),
     allowNull: false,
     defaultValue: "MODBUS_TCP",
   },
@@ -55,4 +55,3 @@ const PlcRegisterRange = sequelize.define("PlcRegisterRange", {
 });
 
 module.exports = PlcRegisterRange;
-

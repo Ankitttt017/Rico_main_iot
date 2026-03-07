@@ -105,6 +105,7 @@ const GlobalPopup = ({
   autoCloseMs = 4000,
   criticalAutoCloseMs = 9000,
   showAcknowledge = false,
+  simple = false,
 }) => {
   const [isResetting, setIsResetting] = useState(false);
   const [resetError, setResetError] = useState("");
@@ -148,6 +149,42 @@ const GlobalPopup = ({
   }
 
   const type = String(popup.type || "INFO").toUpperCase();
+  if (simple) {
+    const simpleTheme =
+      type === "ERROR"
+        ? "bg-red-600"
+        : type === "SUCCESS"
+        ? "bg-emerald-600"
+        : type === "WARNING"
+        ? "bg-amber-500"
+        : "bg-cyan-600";
+
+    const SimpleIcon = type === "ERROR" ? AlertTriangle : type === "SUCCESS" ? CheckCircle : Clock3;
+    return (
+      <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/70 backdrop-blur-sm px-4">
+        <div className="w-full max-w-md bg-white rounded-2xl overflow-hidden shadow-[0_0_40px_rgba(0,0,0,0.35)] animate-in zoom-in duration-200">
+          <div className={`relative p-5 flex items-center gap-3 text-white ${simpleTheme}`}>
+            {typeof onClose === "function" ? (
+              <button
+                onClick={() => onClose?.()}
+                className="absolute right-3 top-3 inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/30 bg-black/10 text-white hover:bg-black/25"
+                aria-label="Close popup"
+                title="Close"
+              >
+                <X size={14} />
+              </button>
+            ) : null}
+            <SimpleIcon size={24} />
+            <h2 className="text-lg font-bold">{popup.title || type}</h2>
+          </div>
+          <div className="p-5">
+            <p className="text-sm text-slate-700">{popup.message || "Update received."}</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const partId = popup.partId || popup.part_id || "";
   const stationNo = popup.stationNo || popup.station_no || "";
   const qrState = resolveQrState(popup);

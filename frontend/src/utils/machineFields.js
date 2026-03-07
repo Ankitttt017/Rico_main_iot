@@ -24,11 +24,17 @@ export const MACHINE_FORM_FIELD_CONFIG = [
     required: true,
   },
   {
+    key: "dailyTargetQty",
+    label: "Daily Target Qty",
+    type: "number",
+    required: false,
+  },
+  {
     key: "plcProtocol",
     label: "Protocol",
     type: "select",
     required: true,
-    options: ["TCP_TEXT", "MODBUS_TCP"],
+    options: ["TCP_TEXT", "MODBUS_TCP", "SLMP"],
   },
 ];
 
@@ -98,6 +104,7 @@ export const MACHINE_TABLE_COLUMNS = [
   { key: "plcProtocol", label: "PLC Protocol", sortable: true },
   { key: "plcIp", label: "PLC IP", sortable: true },
   { key: "plcPort", label: "PLC Port", sortable: true },
+  { key: "dailyTargetQty", label: "Daily Target", sortable: true },
   { key: "plcRangeId", label: "PLC Range", sortable: true },
   { key: "plcConfig", label: "PLC Config", sortable: false },
   { key: "status", label: "Status", sortable: true },

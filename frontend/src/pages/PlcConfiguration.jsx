@@ -291,6 +291,7 @@ const PlcConfiguration = () => {
             >
               <option value="MODBUS_TCP">MODBUS_TCP</option>
               <option value="TCP_TEXT">TCP_TEXT</option>
+              <option value="SLMP">SLMP</option>
             </select>
           </div>
 

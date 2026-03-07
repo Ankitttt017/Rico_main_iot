@@ -8,14 +8,23 @@ const { saveScan } = require("../services/scanService");
 const { executePlcHandshake } = require("../services/plcSocketService");
 const { emitRealtime } = require("../services/realtimeService");
 const { markScannerHeartbeat } = require("../services/scannerHealthService");
+const {
+  markScannerConnected,
+  markScannerData,
+  markScannerDisconnected,
+} = require("../services/scannerConnectionService");
 const { packPart, createSessionIfMissing } = require("../services/packingService");
 const { tryAcquireMachineLock, clearMachineLock } = require("../services/machineLockService");
+const {
+  getStationFeatureConfig,
+  isPlcConfirmationEnabled,
+  normalizePlcPartCount,
+} = require("../services/stationFeatureService");
+const { normalizeIp, sameIp } = require("../utils/networkAddress");
 
 const tcpPort = Number(process.env.TCP_PORT || 5000);
-
-function normalizeIp(ip) {
-  return String(ip || "").replace("::ffff:", "").trim();
-}
+const SOCKET_CHUNK_FLUSH_MS = Math.max(Number(process.env.SCANNER_BUFFER_FLUSH_MS || 35), 10);
+const SOCKET_BUFFER_MAX_CHARS = Math.max(Number(process.env.SCANNER_BUFFER_MAX_CHARS || 8192), 1024);
 
 function normalizeStation(value) {
   return String(value || "")
@@ -38,6 +47,42 @@ function uniqueStages(stages) {
     output.push(stage);
   }
   return output;
+}
+
+function sanitizeScannerMessage(message) {
+  // Remove ASCII control bytes (ESC/STX/ETX/etc.) often sent by scanner framing.
+  return String(message || "")
+    .replace(/[\u0000-\u001F\u007F]/g, "")
+    .trim();
+}
+
+function isControlOnlyMessage(message) {
+  if (!message) {
+    return true;
+  }
+  return !String(message || "").replace(/[\u0000-\u001F\u007F]/g, "").trim();
+}
+
+async function findActiveScannerByIp(scannerIp) {
+  const normalizedIp = normalizeIp(scannerIp);
+  if (!normalizedIp) {
+    return null;
+  }
+
+  const exact = await Scanner.findOne({
+    where: { scanner_ip: normalizedIp, is_active: true },
+    order: [["updatedAt", "DESC"]],
+  });
+  if (exact) {
+    return exact;
+  }
+
+  const scanners = await Scanner.findAll({
+    where: { is_active: true },
+    order: [["updatedAt", "DESC"]],
+  });
+
+  return scanners.find((row) => sameIp(row.scanner_ip, normalizedIp)) || null;
 }
 
 function parsePackingPayload(message) {
@@ -76,6 +121,49 @@ function mapScanDecisionToPopupType(scanResult) {
     return "INFO";
   }
   return "ERROR";
+}
+
+function parseTraceabilityPayload(message) {
+  const text = String(message || "").trim();
+  if (!text) {
+    return null;
+  }
+
+  const tokens = text.split(/[|,;]/).map((token) => token.trim()).filter(Boolean);
+  if (tokens.length <= 1) {
+    return {
+      partId: text,
+      result: "OK",
+      resultProvided: false,
+      rejectionBinConfirmed: false,
+    };
+  }
+
+  const keyValues = {};
+  for (const token of tokens) {
+    const [rawKey, ...rest] = token.split(/[:=]/);
+    if (!rawKey || !rest.length) {
+      continue;
+    }
+    keyValues[String(rawKey).trim().toUpperCase()] = rest.join(":").trim();
+  }
+
+  const partId = keyValues.PART || keyValues.PARTID || keyValues.PART_ID || tokens[0];
+  const explicitResult = keyValues.RESULT || keyValues.RES || "";
+  const result = explicitResult || "OK";
+  const rb = keyValues.RB || keyValues.REJECTION || keyValues.REJECTION_BIN || keyValues.REJECTIONBIN || "0";
+  const rejectionBinConfirmed = ["1", "TRUE", "YES", "NG", "FAIL", "CONFIRMED", "DETECTED"].includes(
+    String(rb || "")
+      .trim()
+      .toUpperCase()
+  );
+
+  return {
+    partId: String(partId || "").trim(),
+    result,
+    resultProvided: Boolean(String(explicitResult || "").trim()),
+    rejectionBinConfirmed,
+  };
 }
 
 async function getActiveStationSequence() {
@@ -201,7 +289,18 @@ async function rollbackPendingOperation({ partId, operationLogId }) {
   await part.save();
 }
 
-async function startPlcFlow({ operationLogId, partId, stationNo, machine }) {
+async function getPendingStationOperations({ machineId, stationNo }) {
+  return OperationLog.findAll({
+    where: {
+      machine_id: machineId,
+      station_no: normalizeStation(stationNo),
+      plc_status: "PENDING",
+    },
+    order: [["createdAt", "ASC"]],
+  });
+}
+
+async function startPlcFlow({ operationLogId, partId, stationNo, machine, releaseLock = true }) {
   const plcIp = machine.plc_ip || machine.machine_ip;
   const plcPort = machine.plc_port || machine.machine_port;
 
@@ -279,28 +378,234 @@ async function startPlcFlow({ operationLogId, partId, stationNo, machine }) {
       },
     });
   } finally {
+    if (releaseLock) {
+      await clearMachineLock(machine.id);
+    }
+  }
+}
+
+async function startPlcBatchFlow({ batchItems, stationNo, machine }) {
+  try {
+    for (const item of batchItems) {
+      try {
+        await startPlcFlow({
+          operationLogId: item.operationLogId,
+          partId: item.partId,
+          stationNo,
+          machine,
+          releaseLock: false,
+        });
+      } catch (error) {
+        console.error(
+          `TCP PLC batch item failed for part ${item.partId} at station ${stationNo}:`,
+          error.message
+        );
+      }
+    }
+  } finally {
     await clearMachineLock(machine.id);
   }
 }
 
+async function handleStationPlcFlow({
+  scanResult,
+  machine,
+  stationNo,
+  partId,
+  plcConfirmationRequired,
+  requiredPlcPartCount,
+}) {
+  if (scanResult.decision !== "ALLOW" || !scanResult.operationLogId) {
+    return;
+  }
+
+  if (!plcConfirmationRequired) {
+    const lock = await tryAcquireMachineLock({
+      machineId: machine.id,
+      partId,
+      stationNo,
+    });
+    if (!lock.acquired) {
+      await rollbackPendingOperation({
+        partId,
+        operationLogId: scanResult.operationLogId,
+      });
+      scanResult.decision = "BLOCK";
+      scanResult.reason = "MACHINE_RUNNING";
+      scanResult.message = lock.runningPartId
+        ? `Machine busy. Current part ${lock.runningPartId} is in operation.`
+        : "Machine busy with another cycle. Retry after current operation completes.";
+      scanResult.operationLogId = null;
+      scanResult.currentStatus = "IN_PROGRESS";
+      return;
+    }
+
+    await markEndOk({
+      operationLogId: scanResult.operationLogId,
+      partId,
+      stationNo,
+      machineId: machine.id,
+    });
+    await clearMachineLock(machine.id);
+    scanResult.plcHandshake = "SKIPPED";
+    scanResult.operationStatus = "ENDED_OK";
+    scanResult.message = "QR verified. PLC confirmation skipped as per station settings. Marked OK.";
+    emitRealtime("dashboard_refresh", { reason: "PLC_CONFIRMATION_SKIPPED" });
+    return;
+  }
+
+  if (requiredPlcPartCount <= 1) {
+    const lock = await tryAcquireMachineLock({
+      machineId: machine.id,
+      partId,
+      stationNo,
+    });
+    if (!lock.acquired) {
+      await rollbackPendingOperation({
+        partId,
+        operationLogId: scanResult.operationLogId,
+      });
+      scanResult.decision = "BLOCK";
+      scanResult.reason = "MACHINE_RUNNING";
+      scanResult.message = lock.runningPartId
+        ? `Machine busy. Current part ${lock.runningPartId} is in operation.`
+        : "Machine busy with another cycle. Retry after current operation completes.";
+      scanResult.operationLogId = null;
+      scanResult.currentStatus = "IN_PROGRESS";
+      return;
+    }
+
+    startPlcFlow({
+      operationLogId: scanResult.operationLogId,
+      partId,
+      stationNo,
+      machine,
+    }).catch((error) => {
+      console.error("TCP PLC flow failed:", error.message);
+    });
+    scanResult.plcHandshake = "INITIATED";
+    return;
+  }
+
+  const pendingRows = await getPendingStationOperations({
+    machineId: machine.id,
+    stationNo,
+  });
+  scanResult.pendingBatchCount = pendingRows.length;
+  scanResult.plcPartCountRequired = requiredPlcPartCount;
+  scanResult.operationStatus = "PENDING";
+
+  if (pendingRows.length < requiredPlcPartCount) {
+    scanResult.plcHandshake = "QUEUED";
+    scanResult.reason = "BATCH_WAITING";
+    scanResult.message = `Queued for PLC batch at ${stationNo}: ${pendingRows.length}/${requiredPlcPartCount} part(s) ready.`;
+    return;
+  }
+
+  const lock = await tryAcquireMachineLock({
+    machineId: machine.id,
+    partId,
+    stationNo,
+  });
+  if (!lock.acquired) {
+    scanResult.plcHandshake = "QUEUED";
+    scanResult.reason = "MACHINE_RUNNING";
+    scanResult.message = lock.runningPartId
+      ? `Machine busy with ${lock.runningPartId}. Batch queued and will run once machine is free.`
+      : "Machine busy with another cycle. Batch queued and will run automatically once machine is free.";
+    return;
+  }
+
+  const batchRows = pendingRows.slice(0, requiredPlcPartCount);
+  startPlcBatchFlow({
+    batchItems: batchRows.map((row) => ({
+      operationLogId: row.id,
+      partId: row.part_id,
+    })),
+    stationNo,
+    machine,
+  }).catch((error) => {
+    console.error("TCP PLC batch flow failed:", error.message);
+  });
+
+  scanResult.plcHandshake = "BATCH_INITIATED";
+  scanResult.message = `PLC batch started at ${stationNo} for ${batchRows.length} part(s).`;
+  scanResult.batchPartIds = batchRows.map((row) => row.part_id);
+}
+
 const server = net.createServer((socket) => {
   const scannerIp = normalizeIp(socket.remoteAddress);
-  console.log("Scanner Connected:", scannerIp);
-  markScannerHeartbeat({ scannerIp });
+  let activeScanner = null;
+  let activeMachine = null;
+  let inboundBuffer = "";
+  let flushTimer = null;
+  let messageQueue = Promise.resolve();
+  let disconnectedHandled = false;
 
-  socket.on("data", async (buffer) => {
+  const safeSocketWrite = (data) => {
+    if (!socket.destroyed) {
+      socket.write(data);
+    }
+  };
+
+  const markHeartbeat = () => {
+    markScannerHeartbeat({
+      scannerId: activeScanner?.id || null,
+      scannerIp: activeScanner?.scanner_ip || scannerIp,
+      scannerName: activeScanner?.scanner_name || null,
+      machineId: activeMachine?.id || null,
+    });
+  };
+
+  const resolveScannerContext = async () => {
+    const scanner = await findActiveScannerByIp(scannerIp);
+    if (!scanner) {
+      activeScanner = null;
+      activeMachine = null;
+      markHeartbeat();
+      return { scanner: null, machine: null };
+    }
+
+    const machine = await Machine.findByPk(scanner.mapped_machine_id);
+    activeScanner = scanner;
+    activeMachine = machine && machine.is_active ? machine : null;
+    markHeartbeat();
+    return { scanner: activeScanner, machine: activeMachine };
+  };
+
+  const clearFlushTimer = () => {
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+  };
+
+  const scheduleFlush = () => {
+    clearFlushTimer();
+    flushTimer = setTimeout(() => {
+      flushTimer = null;
+      const pending = inboundBuffer;
+      inboundBuffer = "";
+      if (pending) {
+        queueMessage(pending);
+      }
+    }, SOCKET_CHUNK_FLUSH_MS);
+  };
+
+  const processRawMessage = async (inputChunk) => {
     try {
-      markScannerHeartbeat({ scannerIp });
+      markHeartbeat();
 
-      const rawMessage = String(buffer.toString() || "").trim();
+      const chunk = String(inputChunk || "");
+      if (!chunk) {
+        return;
+      }
+      if (isControlOnlyMessage(chunk)) {
+        return;
+      }
+
+      const rawMessage = sanitizeScannerMessage(chunk);
       if (!rawMessage) {
-        socket.write("BLOCK\n");
-        emitRealtime("operator_popup", {
-          type: "WARNING",
-          message: "Empty scanner payload received",
-          scannerIp,
-          timestamp: new Date().toISOString(),
-        });
         return;
       }
 
@@ -308,7 +613,7 @@ const server = net.createServer((socket) => {
       if (packingPayload) {
         if (packingPayload.boxNumber && !packingPayload.partId) {
           await createSessionIfMissing(packingPayload.boxNumber, packingPayload.capacity);
-          socket.write("BOX_READY\n");
+          safeSocketWrite("BOX_READY\n");
           emitRealtime("operator_popup", {
             type: "INFO",
             message: `Packing box ${String(packingPayload.boxNumber).toUpperCase()} ready`,
@@ -323,7 +628,7 @@ const server = net.createServer((socket) => {
             partId: packingPayload.partId,
             capacity: packingPayload.capacity,
           });
-          socket.write("PACK_OK\n");
+          safeSocketWrite("PACK_OK\n");
           emitRealtime("operator_popup", {
             type: "SUCCESS",
             message: `Packed ${packingPayload.partId} in box ${packed.session.box_number} slot ${packed.item.slot_no}`,
@@ -335,14 +640,31 @@ const server = net.createServer((socket) => {
         }
       }
 
-      const partId = rawMessage;
+      const tracePayload = parseTraceabilityPayload(rawMessage);
+      const partId = String(tracePayload?.partId || "").trim();
+      if (!partId) {
+        safeSocketWrite("BLOCK\n");
+        emitRealtime("operator_popup", {
+          type: "ERROR",
+          message: "Invalid scan payload: part ID missing",
+          scannerIp,
+          status: "INTERLOCKED",
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
 
-      const scanner = await Scanner.findOne({
-        where: { scanner_ip: scannerIp, is_active: true },
-      });
+      let scanner = activeScanner;
+      let machine = activeMachine;
+      if (!scanner || !machine) {
+        const context = await resolveScannerContext();
+        scanner = context.scanner;
+        machine = context.machine;
+      }
+
       if (!scanner) {
         console.log("Active scanner mapping not found for IP:", scannerIp);
-        socket.write("BLOCK\n");
+        safeSocketWrite("BLOCK\n");
         emitRealtime("operator_popup", {
           type: "ERROR",
           message: "Scanner IP not mapped or inactive",
@@ -353,10 +675,9 @@ const server = net.createServer((socket) => {
         return;
       }
 
-      const machine = await Machine.findByPk(scanner.mapped_machine_id);
       if (!machine || !machine.is_active) {
         console.log("Mapped machine not available for scanner:", scannerIp);
-        socket.write("BLOCK\n");
+        safeSocketWrite("BLOCK\n");
         emitRealtime("operator_popup", {
           type: "ERROR",
           message: "Mapped machine unavailable for scanner",
@@ -368,40 +689,64 @@ const server = net.createServer((socket) => {
         return;
       }
 
-      markScannerHeartbeat({
-        scannerId: scanner.id,
-        scannerIp: scanner.scanner_ip || scannerIp,
-        scannerName: scanner.scanner_name,
-        machineId: machine.id,
-      });
+      markHeartbeat();
 
       const stationNo = getMachineOperationStage(machine);
-      const scanResult = await saveScan(partId, stationNo, "OK", machine.id);
-
-      if (scanResult.decision === "ALLOW" && scanResult.operationLogId) {
-        const lock = await tryAcquireMachineLock({
-          machineId: machine.id,
+      const stationFeatures = await getStationFeatureConfig(stationNo);
+      const rejectionBinConfirmed = stationFeatures.rejectionBin && Boolean(tracePayload?.rejectionBinConfirmed);
+      const manualResultEnabled = stationFeatures.manualResult === true;
+      const resultInput = String(tracePayload?.result || "").trim().toUpperCase();
+      const hasResultInput = Boolean(tracePayload?.resultProvided && resultInput);
+      if (manualResultEnabled && !rejectionBinConfirmed && !hasResultInput) {
+        safeSocketWrite("BLOCK\n");
+        emitRealtime("operator_popup", {
+          type: "ERROR",
+          message: `Manual OK/NG result missing for station ${stationNo}`,
           partId,
           stationNo,
+          machineId: machine.id,
+          machineName: machine.machine_name,
+          scannerName: scanner.scanner_name,
+          scannerIp,
+          status: "INTERLOCKED",
+          reason: "MANUAL_RESULT_REQUIRED",
+          timestamp: new Date().toISOString(),
         });
-        if (!lock.acquired) {
-          await rollbackPendingOperation({
-            partId,
-            operationLogId: scanResult.operationLogId,
-          });
-          scanResult.decision = "BLOCK";
-          scanResult.reason = "MACHINE_RUNNING";
-          scanResult.message = lock.runningPartId
-            ? `Machine busy. Current part ${lock.runningPartId} is in operation.`
-            : "Machine busy with another cycle. Retry after current operation completes.";
-          scanResult.operationLogId = null;
-          scanResult.currentStatus = "IN_PROGRESS";
-        }
+        return;
       }
-      socket.write(`${scanResult.decision}\n`);
+      const finalResult = rejectionBinConfirmed ? "NG" : hasResultInput ? resultInput : "OK";
+      const resultSource = rejectionBinConfirmed
+        ? "PLC_REJECTION_BIN"
+        : manualResultEnabled
+        ? "MANUAL_OK_NG"
+        : hasResultInput
+        ? "PLC_PAYLOAD"
+        : "DEFAULT_OK";
+      const scanResult = await saveScan(partId, stationNo, finalResult, machine.id, null, {
+        ...(rejectionBinConfirmed ? { ngReason: "REJECTION_BIN_CONFIRMED" } : {}),
+        resultSource,
+        resultInput: hasResultInput ? resultInput : finalResult,
+      });
+      const plcConfirmationRequired = await isPlcConfirmationEnabled(stationNo);
+      const requiredPlcPartCount = plcConfirmationRequired
+        ? normalizePlcPartCount(stationFeatures.plcPartCount)
+        : 1;
 
+      await handleStationPlcFlow({
+        scanResult,
+        machine,
+        stationNo,
+        partId,
+        plcConfirmationRequired,
+        requiredPlcPartCount,
+      });
+      safeSocketWrite(`${scanResult.decision}\n`);
+
+      const operationStatus = scanResult.operationStatus || (scanResult.decision === "ALLOW" ? "PENDING" : "WAIT");
+      const popupType =
+        scanResult.decision === "ALLOW" && operationStatus === "ENDED_OK" ? "SUCCESS" : mapScanDecisionToPopupType(scanResult);
       emitRealtime("operator_popup", {
-        type: mapScanDecisionToPopupType(scanResult),
+        type: popupType,
         message: scanResult.message || scanResult.reason || "Scan processed",
         partId,
         stationNo,
@@ -409,8 +754,8 @@ const server = net.createServer((socket) => {
         machineName: machine.machine_name,
         scannerName: scanner.scanner_name,
         scannerIp,
-        status: scanResult.decision === "ALLOW" ? "PENDING" : "WAIT",
-        plcStatus: scanResult.decision === "ALLOW" ? "PENDING" : "WAIT",
+        status: operationStatus,
+        plcStatus: operationStatus,
         qrResult: scanResult.decision === "ALLOW" || scanResult.reason === "MACHINE_RUNNING" ? "PASS" : "FAIL",
         reason: scanResult.reason || null,
         expectedStation: scanResult.expectedStation || null,
@@ -418,23 +763,61 @@ const server = net.createServer((socket) => {
         timestamp: new Date().toISOString(),
       });
 
-      if (scanResult.decision === "ALLOW" && scanResult.operationLogId) {
-        startPlcFlow({
-          operationLogId: scanResult.operationLogId,
-          partId,
-          stationNo,
-          machine,
-        }).catch((error) => {
-          console.error("TCP PLC flow failed:", error.message);
-        });
-      }
-
       console.log(
         `Part: ${partId} | Station: ${stationNo} | Outcome: ${scanResult.decision} | Reason: ${scanResult.reason} | Status: ${scanResult.currentStatus}`
       );
     } catch (error) {
       console.error("TCP scan handling failed:", error.message);
-      socket.write("BLOCK\n");
+      safeSocketWrite("BLOCK\n");
+    }
+  };
+
+  const queueMessage = (chunk) => {
+    const raw = String(chunk || "");
+    if (!raw) {
+      return;
+    }
+    messageQueue = messageQueue.then(() => processRawMessage(raw));
+  };
+
+  console.log("Scanner Connected:", scannerIp);
+  markScannerConnected({ scannerIp });
+  resolveScannerContext().catch((error) => {
+    console.error("Scanner context resolve failed:", error.message);
+  });
+  markHeartbeat();
+
+  socket.on("data", (buffer) => {
+    markHeartbeat();
+    markScannerData({ scannerIp });
+
+    inboundBuffer += String(buffer.toString() || "");
+    if (inboundBuffer.length > SOCKET_BUFFER_MAX_CHARS) {
+      inboundBuffer = inboundBuffer.slice(-SOCKET_BUFFER_MAX_CHARS);
+    }
+
+    const segments = inboundBuffer.split(/\r\n|\n|\r/);
+    inboundBuffer = segments.pop() || "";
+    for (const segment of segments) {
+      queueMessage(segment);
+    }
+    scheduleFlush();
+  });
+
+  socket.on("close", () => {
+    clearFlushTimer();
+    if (!disconnectedHandled) {
+      disconnectedHandled = true;
+      markScannerDisconnected({ scannerIp });
+    }
+  });
+
+  socket.on("error", (error) => {
+    console.error("Scanner socket error:", error.message);
+    clearFlushTimer();
+    if (!disconnectedHandled) {
+      disconnectedHandled = true;
+      markScannerDisconnected({ scannerIp });
     }
   });
 });

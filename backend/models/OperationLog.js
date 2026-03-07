@@ -17,6 +17,14 @@ const OperationLog = sequelize.define("OperationLog", {
   plc_end_time: DataTypes.DATE,
   plc_start_at: DataTypes.DATE,
   plc_end_at: DataTypes.DATE,
+  result_source: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+  result_input: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
   interlock_reason: DataTypes.STRING,
   is_bypassed: {
     type: DataTypes.BOOLEAN,

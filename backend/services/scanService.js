@@ -4,6 +4,7 @@ const ProductionLog = require("../models/ProductionLog");
 const Machine = require("../models/Machine");
 const QrFormatRule = require("../models/QrFormatRule");
 const { emitRealtime } = require("./realtimeService");
+const { testQrPattern } = require("../utils/qrRegex");
 
 function normalizeResult(result) {
   return String(result || "OK").trim().toUpperCase() === "OK" ? "OK" : "NG";
@@ -13,6 +14,16 @@ function normalizeStation(stationNo) {
   return String(stationNo || "")
     .trim()
     .toUpperCase();
+}
+
+function normalizeResultSource(value) {
+  const normalized = String(value || "").trim().toUpperCase();
+  return normalized || null;
+}
+
+function normalizeResultInput(value) {
+  const normalized = String(value || "").trim().toUpperCase();
+  return normalized || null;
 }
 
 function getMachineOperationStage(machine) {
@@ -32,8 +43,8 @@ function uniqueStages(stages) {
   return output;
 }
 
-async function getActiveQrRule() {
-  return QrFormatRule.findOne({
+async function getActiveQrRules() {
+  return QrFormatRule.findAll({
     where: { is_active: true },
     order: [["updatedAt", "DESC"]],
   });
@@ -56,6 +67,33 @@ async function saveAuditLog(partId, machineId, status, reason, userId = null) {
     status,
     ng_reason: reason || null,
   });
+}
+
+function getStationScopeSet(rule) {
+  const raw = String(rule?.station_scope || "").trim();
+  if (!raw) {
+    return null;
+  }
+  const list = raw
+    .split(/\r?\n|[,;|]/)
+    .map((entry) => normalizeStation(entry))
+    .filter(Boolean);
+  if (list.length === 0) {
+    return null;
+  }
+  return new Set(list);
+}
+
+function isRuleApplicableToStation(rule, station) {
+  const scopeSet = getStationScopeSet(rule);
+  if (!scopeSet) {
+    return true;
+  }
+  return scopeSet.has(normalizeStation(station));
+}
+
+function getRuleLabel(rule) {
+  return rule?.format_name || rule?.model_code || `RULE_${rule?.id || "UNKNOWN"}`;
 }
 
 async function setPartInterlock(part, reason) {
@@ -84,11 +122,16 @@ function getExpectedStation(part, sequence) {
   return sequence[currentIndex + 1];
 }
 
-exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = null) => {
+exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = null, options = {}) => {
   const now = new Date();
   const normalizedPartId = String(partId || "").trim();
   const station = normalizeStation(stationNo);
   const normalizedResult = normalizeResult(result);
+  const resultSource = normalizeResultSource(options?.resultSource);
+  const resultInput = normalizeResultInput(options?.resultInput ?? result);
+  const forcedNgReason = String(options?.ngReason || "SCAN_RESULT_NG")
+    .trim()
+    .toUpperCase();
   const mId = Number(machineId) || 0;
 
   if (!normalizedPartId || !station) {
@@ -100,10 +143,41 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
     };
   }
 
-  const activeRule = await getActiveQrRule();
-  if (activeRule) {
-    const regex = new RegExp(activeRule.regex_pattern);
-    if (!regex.test(normalizedPartId)) {
+  const activeRules = await getActiveQrRules();
+  const applicableRules = activeRules.filter((rule) => isRuleApplicableToStation(rule, station));
+  let matchedRule = null;
+  if (applicableRules.length > 0) {
+    for (const rule of applicableRules) {
+      try {
+        if (testQrPattern(rule.regex_pattern, normalizedPartId)) {
+          matchedRule = rule;
+          break;
+        }
+      } catch (_error) {
+        await saveAuditLog(normalizedPartId, mId, "NG", "QR_RULE_CONFIG_ERROR", userId);
+        emitRealtime("scan_event", {
+          type: "ERROR",
+          partId: normalizedPartId,
+          stationNo: station,
+          machineId: mId || null,
+          decision: "BLOCK",
+          reason: "QR_RULE_CONFIG_ERROR",
+          message: `QR rule invalid: ${getRuleLabel(rule)}`,
+        });
+        return {
+          decision: "BLOCK",
+          reason: "QR_RULE_CONFIG_ERROR",
+          message: `QR rule invalid for station ${station}: ${getRuleLabel(rule)}. Contact supervisor/admin.`,
+          currentStatus: "REJECTED_QR_RULE",
+        };
+      }
+    }
+
+    if (!matchedRule) {
+      const expectedFormats = applicableRules
+        .slice(0, 5)
+        .map((rule) => getRuleLabel(rule))
+        .join(", ");
       await saveAuditLog(normalizedPartId, mId, "NG", "INVALID_QR_FORMAT", userId);
       emitRealtime("scan_event", {
         type: "WARNING",
@@ -117,12 +191,10 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
       return {
         decision: "BLOCK",
         reason: "INVALID_QR_FORMAT",
-        message: `QR format mismatch. Required format: ${activeRule.format_name || "ACTIVE_RULE"}`,
+        message: expectedFormats
+          ? `QR format mismatch. Allowed model/rules: ${expectedFormats}`
+          : "QR format mismatch.",
         currentStatus: "REJECTED_QR_FORMAT",
-        qrRule: {
-          formatName: activeRule.format_name || "ACTIVE_RULE",
-          sampleValue: activeRule.sample_value,
-        },
       };
     }
   }
@@ -139,8 +211,8 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
     });
   }
 
-  if (activeRule) {
-    const formatName = activeRule.format_name || "ACTIVE_RULE";
+  if (matchedRule) {
+    const formatName = matchedRule.format_name || matchedRule.model_code || "ACTIVE_RULE";
     if (part.qr_format_name !== formatName) {
       part.qr_format_name = formatName;
       await part.save();
@@ -263,15 +335,17 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
       plc_end_time: new Date(),
       plc_end_at: new Date(),
       result: "NG",
+      result_source: resultSource,
+      result_input: resultInput,
       user_id: userId,
-      interlock_reason: "SCAN_RESULT_NG",
+      interlock_reason: forcedNgReason,
     });
 
     part.status = "NG";
     part.is_interlocked = true;
-    part.interlock_reason = "SCAN_RESULT_NG";
+    part.interlock_reason = forcedNgReason;
     await part.save();
-    await saveAuditLog(normalizedPartId, mId, "NG", "SCAN_RESULT_NG", userId);
+    await saveAuditLog(normalizedPartId, mId, "NG", forcedNgReason, userId);
 
     emitRealtime("scan_event", {
       type: "ERROR",
@@ -279,18 +353,19 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
       stationNo: station,
       machineId: mId || null,
       decision: "BLOCK",
-      reason: "SCAN_RESULT_NG",
+      reason: forcedNgReason,
       message: "Operation Failed (NG)",
       operationLogId: ngLog.id,
     });
 
     return {
       decision: "BLOCK",
-      reason: "SCAN_RESULT_NG",
+      reason: forcedNgReason,
       message: "Scan result NG",
       expectedStation,
       currentStatus: part.status,
       operationLogId: ngLog.id,
+      resultSource,
     };
   }
 
@@ -301,6 +376,8 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
     station_no: station,
     plc_status: "PENDING",
     result: "OK",
+    result_source: resultSource,
+    result_input: resultInput,
     user_id: userId,
     interlock_reason: null,
   });
@@ -329,5 +406,15 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
     operationLogId: log.id,
     stationNo: station,
     plcCommand: "START_OPERATION",
+    qrRule: matchedRule
+      ? {
+          id: matchedRule.id,
+          formatName: matchedRule.format_name || null,
+          modelCode: matchedRule.model_code || null,
+          stationScope: matchedRule.station_scope || null,
+          sampleValue: matchedRule.sample_value || null,
+        }
+      : null,
+    resultSource,
   };
 };

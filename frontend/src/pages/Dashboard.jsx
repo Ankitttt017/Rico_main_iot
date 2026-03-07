@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { io } from "socket.io-client";
-import { Download, RefreshCw, Funnel } from "lucide-react";
+import { Download, RefreshCw, Funnel, Save } from "lucide-react";
 import {
   ResponsiveContainer,
   BarChart,
@@ -15,6 +15,7 @@ import {
 } from "recharts";
 import { dashboardApi, machineApi } from "../api/services";
 import { formatMachineLabel } from "../utils/machineFields";
+import { getUserRole } from "../utils/authStorage";
 
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:4000";
 
@@ -28,6 +29,8 @@ const EMPTY_SUMMARY = {
 
 const EMPTY_REPORT = {
   machineWise: [],
+  machineCards: [],
+  stationCards: [],
   hourlyProduction: [],
   shiftProduction: {
     SHIFT_A: { total: 0, ok: 0, ng: 0 },
@@ -60,11 +63,15 @@ function escapeHtml(value) {
 }
 
 const Dashboard = () => {
+  const userRole = String(getUserRole() || "").trim().toLowerCase();
+  const canEditTargets = userRole === "admin" || userRole === "engineer";
   const [machines, setMachines] = useState([]);
   const [summary, setSummary] = useState(EMPTY_SUMMARY);
   const [report, setReport] = useState(EMPTY_REPORT);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState({ type: "", message: "" });
+  const [targetDrafts, setTargetDrafts] = useState({});
+  const [targetSaving, setTargetSaving] = useState({});
   const [showFilters, setShowFilters] = useState(true);
   const [filters, setFilters] = useState({
     dateFrom: "",
@@ -112,6 +119,19 @@ const Dashboard = () => {
   useEffect(() => {
     loadDashboard();
   }, [loadDashboard]);
+
+  useEffect(() => {
+    setTargetDrafts((prev) => {
+      if (Object.keys(prev).length > 0) {
+        return prev;
+      }
+      const next = {};
+      for (const card of report?.machineCards || []) {
+        next[card.machineId] = String(Number(card.targetQty || 0));
+      }
+      return next;
+    });
+  }, [report?.machineCards]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -261,8 +281,35 @@ const Dashboard = () => {
     }, 300);
   };
 
+  const handleSaveTarget = async (machineId) => {
+    const value = Number(targetDrafts[machineId] ?? 0);
+    if (!Number.isFinite(value) || value < 0) {
+      setStatus({ type: "error", message: "Target must be 0 or positive integer." });
+      return;
+    }
+
+    try {
+      setTargetSaving((prev) => ({ ...prev, [machineId]: true }));
+      await machineApi.updateTarget(machineId, { dailyTargetQty: Math.trunc(value) });
+      setStatus({ type: "success", message: `Target updated for machine ${machineId}.` });
+      await loadDashboard();
+    } catch (error) {
+      setStatus({
+        type: "error",
+        message: error.response?.data?.error || "Failed to update machine target.",
+      });
+    } finally {
+      setTargetSaving((prev) => ({ ...prev, [machineId]: false }));
+    }
+  };
+
+  const machineNameById = machines.reduce((acc, machine) => {
+    acc[machine.id] = formatMachineLabel(machine);
+    return acc;
+  }, {});
   const machineWiseData = (report?.machineWise || []).map((row) => ({
     machineId: row.machine_id,
+    machineName: machineNameById[row.machine_id] || `Machine ${row.machine_id}`,
     ok: Number(row.ok || 0),
     ng: Number(row.ng || 0),
   }));
@@ -271,11 +318,21 @@ const Dashboard = () => {
     hour: row.hour,
     total: Number(row.total || 0),
   }));
+  const machineCards = Array.isArray(report?.machineCards) ? report.machineCards : [];
+  const stationCards = Array.isArray(report?.stationCards) ? report.stationCards : [];
 
   return (
     <div className="space-y-6">
       {status.message && (
-        <div className="p-3 rounded-lg border border-danger/30 bg-danger/10 text-danger text-sm">{status.message}</div>
+        <div
+          className={`p-3 rounded-lg border text-sm ${
+            status.type === "success"
+              ? "border-accent/30 bg-accent/10 text-accent"
+              : "border-danger/30 bg-danger/10 text-danger"
+          }`}
+        >
+          {status.message}
+        </div>
       )}
 
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -396,6 +453,113 @@ const Dashboard = () => {
         </div>
       </div>
 
+      <div className="industrial-card p-5">
+        <h2 className="font-bold text-text-main mb-3">Station Performance Cards</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+          {stationCards.map((row) => (
+            <div key={row.stationNo} className="rounded-xl border border-border bg-bg-dark/60 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-bold text-text-main">{row.stationNo}</p>
+                <span className="text-[11px] rounded-full bg-primary/20 text-primary px-2 py-0.5">
+                  {row.machineCount} machine(s)
+                </span>
+              </div>
+              <p className="text-[11px] text-text-muted mt-1">{(row.lineNames || []).join(", ") || "-"}</p>
+              <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                <div className="rounded-md border border-border bg-bg-card/70 px-2 py-1">
+                  <p className="text-text-muted">Output</p>
+                  <p className="font-semibold text-text-main">{row.processedCount}</p>
+                </div>
+                <div className="rounded-md border border-border bg-bg-card/70 px-2 py-1">
+                  <p className="text-text-muted">Target</p>
+                  <p className="font-semibold text-text-main">{row.targetQty}</p>
+                </div>
+                <div className="rounded-md border border-border bg-bg-card/70 px-2 py-1">
+                  <p className="text-text-muted">Accuracy</p>
+                  <p className="font-semibold text-accent">{row.accuracy}%</p>
+                </div>
+                <div className="rounded-md border border-border bg-bg-card/70 px-2 py-1">
+                  <p className="text-text-muted">Downtime</p>
+                  <p className="font-semibold text-warning">{row.downtimeRate}%</p>
+                </div>
+              </div>
+            </div>
+          ))}
+          {stationCards.length === 0 && <p className="text-sm text-text-muted">No station KPI data for selected filter.</p>}
+        </div>
+      </div>
+
+      <div className="industrial-card p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+          <h2 className="font-bold text-text-main">Machine KPI and Daily Targets</h2>
+          <p className="text-xs text-text-muted">Set today target, monitor output, accuracy, and downtime per machine.</p>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+          {machineCards.map((row) => {
+            const targetValue = targetDrafts[row.machineId] ?? String(Number(row.targetQty || 0));
+            const achievement = row.achievementPct === null ? "-" : `${row.achievementPct}%`;
+            return (
+              <div key={row.machineId} className="rounded-xl border border-border bg-bg-dark/60 p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm font-bold text-text-main truncate">{row.machineName || `Machine ${row.machineId}`}</p>
+                  <span className="text-[11px] rounded-full bg-bg-card border border-border px-2 py-0.5 text-text-muted">
+                    {row.stationNo || "-"}
+                  </span>
+                </div>
+                <p className="text-[11px] text-text-muted">{row.lineName || "-"}</p>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="rounded-md border border-border bg-bg-card/70 px-2 py-1">
+                    <p className="text-text-muted">Output</p>
+                    <p className="font-semibold text-text-main">{row.processedCount}</p>
+                  </div>
+                  <div className="rounded-md border border-border bg-bg-card/70 px-2 py-1">
+                    <p className="text-text-muted">Accuracy</p>
+                    <p className="font-semibold text-accent">{row.accuracy}%</p>
+                  </div>
+                  <div className="rounded-md border border-border bg-bg-card/70 px-2 py-1">
+                    <p className="text-text-muted">Downtime</p>
+                    <p className="font-semibold text-warning">{row.downtimeRate}%</p>
+                  </div>
+                  <div className="rounded-md border border-border bg-bg-card/70 px-2 py-1">
+                    <p className="text-text-muted">Achieved</p>
+                    <p className="font-semibold text-primary">{achievement}</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-[1fr_auto] gap-2">
+                  <input
+                    type="number"
+                    min={0}
+                    value={targetValue}
+                    onChange={(event) =>
+                      setTargetDrafts((prev) => ({
+                        ...prev,
+                        [row.machineId]: event.target.value,
+                      }))
+                    }
+                    disabled={!canEditTargets}
+                    className="rounded-lg border border-border bg-bg-card px-2 py-1.5 text-sm text-text-main focus:border-primary focus:outline-none disabled:opacity-60"
+                    placeholder="Daily target"
+                  />
+                  <button
+                    onClick={() => handleSaveTarget(row.machineId)}
+                    disabled={!canEditTargets || Boolean(targetSaving[row.machineId])}
+                    className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-bg-dark hover:brightness-110 disabled:opacity-60"
+                  >
+                    <Save size={12} />
+                    {targetSaving[row.machineId] ? "Saving..." : "Save"}
+                  </button>
+                </div>
+                {!canEditTargets && (
+                  <p className="text-[11px] text-text-muted">Target update access: Admin/Engineer only.</p>
+                )}
+              </div>
+            );
+          })}
+          {machineCards.length === 0 && <p className="text-sm text-text-muted">No machine KPI data for selected filter.</p>}
+        </div>
+      </div>
+
       {report?.shiftProduction && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {Object.entries(report.shiftProduction).map(([shift, row]) => (
@@ -417,7 +581,7 @@ const Dashboard = () => {
           <ResponsiveContainer width="100%" height={280}>
             <BarChart data={machineWiseData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-              <XAxis dataKey="machineId" stroke="#94a3b8" />
+              <XAxis dataKey="machineName" stroke="#94a3b8" tick={{ fontSize: 11 }} />
               <YAxis stroke="#94a3b8" />
               <Tooltip />
               <Legend />

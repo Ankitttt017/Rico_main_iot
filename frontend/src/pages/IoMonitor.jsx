@@ -49,7 +49,21 @@ function toErrorMessage(error, fallback) {
   if (status === 401 || status === 403) {
     return "Unauthorized. Login with Admin or Engineer role.";
   }
-  return error?.response?.data?.error || fallback;
+  const message = String(error?.response?.data?.error || fallback || "").trim();
+  const normalized = message.toUpperCase();
+  const looksLikeNetworkIssue =
+    normalized.includes("CONNECT TIMEOUT") ||
+    normalized.includes("ECONNREFUSED") ||
+    normalized.includes("EHOSTUNREACH") ||
+    normalized.includes("ENETUNREACH") ||
+    normalized.includes("ETIMEDOUT") ||
+    normalized.includes("UNABLE TO CONNECT");
+
+  if (looksLikeNetworkIssue && !normalized.includes("PING MAY STILL WORK")) {
+    return `${message}. Ping may still work while PLC TCP port is blocked/unreachable. Check PLC service, configured port/protocol, and firewall rules.`;
+  }
+
+  return message;
 }
 
 const IoMonitor = () => {
@@ -181,6 +195,31 @@ const IoMonitor = () => {
   }, [selectedMachineId, selectedPlcIp]);
 
   const selectedMachine = filteredMachines.find((machine) => String(machine.id) === String(selectedMachineId)) || null;
+  const rows = useMemo(() => (Array.isArray(snapshot?.rows) ? snapshot.rows : []), [snapshot?.rows]);
+  const writableSignalOptions = useMemo(() => {
+    const seen = new Set();
+    const options = [];
+    for (const row of rows) {
+      const key = String(row.signalKey || row.signal || "").trim().toUpperCase();
+      if (!key || seen.has(key) || !row.writable) {
+        continue;
+      }
+      seen.add(key);
+      options.push({
+        key,
+        label: row.signal || key,
+        register: toIntOrNull(row.register),
+        currentValue: toIntOrNull(row.currentValue),
+      });
+    }
+    if (options.length === 0) {
+      return [
+        { key: "TRIGGER", label: "TRIGGER", register: null, currentValue: null },
+        { key: "RESET", label: "RESET", register: null, currentValue: null },
+      ];
+    }
+    return options;
+  }, [rows]);
 
   const getMappedRegister = useCallback((machine, signalKey) => {
     if (!machine) {
@@ -217,17 +256,22 @@ const IoMonitor = () => {
       setCustomRegister("");
       return;
     }
-    setWriteSignal("TRIGGER");
-    setWriteValue(String(getMappedValue(selectedMachine, "TRIGGER") ?? 1));
+    const defaultSignal = writableSignalOptions[0]?.key || "TRIGGER";
+    setWriteSignal(defaultSignal);
+    const mapped = getMappedValue(selectedMachine, defaultSignal);
+    const rowValue = writableSignalOptions.find((entry) => entry.key === defaultSignal)?.currentValue;
+    setWriteValue(String(mapped ?? rowValue ?? 1));
     setCustomRegister("");
-  }, [selectedMachine, getMappedValue]);
+  }, [selectedMachine, getMappedValue, writableSignalOptions]);
 
   useEffect(() => {
     if (!selectedMachine || writeSignal === "CUSTOM") {
       return;
     }
-    setWriteValue(String(getMappedValue(selectedMachine, writeSignal) ?? ""));
-  }, [selectedMachine, writeSignal, getMappedValue]);
+    const mapped = getMappedValue(selectedMachine, writeSignal);
+    const rowValue = writableSignalOptions.find((entry) => entry.key === writeSignal)?.currentValue;
+    setWriteValue(String(mapped ?? rowValue ?? ""));
+  }, [selectedMachine, writeSignal, getMappedValue, writableSignalOptions]);
 
   const handleTestPlc = async () => {
     if (!selectedMachine) {
@@ -297,7 +341,10 @@ const IoMonitor = () => {
     }
 
     const registerNo =
-      writeSignal === "CUSTOM" ? toIntOrNull(customRegister) : getMappedRegister(selectedMachine, writeSignal);
+      writeSignal === "CUSTOM"
+        ? toIntOrNull(customRegister)
+        : writableSignalOptions.find((entry) => entry.key === writeSignal)?.register ??
+          getMappedRegister(selectedMachine, writeSignal);
     const value = toIntOrNull(writeValue);
 
     if (registerNo === null) {
@@ -344,11 +391,15 @@ const IoMonitor = () => {
     }
   };
 
-  const mappedRegister = writeSignal === "CUSTOM" ? toIntOrNull(customRegister) : getMappedRegister(selectedMachine, writeSignal);
-  const rows = Array.isArray(snapshot?.rows) ? snapshot.rows : [];
+  const mappedRegister =
+    writeSignal === "CUSTOM"
+      ? toIntOrNull(customRegister)
+      : writableSignalOptions.find((entry) => entry.key === writeSignal)?.register ??
+        getMappedRegister(selectedMachine, writeSignal);
   const plcConnected = Boolean(snapshot?.plcConnection?.connected);
   const scannerConnected = Boolean(snapshot?.scannerHealth?.connected);
   const backendErrors = Array.isArray(snapshot?.errors) ? snapshot.errors.filter(Boolean) : [];
+  const protocolLabel = String(snapshot?.plc?.protocol || selectedMachine?.plcProtocol || "").toUpperCase();
 
   return (
     <div className="space-y-6 text-text-main">
@@ -520,6 +571,13 @@ const IoMonitor = () => {
               </div>
             </div>
 
+            <div className="rounded-xl border border-border bg-bg-dark/70 px-3 py-2 text-xs text-text-muted">
+              Protocol mode: <span className="text-text-main font-semibold">{protocolLabel || "UNKNOWN"}</span>.{" "}
+              {protocolLabel === "MODBUS_TCP"
+                ? "Live register read/write + signal testing are enabled."
+                : "Connectivity monitoring and reset are supported; direct register write is limited in this protocol mode."}
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
               <div className="space-y-1">
                 <label className="text-xs font-bold uppercase text-text-muted">Signal</label>
@@ -528,8 +586,11 @@ const IoMonitor = () => {
                   onChange={(event) => setWriteSignal(event.target.value)}
                   className="w-full rounded-xl border border-border bg-bg-dark px-3 py-2.5 text-sm text-text-main focus:border-primary focus:outline-none"
                 >
-                  <option value="TRIGGER">TRIGGER</option>
-                  <option value="RESET">RESET</option>
+                  {writableSignalOptions.map((option) => (
+                    <option key={option.key} value={option.key}>
+                      {option.label}
+                    </option>
+                  ))}
                   <option value="CUSTOM">CUSTOM</option>
                 </select>
               </div>

@@ -30,7 +30,14 @@ function normalizeStatus(value) {
 }
 
 function normalizeProtocol(value) {
-  return String(value || "").trim().toUpperCase() === "TCP_TEXT" ? "TCP_TEXT" : "MODBUS_TCP";
+  const protocol = String(value || "").trim().toUpperCase();
+  if (protocol === "TCP_TEXT") {
+    return "TCP_TEXT";
+  }
+  if (protocol === "SLMP") {
+    return "SLMP";
+  }
+  return "MODBUS_TCP";
 }
 
 function parseDefaultRegisterMap(rawValue, rangeStart, rangeEnd) {

@@ -1,10 +1,29 @@
 const QrFormatRule = require("../models/QrFormatRule");
+const { compileQrPattern, testQrPattern } = require("../utils/qrRegex");
+
+function normalizeStationScope(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return null;
+  }
+
+  const stations = text
+    .split(/\r?\n|[,;|]/)
+    .map((entry) => String(entry || "").trim().toUpperCase())
+    .filter(Boolean);
+  if (stations.length === 0) {
+    return null;
+  }
+  return Array.from(new Set(stations)).join(",");
+}
 
 function toResponse(rule) {
   return {
     id: rule.id,
     formatName: rule.format_name,
+    modelCode: rule.model_code,
     regexPattern: rule.regex_pattern,
+    stationScope: rule.station_scope,
     sampleValue: rule.sample_value,
     description: rule.description,
     isActive: rule.is_active,
@@ -24,30 +43,32 @@ exports.listRules = async (_req, res) => {
 
 exports.createRule = async (req, res) => {
   try {
-    const { formatName, name, regexPattern, sampleValue, description, isActive } = req.body;
+    const { formatName, name, modelCode, regexPattern, stationScope, sampleValue, description, isActive } = req.body;
     const normalizedName = String(formatName ?? name ?? "").trim();
-    if (!normalizedName || !regexPattern) {
+    const normalizedModelCode = String(modelCode || "").trim().toUpperCase();
+    const normalizedPattern = String(regexPattern || "").trim();
+    const normalizedStationScope = normalizeStationScope(stationScope);
+    if (!normalizedName || !normalizedPattern) {
       return res.status(400).json({ error: "formatName and regexPattern are required" });
     }
 
-    let compiled;
     try {
-      compiled = new RegExp(regexPattern);
+      compileQrPattern(normalizedPattern);
     } catch (_e) {
-      return res.status(400).json({ error: "Invalid regex pattern" });
+      return res.status(400).json({
+        error: "Invalid regex pattern. Use valid JS regex. For any format use * . For multiple formats use || or new line.",
+      });
     }
 
-    if (sampleValue && !compiled.test(sampleValue)) {
+    if (sampleValue && !testQrPattern(normalizedPattern, sampleValue)) {
       return res.status(400).json({ error: "sampleValue does not match regexPattern" });
-    }
-
-    if (isActive) {
-      await QrFormatRule.update({ is_active: false }, { where: { is_active: true } });
     }
 
     const created = await QrFormatRule.create({
       format_name: normalizedName,
-      regex_pattern: regexPattern,
+      model_code: normalizedModelCode || null,
+      regex_pattern: normalizedPattern,
+      station_scope: normalizedStationScope,
       sample_value: sampleValue || null,
       description: description || null,
       is_active: Boolean(isActive),
@@ -69,23 +90,23 @@ exports.updateRule = async (req, res) => {
       return res.status(404).json({ error: "Rule not found" });
     }
 
-    const regexPattern = req.body.regexPattern ?? rule.regex_pattern;
-    let compiled;
+    const regexPattern = String(req.body.regexPattern ?? rule.regex_pattern ?? "").trim();
     try {
-      compiled = new RegExp(regexPattern);
+      compileQrPattern(regexPattern);
     } catch (_e) {
-      return res.status(400).json({ error: "Invalid regex pattern" });
+      return res.status(400).json({
+        error: "Invalid regex pattern. Use valid JS regex. For any format use * . For multiple formats use || or new line.",
+      });
     }
 
     const sampleValue = req.body.sampleValue ?? rule.sample_value;
-    if (sampleValue && !compiled.test(sampleValue)) {
+    if (sampleValue && !testQrPattern(regexPattern, sampleValue)) {
       return res.status(400).json({ error: "sampleValue does not match regexPattern" });
     }
 
     const isActive = req.body.isActive === undefined ? rule.is_active : Boolean(req.body.isActive);
-    if (isActive) {
-      await QrFormatRule.update({ is_active: false }, { where: { is_active: true } });
-    }
+    const stationScope = req.body.stationScope === undefined ? rule.station_scope : normalizeStationScope(req.body.stationScope);
+    const modelCode = req.body.modelCode === undefined ? rule.model_code : String(req.body.modelCode || "").trim().toUpperCase();
 
     await rule.update({
       format_name: req.body.formatName
@@ -93,7 +114,9 @@ exports.updateRule = async (req, res) => {
         : req.body.name
           ? String(req.body.name).trim()
           : rule.format_name,
+      model_code: modelCode || null,
       regex_pattern: regexPattern,
+      station_scope: stationScope,
       sample_value: sampleValue || null,
       description: req.body.description ?? rule.description,
       is_active: isActive,

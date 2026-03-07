@@ -18,11 +18,15 @@ require("./models/QrFormatRule");
 require("./models/ReworkLog");
 require("./models/PackingSession");
 require("./models/PackingItem");
+require("./models/PackingManagementSetting");
 require("./models/StationFeatureSetting");
+require("./models/RoleAccessSetting");
 require("./models/PlcRegisterRange");
+require("./models/ScannerConnection");
 const { getPartRoom, setSocketServer } = require("./services/realtimeService");
 const { startPlcHealthMonitor } = require("./services/plcHealthService");
 const { resetAllMachineLocks } = require("./services/machineLockService");
+const { resetAllScannerConnectionStates } = require("./services/scannerConnectionService");
 
 require("./tcp/tcpServer");
 
@@ -136,6 +140,7 @@ server.listen(PORT, async () => {
     await sequelize.authenticate();
     await sequelize.sync({ alter: syncAlter });
     await resetAllMachineLocks();
+    await resetAllScannerConnectionStates();
     await ensureDefaultAdminUser();
     await ensureDefaultShifts();
     startPlcHealthMonitor();

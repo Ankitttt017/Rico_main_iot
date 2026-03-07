@@ -97,7 +97,10 @@ function formatScanErrorMessage(payload = {}) {
       : "Station sequence error. Previous station not completed.";
   }
   if (reason === "INVALID_QR_FORMAT") {
-    return "Invalid QR format. Scan correct component code.";
+    return String(payload.message || "").trim() || "Invalid QR format. Scan correct component code.";
+  }
+  if (reason === "QR_RULE_CONFIG_ERROR") {
+    return String(payload.message || "").trim() || "QR rule configuration is invalid. Contact supervisor/admin.";
   }
   if (reason === "ALREADY_COMPLETED") {
     return "Part already completed. Re-scan is not allowed.";
@@ -300,6 +303,7 @@ const OperatorView = () => {
   const currentContext = liveState?.current || stationStats?.current || liveState?.lastEvent || stationStats?.lastEvent || null;
   const plcHealth = liveState?.plcHealth || stationStats?.plcHealth || null;
   const scannerHealth = liveState?.scannerHealth || stationStats?.scannerHealth || null;
+  const scannerInfo = liveState?.scanner || stationStats?.scanner || null;
   const plcConnected = Boolean(plcHealth?.healthy);
   const scannerConfigured = String(scannerHealth?.status || "").toUpperCase() !== "NOT_CONFIGURED";
   const scannerConnected = Boolean(scannerHealth?.connected);
@@ -893,9 +897,17 @@ const OperatorView = () => {
                   </span>
                 </p>
                 {scannerConfigured && (
-                  <p className="text-[11px] text-text-muted">
-                    Last scan: {formatDateTime(scannerHealth?.lastSeenAt)}
-                  </p>
+                  <>
+                    <p className="text-[11px] text-text-muted">
+                      Scanner: {scannerInfo?.scannerName || "-"} | {scannerInfo?.scannerIp || scannerHealth?.scannerIp || "-"}
+                    </p>
+                    <p className="text-[11px] text-text-muted">
+                      Connected at: {formatDateTime(scannerHealth?.connectedAt)}
+                    </p>
+                    <p className="text-[11px] text-text-muted">
+                      Last data: {formatDateTime(scannerHealth?.lastDataAt || scannerHealth?.lastSeenAt)}
+                    </p>
+                  </>
                 )}
               </div>
 
@@ -1035,6 +1047,24 @@ const OperatorView = () => {
                   <span className="text-text-main">Rejection Bin</span>
                   <span className={stationFeatureConfig.rejectionBin ? "text-accent" : "text-text-muted"}>
                     {stationFeatureConfig.rejectionBin ? "Enabled" : "Disabled"}
+                  </span>
+                </div>
+                <div className="rounded-lg border border-border bg-bg-dark/70 px-3 py-2 flex items-center justify-between">
+                  <span className="text-text-main">PLC Confirmation</span>
+                  <span className={stationFeatureConfig.plcConfirmation ? "text-accent" : "text-text-muted"}>
+                    {stationFeatureConfig.plcConfirmation ? "Enabled" : "Disabled"}
+                  </span>
+                </div>
+                <div className="rounded-lg border border-border bg-bg-dark/70 px-3 py-2 flex items-center justify-between">
+                  <span className="text-text-main">Manual OK/NG</span>
+                  <span className={stationFeatureConfig.manualResult ? "text-warning" : "text-text-muted"}>
+                    {stationFeatureConfig.manualResult ? "Enabled" : "Disabled"}
+                  </span>
+                </div>
+                <div className="rounded-lg border border-border bg-bg-dark/70 px-3 py-2 flex items-center justify-between">
+                  <span className="text-text-main">Final Packing Station</span>
+                  <span className={stationFeatureConfig.finalPacking ? "text-accent" : "text-text-muted"}>
+                    {stationFeatureConfig.finalPacking ? "Yes" : "No"}
                   </span>
                 </div>
               </div>

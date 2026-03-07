@@ -13,6 +13,7 @@ const REGISTER_COLUMN_META = [
   { column: "plc_reset_register", label: "resetRegister" },
   { column: "plc_heartbeat_register", label: "heartbeatRegister" },
 ];
+const PLC_SIGNAL_DIRECTION_VALUES = new Set(["PC -> PLC", "PLC -> PC", "BIDIRECTIONAL"]);
 
 function toInt(value) {
   if (value === undefined || value === null || value === "") {
@@ -31,11 +32,39 @@ function normalizeUpper(value) {
 }
 
 function toProtocol(value) {
-  return normalizeUpper(value) === "MODBUS_TCP" ? "MODBUS_TCP" : "TCP_TEXT";
+  const protocol = normalizeUpper(value);
+  if (protocol === "MODBUS_TCP") {
+    return "MODBUS_TCP";
+  }
+  if (protocol === "SLMP") {
+    return "SLMP";
+  }
+  return "TCP_TEXT";
 }
 
 function toStatus(value) {
   return normalizeUpper(value) === "INACTIVE" ? "INACTIVE" : "ACTIVE";
+}
+
+function withPlcConnectivityHint(message, { ip, port, protocol } = {}) {
+  const base = String(message || "").trim() || "PLC communication failed";
+  const normalized = base.toUpperCase();
+  const looksLikeNetworkIssue =
+    normalized.includes("CONNECT TIMEOUT") ||
+    normalized.includes("ECONNREFUSED") ||
+    normalized.includes("EHOSTUNREACH") ||
+    normalized.includes("ENETUNREACH") ||
+    normalized.includes("ETIMEDOUT") ||
+    normalized.includes("UNABLE TO CONNECT");
+
+  if (!looksLikeNetworkIssue || normalized.includes("PING MAY STILL WORK")) {
+    return base;
+  }
+
+  const protocolLabel = String(protocol || "TCP_TEXT").toUpperCase();
+  const endpoint =
+    ip && port ? `${ip}:${port}` : ip ? String(ip) : port ? `port ${port}` : "configured PLC endpoint";
+  return `${base}. Ping may still work while TCP port is blocked/unreachable. Verify ${protocolLabel} service on ${endpoint} and firewall/ACL rules.`;
 }
 
 function toRegistersFromObject(rawObject = {}) {
@@ -95,6 +124,115 @@ function parsePlcRegisters(value) {
       reset: numeric[4] ?? null,
     },
   };
+}
+
+function normalizeSignalDirection(value, fallback = "PLC -> PC") {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (["PC_TO_PLC", "PC->PLC", "PC -> PLC", "WRITE"].includes(normalized)) {
+    return "PC -> PLC";
+  }
+  if (["PLC_TO_PC", "PLC->PC", "PLC -> PC", "READ"].includes(normalized)) {
+    return "PLC -> PC";
+  }
+  if (["BIDIRECTIONAL", "BI", "BOTH"].includes(normalized)) {
+    return "BIDIRECTIONAL";
+  }
+  return PLC_SIGNAL_DIRECTION_VALUES.has(fallback) ? fallback : "PLC -> PC";
+}
+
+function normalizePlcSignalMap(rawMap, fallbackRaw = null) {
+  if (rawMap === undefined) {
+    return fallbackRaw || null;
+  }
+
+  if (rawMap === null || rawMap === "") {
+    return null;
+  }
+
+  let source = rawMap;
+  if (typeof rawMap === "string") {
+    const text = rawMap.trim();
+    if (!text) {
+      return null;
+    }
+    try {
+      source = JSON.parse(text);
+    } catch (_error) {
+      throw new Error("plcSignalMap must be a valid JSON object/array");
+    }
+  }
+
+  let entries = [];
+  if (Array.isArray(source)) {
+    entries = source;
+  } else if (source && typeof source === "object") {
+    entries = Object.entries(source).map(([key, value]) => ({
+      key,
+      ...(value && typeof value === "object" ? value : {}),
+    }));
+  } else {
+    throw new Error("plcSignalMap must be an object or array");
+  }
+
+  const normalized = [];
+  const usedKeys = new Set();
+  for (const entry of entries) {
+    const key = normalizeUpper(entry.key || entry.signal || entry.name);
+    if (!key || usedKeys.has(key)) {
+      continue;
+    }
+    usedKeys.add(key);
+    const label = normalizeText(entry.label || key) || key;
+    const register = toInt(entry.register ?? entry.registerNo ?? entry.address);
+    const direction = normalizeSignalDirection(entry.direction, ["TRIGGER", "RESET"].includes(key) ? "PC -> PLC" : "PLC -> PC");
+    const description = normalizeText(entry.description || "");
+    const writable =
+      entry.writable === undefined ? direction === "PC -> PLC" || direction === "BIDIRECTIONAL" : Boolean(entry.writable);
+
+    normalized.push({
+      key,
+      label,
+      register,
+      direction,
+      writable,
+      description: description || null,
+    });
+  }
+
+  if (normalized.length === 0) {
+    return null;
+  }
+  return JSON.stringify(normalized);
+}
+
+function parsePlcSignalMap(rawValue) {
+  if (!rawValue) {
+    return null;
+  }
+
+  let parsed = rawValue;
+  if (typeof rawValue === "string") {
+    try {
+      parsed = JSON.parse(rawValue);
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  if (!Array.isArray(parsed)) {
+    return null;
+  }
+
+  return parsed
+    .map((entry) => ({
+      key: normalizeUpper(entry?.key || entry?.signal || entry?.name),
+      label: normalizeText(entry?.label || entry?.key || entry?.signal || entry?.name),
+      register: toInt(entry?.register ?? entry?.registerNo ?? entry?.address),
+      direction: normalizeSignalDirection(entry?.direction),
+      writable: Boolean(entry?.writable),
+      description: normalizeText(entry?.description || "") || null,
+    }))
+    .filter((entry) => entry.key);
 }
 
 function getPlcConfigInput(body = {}) {
@@ -267,6 +405,10 @@ function toMachinePayload(body = {}, existingMachine = null) {
   const protocol = toProtocol(body.plcProtocol ?? body.plc_protocol ?? existingMachine?.plc_protocol);
   const plcConfigInput = getPlcConfigInput(body);
   const parsedRegisters = parsePlcRegisters(body.plcRegisters ?? body.plc_registers ?? existingMachine?.plc_registers);
+  const plcSignalMap = normalizePlcSignalMap(
+    body.plcSignalMap ?? body.plc_signal_map ?? plcConfigInput.signalMap,
+    existingMachine?.plc_signal_map
+  );
 
   const plcIp = normalizeText(body.plcIp ?? body.plc_ip ?? existingMachine?.plc_ip);
   const plcPort = toInt(body.plcPort ?? body.plc_port ?? existingMachine?.plc_port);
@@ -329,6 +471,8 @@ function toMachinePayload(body = {}, existingMachine = null) {
         plcConfigInput.heartbeatStaleMs ??
         existingMachine?.plc_heartbeat_stale_ms
     ) ?? 5000;
+  const dailyTargetQty =
+    toInt(body.dailyTargetQty ?? body.daily_target_qty ?? existingMachine?.daily_target_qty) ?? 0;
 
   const plcRegistersSnapshot =
     parsedRegisters.raw ||
@@ -372,6 +516,7 @@ function toMachinePayload(body = {}, existingMachine = null) {
     plc_range_id: plcRangeId,
     plc_protocol: protocol,
     plc_registers: plcRegistersSnapshot,
+    plc_signal_map: plcSignalMap,
     plc_unit_id: plcUnitId,
     plc_start_register: plcStartRegister,
     plc_status_register: plcStatusRegister,
@@ -387,6 +532,7 @@ function toMachinePayload(body = {}, existingMachine = null) {
     plc_test_retry_count: plcTestRetryCount,
     plc_heartbeat_register: plcHeartbeatRegister,
     plc_heartbeat_stale_ms: plcHeartbeatStaleMs,
+    daily_target_qty: Math.max(dailyTargetQty, 0),
     status,
     is_active: isActive,
   };
@@ -413,6 +559,7 @@ function toMachineResponse(machine) {
     heartbeatRegister: machine.plc_heartbeat_register ?? null,
     heartbeatStaleMs: machine.plc_heartbeat_stale_ms ?? 5000,
   };
+  const plcSignalMap = parsePlcSignalMap(machine.plc_signal_map);
   return {
     id: machine.id,
     machineName: machine.machine_name,
@@ -424,6 +571,7 @@ function toMachineResponse(machine) {
     plcRangeId: machine.plc_range_id,
     plcProtocol: machine.plc_protocol || "TCP_TEXT",
     plcRegisters,
+    plcSignalMap,
     plcConfig,
     status,
     isActive: machine.is_active,
@@ -447,6 +595,7 @@ function toMachineResponse(machine) {
     plcTestRetryCount: machine.plc_test_retry_count,
     plcHeartbeatRegister: machine.plc_heartbeat_register,
     plcHeartbeatStaleMs: machine.plc_heartbeat_stale_ms,
+    dailyTargetQty: machine.daily_target_qty ?? 0,
     isRunning: Boolean(machine.is_running),
     runningPartId: machine.running_part_id || null,
     runningStationNo: machine.running_station_no || null,
@@ -469,7 +618,7 @@ function validateMachinePayload(payload) {
     .filter(([, value]) => value === null || value === undefined || value === "")
     .map(([key]) => key);
 
-  if (payload.plc_protocol === "TCP_TEXT") {
+  if (["TCP_TEXT", "SLMP"].includes(payload.plc_protocol)) {
     if (payload.plc_ip === null || payload.plc_ip === undefined || payload.plc_ip === "") {
       missing.push("plcIp");
     }
@@ -642,6 +791,7 @@ exports.updateMachine = async (req, res) => {
 };
 
 exports.testPlc = async (req, res) => {
+  let plcContext = {};
   try {
     const machineId = toInt(req.body.machineId ?? req.body.id);
     const existingMachine = machineId !== null ? await Machine.findByPk(machineId) : null;
@@ -675,6 +825,11 @@ exports.testPlc = async (req, res) => {
       status: "ACTIVE",
     }, existingMachine);
     await hydratePayloadFromRange(payload);
+    plcContext = {
+      ip: payload.plc_ip,
+      port: payload.plc_port,
+      protocol: payload.plc_protocol,
+    };
 
     if (!payload.plc_ip || !payload.plc_port) {
       return res.status(400).json({ error: "plcIp and plcPort are required for PLC test" });
@@ -696,7 +851,12 @@ exports.testPlc = async (req, res) => {
       probe,
     });
   } catch (error) {
-    res.status(400).json({ error: error.message || "PLC connection test failed" });
+    const message = withPlcConnectivityHint(error.message || "PLC connection test failed", {
+      ip: plcContext.ip ?? req.body.plcIp ?? req.body.plc_ip ?? req.body.machineIp ?? req.body.machine_ip,
+      port: plcContext.port ?? req.body.plcPort ?? req.body.plc_port ?? req.body.machinePort ?? req.body.machine_port,
+      protocol: plcContext.protocol ?? req.body.plcProtocol ?? req.body.plc_protocol,
+    });
+    res.status(400).json({ error: message });
   }
 };
 
@@ -851,6 +1011,28 @@ exports.writePlcValue = async (req, res) => {
     });
   } catch (error) {
     res.status(400).json({ error: error.message || "PLC register write failed" });
+  }
+};
+
+exports.updateMachineTarget = async (req, res) => {
+  try {
+    const machine = await Machine.findByPk(req.params.id);
+    if (!machine) {
+      return res.status(404).json({ error: "Machine not found" });
+    }
+
+    const target = toInt(req.body.dailyTargetQty ?? req.body.daily_target_qty ?? req.body.targetQty ?? req.body.target_qty);
+    if (target === null || target < 0 || target > 1000000) {
+      return res.status(400).json({ error: "dailyTargetQty must be between 0 and 1000000" });
+    }
+
+    await machine.update({ daily_target_qty: target });
+    res.json({
+      message: "Machine target updated",
+      machine: toMachineResponse(machine),
+    });
+  } catch (error) {
+    handleSequelizeError(error, res);
   }
 };
 

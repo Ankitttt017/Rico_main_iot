@@ -4,7 +4,9 @@ import { qrFormatApi } from "../api/services";
 
 const emptyForm = {
   formatName: "",
+  modelCode: "",
   regexPattern: "",
+  stationScope: "",
   sampleValue: "",
   description: "",
   isActive: false,
@@ -60,7 +62,9 @@ const QrFormatRules = () => {
     setEditingId(rule.id);
     setForm({
       formatName: rule.formatName,
+      modelCode: rule.modelCode || "",
       regexPattern: rule.regexPattern,
+      stationScope: rule.stationScope || "",
       sampleValue: rule.sampleValue || "",
       description: rule.description || "",
       isActive: Boolean(rule.isActive),
@@ -125,6 +129,16 @@ const QrFormatRules = () => {
           </div>
 
           <div className="space-y-1">
+            <label className="text-xs font-bold uppercase text-text-muted">Model Code</label>
+            <input
+              value={form.modelCode}
+              onChange={(e) => setForm({ ...form, modelCode: e.target.value.toUpperCase() })}
+              className="w-full bg-bg-dark border border-border rounded-lg p-3 text-text-main focus:border-primary outline-none"
+              placeholder="Example: MODEL_A"
+            />
+          </div>
+
+          <div className="space-y-1">
             <label className="text-xs font-bold uppercase text-text-muted">
               Sample Value
             </label>
@@ -133,6 +147,16 @@ const QrFormatRules = () => {
               onChange={(e) => setForm({ ...form, sampleValue: e.target.value })}
               className="w-full bg-bg-dark border border-border rounded-lg p-3 text-text-main focus:border-primary outline-none"
               placeholder="Example sample QR"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs font-bold uppercase text-text-muted">Station Scope</label>
+            <input
+              value={form.stationScope}
+              onChange={(e) => setForm({ ...form, stationScope: e.target.value.toUpperCase() })}
+              className="w-full bg-bg-dark border border-border rounded-lg p-3 text-text-main focus:border-primary outline-none"
+              placeholder="All stations (blank) OR OP10,OP20"
             />
           </div>
 
@@ -145,8 +169,11 @@ const QrFormatRules = () => {
               onChange={(e) => setForm({ ...form, regexPattern: e.target.value })}
               required
               className="w-full bg-bg-dark border border-border rounded-lg p-3 text-text-main focus:border-primary outline-none font-mono"
-              placeholder="Example: ^[A-Z0-9-]{12,40}$"
+              placeholder="Example: ^[A-Z0-9-]{12,40}$ or ^ABC\\d+$ || ^XYZ-[A-Z0-9]+$ or *"
             />
+            <p className="text-[11px] text-text-muted">
+              Use `*` to allow any QR format. For multiple formats, separate with `||` or new line.
+            </p>
           </div>
 
           <div className="md:col-span-2 space-y-1">
@@ -170,7 +197,7 @@ const QrFormatRules = () => {
                 onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
                 className="w-4 h-4"
               />
-              Set as active format
+              Enable this rule (multiple active rules allowed)
             </label>
             <div className="flex items-center gap-2">
               <button
@@ -202,6 +229,8 @@ const QrFormatRules = () => {
             <thead className="bg-bg-dark/40 border-b border-border">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-bold uppercase text-text-muted">Rule</th>
+                <th className="px-6 py-3 text-left text-xs font-bold uppercase text-text-muted">Model</th>
+                <th className="px-6 py-3 text-left text-xs font-bold uppercase text-text-muted">Stations</th>
                 <th className="px-6 py-3 text-left text-xs font-bold uppercase text-text-muted">Regex</th>
                 <th className="px-6 py-3 text-left text-xs font-bold uppercase text-text-muted">Sample</th>
                 <th className="px-6 py-3 text-left text-xs font-bold uppercase text-text-muted">Status</th>
@@ -215,6 +244,8 @@ const QrFormatRules = () => {
                     <p className="font-medium text-text-main">{rule.formatName}</p>
                     <p className="text-xs text-text-muted">{rule.description || "-"}</p>
                   </td>
+                  <td className="px-6 py-4 text-sm text-text-main">{rule.modelCode || "-"}</td>
+                  <td className="px-6 py-4 text-xs text-text-muted">{rule.stationScope || "ALL"}</td>
                   <td className="px-6 py-4 font-mono text-sm text-primary">{rule.regexPattern}</td>
                   <td className="px-6 py-4 text-sm text-text-main">{rule.sampleValue || "-"}</td>
                   <td className="px-6 py-4">
@@ -249,7 +280,7 @@ const QrFormatRules = () => {
               ))}
               {rules.length === 0 && (
                 <tr>
-                  <td colSpan="5" className="px-6 py-10 text-center text-text-muted">
+                  <td colSpan="7" className="px-6 py-10 text-center text-text-muted">
                     No QR format rules configured
                   </td>
                 </tr>

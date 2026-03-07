@@ -5,10 +5,22 @@ export const DEFAULT_STATION_FEATURES = {
   qr: true,
   operation: true,
   rejectionBin: true,
+  plcConfirmation: true,
+  manualResult: false,
+  plcPartCount: 1,
+  finalPacking: false,
 };
 
 function isObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizePlcPartCount(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return 1;
+  }
+  return Math.min(Math.max(Math.trunc(parsed), 1), 20);
 }
 
 export function normalizeStationKey(value) {
@@ -32,6 +44,10 @@ function normalizeFeatureMap(rawMap) {
       qr: rawValue.qr !== false,
       operation: rawValue.operation !== false,
       rejectionBin: rawValue.rejectionBin !== false,
+      plcConfirmation: rawValue.plcConfirmation !== false,
+      manualResult: rawValue.manualResult === true,
+      plcPartCount: normalizePlcPartCount(rawValue.plcPartCount ?? rawValue.plc_part_count),
+      finalPacking: rawValue.finalPacking === true,
     };
     return acc;
   }, {});
@@ -107,6 +123,10 @@ export function getStationFeatures(stationNo, settings = {}) {
     qr: stationSettings.qr !== false,
     operation: stationSettings.operation !== false,
     rejectionBin: stationSettings.rejectionBin !== false,
+    plcConfirmation: stationSettings.plcConfirmation !== false,
+    manualResult: stationSettings.manualResult === true,
+    plcPartCount: normalizePlcPartCount(stationSettings.plcPartCount ?? stationSettings.plc_part_count),
+    finalPacking: stationSettings.finalPacking === true,
   };
 }
 
@@ -134,6 +154,9 @@ export function getStationFeatureCoverage(settings = {}, stations = []) {
       qrEnabled: 0,
       operationEnabled: 0,
       rejectionBinEnabled: 0,
+      plcConfirmationEnabled: 0,
+      manualResultEnabled: 0,
+      finalPackingEnabled: 0,
     };
   }
 
@@ -143,12 +166,18 @@ export function getStationFeatureCoverage(settings = {}, stations = []) {
       qrEnabled: acc.qrEnabled + (entry.qr ? 1 : 0),
       operationEnabled: acc.operationEnabled + (entry.operation ? 1 : 0),
       rejectionBinEnabled: acc.rejectionBinEnabled + (entry.rejectionBin ? 1 : 0),
+      plcConfirmationEnabled: acc.plcConfirmationEnabled + (entry.plcConfirmation ? 1 : 0),
+      manualResultEnabled: acc.manualResultEnabled + (entry.manualResult ? 1 : 0),
+      finalPackingEnabled: acc.finalPackingEnabled + (entry.finalPacking ? 1 : 0),
     }),
     {
       total,
       qrEnabled: 0,
       operationEnabled: 0,
       rejectionBinEnabled: 0,
+      plcConfirmationEnabled: 0,
+      manualResultEnabled: 0,
+      finalPackingEnabled: 0,
     }
   );
 }

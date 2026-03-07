@@ -3,17 +3,35 @@ import { io } from "socket.io-client";
 import {
   Activity,
   AlertTriangle,
+  BarChart3,
   Factory,
   FileText,
   Gauge,
   LayoutPanelTop,
+  PieChart as PieIcon,
   RefreshCw,
   RotateCcw,
   Save,
   Settings2,
   ShieldCheck,
+  Target,
+  TrendingUp,
 } from "lucide-react";
-import { dashboardApi, machineApi, stationSettingsApi } from "../api/services";
+import {
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  Tooltip,
+  Legend,
+  ComposedChart,
+  Bar,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+} from "recharts";
+import { dashboardApi, machineApi, roleAccessApi, stationSettingsApi } from "../api/services";
 import GlobalPopup from "../components/GlobalPopup";
 import { formatMachineLabel, getMachineStage } from "../utils/machineFields";
 import {
@@ -23,6 +41,14 @@ import {
   normalizeStationKey,
   saveStationFeatureSettings,
 } from "../utils/stationSettings";
+import {
+  ACCESS_LEVEL_OPTIONS,
+  MODULE_ACCESS_META,
+  formatAccessLevel,
+  getRoleAccessSettings,
+  normalizeRoleAccessSettings,
+  saveRoleAccessSettings,
+} from "../utils/roleAccess";
 
 const EMPTY_SUMMARY = {
   machines: { total: 0, active: 0, inactive: 0 },
@@ -36,31 +62,18 @@ const EMPTY_REPORT = {
   machineWise: [],
   interlockHistory: [],
   shiftProduction: {},
+  machineCards: [],
+  stationCards: [],
 };
 
-const LOCAL_STORAGE_BOX_CAPACITY_KEY = "packing-default-capacity";
-const MIN_CAPACITY = 1;
-const MAX_CAPACITY = 500;
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:4000";
 const DASHBOARD_REALTIME_COOLDOWN_MS = 1200;
+const CHART_COLORS = ["#22c55e", "#3b82f6", "#f59e0b", "#ef4444", "#14b8a6", "#a855f7", "#f97316", "#06b6d4"];
 
 const TABS = [
   { id: "master", label: "Master Dashboard", icon: LayoutPanelTop },
   { id: "stations", label: "Station Controls", icon: Settings2 },
   { id: "reports", label: "Report Dashboard", icon: FileText },
-];
-
-const ACCESS_MATRIX = [
-  { module: "Master Settings", admin: "View/Edit", engineer: "View", supervisor: "View", operator: "Hidden" },
-  { module: "Machines", admin: "View/Edit", engineer: "View/Edit", supervisor: "View", operator: "Hidden" },
-  { module: "PLC Config", admin: "View/Edit", engineer: "View/Edit", supervisor: "View", operator: "Hidden" },
-  { module: "Scanners", admin: "View/Edit", engineer: "View/Edit", supervisor: "View", operator: "Hidden" },
-  { module: "QR Rules", admin: "View/Edit", engineer: "View/Edit", supervisor: "View", operator: "Hidden" },
-  { module: "Shifts", admin: "View/Edit", engineer: "View", supervisor: "View", operator: "Hidden" },
-  { module: "Users", admin: "View/Edit", engineer: "Hidden", supervisor: "Hidden", operator: "Hidden" },
-  { module: "Operator View", admin: "View", engineer: "View", supervisor: "View", operator: "View" },
-  { module: "I/O Monitor", admin: "View/Control", engineer: "View/Control", supervisor: "View", operator: "View" },
-  { module: "Packing", admin: "View", engineer: "View", supervisor: "View", operator: "View" },
 ];
 
 function getTodayRange() {
@@ -71,23 +84,6 @@ function getTodayRange() {
     dateFrom: from.toISOString(),
     dateTo: now.toISOString(),
   };
-}
-
-function toNumber(value, fallback) {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : fallback;
-}
-
-function readSavedCapacity() {
-  if (typeof window === "undefined") {
-    return 65;
-  }
-
-  const value = Number(localStorage.getItem(LOCAL_STORAGE_BOX_CAPACITY_KEY));
-  if (!Number.isFinite(value)) {
-    return 65;
-  }
-  return Math.min(Math.max(Math.round(value), MIN_CAPACITY), MAX_CAPACITY);
 }
 
 function formatDateTime(value) {
@@ -101,13 +97,34 @@ function formatDateTime(value) {
   return date.toLocaleString();
 }
 
-const MasterSettingsDashboard = () => {
-  const [activeTab, setActiveTab] = useState("master");
+function normalizePlcPartCount(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return 1;
+  }
+  return Math.min(Math.max(Math.trunc(parsed), 1), 20);
+}
+
+const MasterSettingsDashboard = ({ forcedTab = null }) => {
+  const user = useMemo(() => {
+    try {
+      return JSON.parse(localStorage.getItem("user") || "{}");
+    } catch {
+      return {};
+    }
+  }, []);
+  const isAdmin = String(user.role || "").trim().toLowerCase() === "admin";
+
+  const normalizedForcedTab = useMemo(
+    () => (TABS.some((entry) => entry.id === forcedTab) ? forcedTab : null),
+    [forcedTab]
+  );
+  const [activeTab, setActiveTab] = useState(normalizedForcedTab || "master");
   const [machines, setMachines] = useState([]);
   const [summary, setSummary] = useState(EMPTY_SUMMARY);
   const [report, setReport] = useState(EMPTY_REPORT);
   const [stationSettings, setStationSettings] = useState(() => getStationFeatureSettings());
-  const [defaultBoxCapacity, setDefaultBoxCapacity] = useState(() => readSavedCapacity());
+  const [roleAccessSettings, setRoleAccessSettings] = useState(() => getRoleAccessSettings());
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [popup, setPopup] = useState(null);
@@ -126,23 +143,40 @@ const MasterSettingsDashboard = () => {
       if (!grouped.has(stationNo)) {
         grouped.set(stationNo, {
           stationNo,
-          lineName: machine.lineName || "-",
+          lineNames: new Set(),
           sequenceNo: Number(machine.sequenceNo || 9999),
           machines: [],
         });
       }
 
       const row = grouped.get(stationNo);
-      row.machines.push(machine);
+      row.lineNames.add(String(machine.lineName || "-").trim() || "-");
+      row.machines.push({
+        id: machine.id,
+        machineName: machine.machineName || `Machine ${machine.id}`,
+        sequenceNo: Number(machine.sequenceNo || 9999),
+        operationNo: getMachineStage(machine),
+      });
       row.sequenceNo = Math.min(row.sequenceNo, Number(machine.sequenceNo || 9999));
     }
 
-    return Array.from(grouped.values()).sort((a, b) => {
-      if (a.sequenceNo === b.sequenceNo) {
-        return a.stationNo.localeCompare(b.stationNo);
-      }
-      return a.sequenceNo - b.sequenceNo;
-    });
+    return Array.from(grouped.values())
+      .map((row) => ({
+        ...row,
+        lineNames: Array.from(row.lineNames).sort((a, b) => a.localeCompare(b)),
+        machines: [...row.machines].sort((a, b) => {
+          if (a.sequenceNo === b.sequenceNo) {
+            return a.machineName.localeCompare(b.machineName);
+          }
+          return a.sequenceNo - b.sequenceNo;
+        }),
+      }))
+      .sort((a, b) => {
+        if (a.sequenceNo === b.sequenceNo) {
+          return a.stationNo.localeCompare(b.stationNo);
+        }
+        return a.sequenceNo - b.sequenceNo;
+      });
   }, [machines]);
 
   const stationKeys = useMemo(() => stationRows.map((entry) => entry.stationNo), [stationRows]);
@@ -150,6 +184,10 @@ const MasterSettingsDashboard = () => {
   const normalizedSettings = useMemo(
     () => mergeStationFeatureSettings(stationKeys, stationSettings),
     [stationKeys, stationSettings]
+  );
+  const normalizedRoleAccess = useMemo(
+    () => normalizeRoleAccessSettings(roleAccessSettings),
+    [roleAccessSettings]
   );
 
   const machineById = useMemo(
@@ -180,11 +218,12 @@ const MasterSettingsDashboard = () => {
 
       try {
         const query = getTodayRange();
-        const [machineRows, summaryRows, reportRows, remoteSettings] = await Promise.all([
+        const [machineRows, summaryRows, reportRows, remoteSettings, remoteRoleAccess] = await Promise.all([
           machineApi.list(),
           dashboardApi.summary(query),
           dashboardApi.report(query),
           stationSettingsApi.list().catch(() => null),
+          roleAccessApi.list().catch(() => null),
         ]);
 
         setMachines(machineRows || []);
@@ -201,6 +240,14 @@ const MasterSettingsDashboard = () => {
           saveStationFeatureSettings(merged);
           return merged;
         });
+        setRoleAccessSettings((prev) => {
+          const localFallback = Object.keys(prev).length > 0 ? prev : getRoleAccessSettings();
+          const sourceSettings =
+            remoteRoleAccess && Object.keys(remoteRoleAccess).length > 0 ? remoteRoleAccess : localFallback;
+          const normalized = normalizeRoleAccessSettings(sourceSettings);
+          saveRoleAccessSettings(normalized);
+          return normalized;
+        });
       } catch (error) {
         setPopup({
           type: "ERROR",
@@ -214,6 +261,12 @@ const MasterSettingsDashboard = () => {
     },
     []
   );
+
+  useEffect(() => {
+    if (normalizedForcedTab) {
+      setActiveTab(normalizedForcedTab);
+    }
+  }, [normalizedForcedTab]);
 
   useEffect(() => {
     loadData(true);
@@ -262,13 +315,18 @@ const MasterSettingsDashboard = () => {
 
   const saveCurrentSettings = async () => {
     try {
-      await stationSettingsApi.save(normalizedSettings);
+      await Promise.all([
+        stationSettingsApi.save(normalizedSettings),
+        isAdmin ? roleAccessApi.save(normalizedRoleAccess) : Promise.resolve(null),
+      ]);
       saveStationFeatureSettings(normalizedSettings);
-      localStorage.setItem(LOCAL_STORAGE_BOX_CAPACITY_KEY, String(defaultBoxCapacity));
+      saveRoleAccessSettings(normalizedRoleAccess);
       setPopup({
         type: "SUCCESS",
         title: "Configuration Saved",
-        message: "Master settings and station controls have been saved.",
+        message: isAdmin
+          ? "Master settings, station controls, and role access have been saved."
+          : "Master settings and station controls have been saved.",
       });
     } catch (error) {
       setPopup({
@@ -285,32 +343,101 @@ const MasterSettingsDashboard = () => {
       return;
     }
     setStationSettings((prev) => {
-      const next = {
+      const base = { ...prev };
+      if (key === "finalPacking" && value) {
+        for (const existingKey of Object.keys(base)) {
+          base[existingKey] = {
+            ...DEFAULT_STATION_FEATURES,
+            ...(base[existingKey] || {}),
+            finalPacking: false,
+          };
+        }
+      }
+      const updated = {
+        ...base,
+        [stationKey]: {
+          ...DEFAULT_STATION_FEATURES,
+          ...(base[stationKey] || {}),
+          [key]: value,
+        },
+      };
+      saveStationFeatureSettings(updated);
+      return updated;
+    });
+  };
+
+  const updateStationPartCount = (stationNo, rawValue) => {
+    const stationKey = normalizeStationKey(stationNo);
+    if (!stationKey) {
+      return;
+    }
+    const plcPartCount = normalizePlcPartCount(rawValue);
+    setStationSettings((prev) => {
+      const updated = {
         ...prev,
         [stationKey]: {
           ...DEFAULT_STATION_FEATURES,
           ...(prev[stationKey] || {}),
-          [key]: value,
+          plcPartCount,
         },
       };
-      saveStationFeatureSettings(next);
-      return next;
+      saveStationFeatureSettings(updated);
+      return updated;
     });
   };
 
   const applyPreset = (preset) => {
     const next = stationKeys.reduce((acc, stationNo) => {
       if (preset === "strict") {
-        acc[stationNo] = { qr: true, operation: true, rejectionBin: true };
+        acc[stationNo] = {
+          qr: true,
+          operation: true,
+          rejectionBin: true,
+          plcConfirmation: true,
+          manualResult: false,
+          plcPartCount: 1,
+          finalPacking: false,
+        };
       } else if (preset === "speed") {
-        acc[stationNo] = { qr: true, operation: true, rejectionBin: false };
+        acc[stationNo] = {
+          qr: true,
+          operation: true,
+          rejectionBin: false,
+          plcConfirmation: false,
+          manualResult: false,
+          plcPartCount: 1,
+          finalPacking: false,
+        };
       } else {
-        acc[stationNo] = { qr: true, operation: true, rejectionBin: true };
+        acc[stationNo] = {
+          qr: true,
+          operation: true,
+          rejectionBin: true,
+          plcConfirmation: true,
+          manualResult: false,
+          plcPartCount: 1,
+          finalPacking: false,
+        };
       }
       return acc;
     }, {});
     setStationSettings(next);
     saveStationFeatureSettings(next);
+  };
+
+  const updateRoleAccess = (moduleKey, roleKey, accessLevel) => {
+    setRoleAccessSettings((prev) => {
+      const normalized = normalizeRoleAccessSettings(prev);
+      const next = {
+        ...normalized,
+        [moduleKey]: {
+          ...(normalized[moduleKey] || {}),
+          [roleKey]: accessLevel,
+        },
+      };
+      saveRoleAccessSettings(next);
+      return next;
+    });
   };
 
   const resetSettings = () => {
@@ -319,13 +446,11 @@ const MasterSettingsDashboard = () => {
       return acc;
     }, {});
     setStationSettings(defaults);
-    setDefaultBoxCapacity(65);
     saveStationFeatureSettings(defaults);
-    localStorage.setItem(LOCAL_STORAGE_BOX_CAPACITY_KEY, "65");
     setPopup({
       type: "SUCCESS",
       title: "Defaults Restored",
-      message: "Station controls and packing capacity reset to standard defaults.",
+      message: "Station controls reset to standard defaults.",
     });
   };
 
@@ -367,16 +492,111 @@ const MasterSettingsDashboard = () => {
       });
   }, [report.machineWise, machineById]);
 
-  const topMachines = (report.machineWise || [])
-    .map((row) => ({
-      machineId: row.machine_id,
-      machineName: machineNameById[row.machine_id] || `Machine ${row.machine_id}`,
-      ok: Number(row.ok || 0),
-      ng: Number(row.ng || 0),
-      total: Number(row.ok || 0) + Number(row.ng || 0),
-    }))
-    .sort((a, b) => b.ng - a.ng || b.total - a.total)
-    .slice(0, 8);
+  const machineCards = useMemo(
+    () => (Array.isArray(report.machineCards) ? report.machineCards : []),
+    [report.machineCards]
+  );
+  const stationCards = useMemo(
+    () => (Array.isArray(report.stationCards) ? report.stationCards : []),
+    [report.stationCards]
+  );
+
+  const machineReportRows = useMemo(
+    () =>
+      machineCards.map((row) => {
+        const machineId = Number(row.machineId || 0);
+        const machineName = row.machineName || machineNameById[machineId] || `Machine ${machineId}`;
+        const stationNo = row.stationNo || getMachineStage(machineById[machineId]) || "-";
+        const targetQty = Number(row.targetQty || 0);
+        const producedQty = Number(row.processedCount || 0);
+        const okQty = Number(row.okCount || 0);
+        const ngQty = Number(row.ngCount || 0);
+        const downtimeEvents = Number(row.downtimeEvents || 0);
+        const achievementPct = targetQty > 0 ? Number(((producedQty / targetQty) * 100).toFixed(2)) : 0;
+        const targetGap = targetQty > 0 ? Math.max(targetQty - producedQty, 0) : 0;
+        return {
+          machineId,
+          machineName,
+          stationNo,
+          lineName: row.lineName || "-",
+          targetQty,
+          producedQty,
+          okQty,
+          ngQty,
+          downtimeEvents,
+          accuracy: Number(row.accuracy || 0),
+          downtimeRate: Number(row.downtimeRate || 0),
+          achievementPct,
+          targetGap,
+        };
+      }),
+    [machineCards, machineById, machineNameById]
+  );
+
+  const productionPieData = useMemo(
+    () =>
+      machineReportRows
+        .filter((row) => row.producedQty > 0)
+        .map((row) => ({
+          name: `${row.stationNo} - ${row.machineName}`,
+          value: row.producedQty,
+        })),
+    [machineReportRows]
+  );
+
+  const downtimePieData = useMemo(
+    () =>
+      machineReportRows
+        .filter((row) => row.downtimeEvents > 0)
+        .map((row) => ({
+          name: `${row.stationNo} - ${row.machineName}`,
+          value: row.downtimeEvents,
+        })),
+    [machineReportRows]
+  );
+
+  const targetVsActualData = useMemo(
+    () =>
+      machineReportRows
+        .map((row) => ({
+          machine: `${row.stationNo}`,
+          machineName: row.machineName,
+          target: row.targetQty,
+          produced: row.producedQty,
+          downtimeRate: row.downtimeRate,
+          accuracy: row.accuracy,
+        }))
+        .slice(0, 16),
+    [machineReportRows]
+  );
+
+  const reportKpi = useMemo(() => {
+    const targetTotal = machineReportRows.reduce((sum, row) => sum + row.targetQty, 0);
+    const producedTotal = machineReportRows.reduce((sum, row) => sum + row.producedQty, 0);
+    const downtimeTotal = machineReportRows.reduce((sum, row) => sum + row.downtimeEvents, 0);
+    const achievedPct = targetTotal > 0 ? Number(((producedTotal / targetTotal) * 100).toFixed(2)) : 0;
+    const avgAccuracy =
+      machineReportRows.length > 0
+        ? Number(
+            (
+              machineReportRows.reduce((sum, row) => sum + Number(row.accuracy || 0), 0) /
+              machineReportRows.length
+            ).toFixed(2)
+          )
+        : 0;
+    return {
+      targetTotal,
+      producedTotal,
+      downtimeTotal,
+      achievedPct,
+      avgAccuracy,
+    };
+  }, [machineReportRows]);
+
+  const topMachines = machineReportRows
+    .slice()
+    .sort((a, b) => b.producedQty - a.producedQty || b.downtimeEvents - a.downtimeEvents)
+    .slice(0, 12);
 
   const lineReadiness = useMemo(() => {
     const total = Number(summary.machines.total || 0);
@@ -406,6 +626,25 @@ const MasterSettingsDashboard = () => {
     );
   };
 
+  const headerText = useMemo(() => {
+    if (activeTab === "stations") {
+      return {
+        title: "Station Controls",
+        subtitle: "Configure station rules, PLC confirmation, manual OK/NG, and packing station behavior.",
+      };
+    }
+    if (activeTab === "reports") {
+      return {
+        title: "Report Dashboard",
+        subtitle: "Track quality, incidents, and machine ranking with reporting-focused controls.",
+      };
+    }
+    return {
+      title: "Master Dashboard",
+      subtitle: "Manage line readiness, role access, and command-center level controls.",
+    };
+  }, [activeTab]);
+
   return (
     <div className="space-y-6">
       <GlobalPopup popup={popup} onClose={() => setPopup(null)} />
@@ -414,10 +653,8 @@ const MasterSettingsDashboard = () => {
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">Settings Command Center</p>
-            <h1 className="mt-1 text-2xl font-bold text-text-main">Master Dashboard and Station Controls</h1>
-            <p className="text-sm text-text-muted mt-1">
-              Manage station rules, line readiness, reports, and packing defaults from one place.
-            </p>
+            <h1 className="mt-1 text-2xl font-bold text-text-main">{headerText.title}</h1>
+            <p className="text-sm text-text-muted mt-1">{headerText.subtitle}</p>
           </div>
 
           <div className="flex items-center gap-2">
@@ -446,7 +683,7 @@ const MasterSettingsDashboard = () => {
           </div>
         </div>
 
-        <div className="mt-5 flex flex-wrap gap-2">{TABS.map(renderTabButton)}</div>
+        {!normalizedForcedTab && <div className="mt-5 flex flex-wrap gap-2">{TABS.map(renderTabButton)}</div>}
       </div>
 
       {loading ? (
@@ -532,7 +769,7 @@ const MasterSettingsDashboard = () => {
           <div className="industrial-card p-5">
             <h2 className="font-bold text-text-main mb-3">Role Access Matrix</h2>
             <p className="text-sm text-text-muted mb-3">
-              Reference matrix for production deployment. Final enforcement stays on backend API permissions.
+              Admin can configure module visibility by role. Sidebar and route visibility follow this matrix after save.
             </p>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[860px] text-sm">
@@ -546,18 +783,41 @@ const MasterSettingsDashboard = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {ACCESS_MATRIX.map((row) => (
-                    <tr key={row.module} className="border-t border-border/60">
-                      <td className="px-4 py-3 font-semibold text-text-main">{row.module}</td>
-                      <td className="px-4 py-3 text-text-main">{row.admin}</td>
-                      <td className="px-4 py-3 text-text-main">{row.engineer}</td>
-                      <td className="px-4 py-3 text-text-main">{row.supervisor}</td>
-                      <td className="px-4 py-3 text-text-main">{row.operator}</td>
+                  {MODULE_ACCESS_META.map((row) => (
+                    <tr key={row.key} className="border-t border-border/60">
+                      <td className="px-4 py-3 font-semibold text-text-main">{row.label}</td>
+                      {["admin", "engineer", "supervisor", "operator"].map((roleKey) => {
+                        const level = normalizedRoleAccess[row.key]?.[roleKey] || "HIDDEN";
+                        return (
+                          <td key={`${row.key}-${roleKey}`} className="px-4 py-3 text-text-main">
+                            {isAdmin ? (
+                              <select
+                                value={level}
+                                onChange={(event) => updateRoleAccess(row.key, roleKey, event.target.value)}
+                                className="w-full rounded-lg border border-border bg-bg-dark px-2 py-1.5 text-xs text-text-main focus:border-primary focus:outline-none"
+                              >
+                                {ACCESS_LEVEL_OPTIONS.map((option) => (
+                                  <option key={option.value} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              formatAccessLevel(level)
+                            )}
+                          </td>
+                        );
+                      })}
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+            {!isAdmin && (
+              <p className="mt-3 text-xs text-text-muted">
+                Role access edit is restricted to Admin users. You currently have view-only access.
+              </p>
+            )}
           </div>
 
           <div className="industrial-card p-5">
@@ -588,7 +848,7 @@ const MasterSettingsDashboard = () => {
               <div>
                 <h2 className="font-bold text-text-main">Station Requirement Matrix</h2>
                 <p className="text-sm text-text-muted mt-1">
-                  Enable what each station must enforce: QR validation, operation checks, and rejection bin.
+                  Configure per-station checks: QR validation, operation rule, rejection flow, PLC confirmation, manual OK/NG mode, PLC part count, and final packing station.
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -616,7 +876,7 @@ const MasterSettingsDashboard = () => {
 
           <div className="industrial-card overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[920px] text-sm">
+              <table className="w-full min-w-[1460px] text-sm">
                 <thead className="bg-bg-dark/70 text-text-muted text-xs uppercase tracking-wide">
                   <tr>
                     <th className="px-4 py-3 text-left">Station</th>
@@ -625,6 +885,10 @@ const MasterSettingsDashboard = () => {
                     <th className="px-4 py-3 text-center">QR Validation</th>
                     <th className="px-4 py-3 text-center">Operation Rule</th>
                     <th className="px-4 py-3 text-center">Rejection Bin</th>
+                    <th className="px-4 py-3 text-center">PLC Confirmation</th>
+                    <th className="px-4 py-3 text-center">Manual OK/NG</th>
+                    <th className="px-4 py-3 text-center">PLC Part Count</th>
+                    <th className="px-4 py-3 text-center">Final Packing</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -633,8 +897,19 @@ const MasterSettingsDashboard = () => {
                     return (
                       <tr key={row.stationNo} className="border-t border-border/60 hover:bg-bg-dark/50">
                         <td className="px-4 py-3 font-semibold text-text-main">{row.stationNo}</td>
-                        <td className="px-4 py-3 text-text-muted">{row.lineName || "-"}</td>
-                        <td className="px-4 py-3 text-text-main">{row.machines.length}</td>
+                        <td className="px-4 py-3 text-text-muted">{row.lineNames.join(", ") || "-"}</td>
+                        <td className="px-4 py-3 text-text-main">
+                          <div className="flex items-start gap-2">
+                            <span className="rounded-md bg-primary/20 px-2 py-0.5 text-xs font-semibold text-primary">
+                              {row.machines.length}
+                            </span>
+                            <span className="text-xs text-text-muted">
+                              {row.machines
+                                .map((machine) => `${machine.machineName} (Seq ${machine.sequenceNo})`)
+                                .join(", ")}
+                            </span>
+                          </div>
+                        </td>
                         <td className="px-4 py-3 text-center">
                           <input
                             type="checkbox"
@@ -659,6 +934,41 @@ const MasterSettingsDashboard = () => {
                             className="h-4 w-4 accent-[var(--app-primary)]"
                           />
                         </td>
+                        <td className="px-4 py-3 text-center">
+                          <input
+                            type="checkbox"
+                            checked={config.plcConfirmation}
+                            onChange={(event) => updateStationToggle(row.stationNo, "plcConfirmation", event.target.checked)}
+                            className="h-4 w-4 accent-[var(--app-primary)]"
+                          />
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <input
+                            type="checkbox"
+                            checked={config.manualResult === true}
+                            onChange={(event) => updateStationToggle(row.stationNo, "manualResult", event.target.checked)}
+                            className="h-4 w-4 accent-[var(--app-primary)]"
+                          />
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <input
+                            type="number"
+                            min={1}
+                            max={20}
+                            value={normalizePlcPartCount(config.plcPartCount)}
+                            disabled={!config.plcConfirmation}
+                            onChange={(event) => updateStationPartCount(row.stationNo, event.target.value)}
+                            className="mx-auto w-20 rounded-lg border border-border bg-bg-dark px-2 py-1 text-center text-xs text-text-main focus:border-primary focus:outline-none disabled:opacity-50"
+                          />
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <input
+                            type="checkbox"
+                            checked={config.finalPacking === true}
+                            onChange={(event) => updateStationToggle(row.stationNo, "finalPacking", event.target.checked)}
+                            className="h-4 w-4 accent-[var(--app-primary)]"
+                          />
+                        </td>
                       </tr>
                     );
                   })}
@@ -667,72 +977,194 @@ const MasterSettingsDashboard = () => {
             </div>
           </div>
 
-          <div className="industrial-card p-5">
-            <h2 className="font-bold text-text-main mb-3">Packing Defaults</h2>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
-              <div>
-                <label className="text-xs uppercase tracking-wide text-text-muted">Default box capacity</label>
-                <input
-                  type="number"
-                  min={MIN_CAPACITY}
-                  max={MAX_CAPACITY}
-                  value={defaultBoxCapacity}
-                  onChange={(event) => {
-                    const value = Math.min(
-                      MAX_CAPACITY,
-                      Math.max(MIN_CAPACITY, toNumber(event.target.value, defaultBoxCapacity))
-                    );
-                    setDefaultBoxCapacity(value);
-                    localStorage.setItem(LOCAL_STORAGE_BOX_CAPACITY_KEY, String(value));
-                  }}
-                  className="mt-2 w-full rounded-xl border border-border bg-bg-dark px-3 py-2.5 text-text-main focus:border-primary focus:outline-none"
-                />
-              </div>
-              <div className="text-xs text-text-muted md:col-span-2">
-                This value is used as the default in the packing screen. Operators can still override per box at start.
-              </div>
-            </div>
-          </div>
         </div>
       )}
 
       {!loading && activeTab === "reports" && (
         <div className="space-y-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
+            <div className="industrial-card p-4">
+              <p className="text-xs uppercase text-text-muted">Total Target</p>
+              <p className="mt-2 text-2xl font-bold text-text-main">{reportKpi.targetTotal}</p>
+              <p className="text-[11px] text-text-muted mt-1">Across all mapped machines</p>
+            </div>
+            <div className="industrial-card p-4">
+              <p className="text-xs uppercase text-text-muted">Total Production</p>
+              <p className="mt-2 text-2xl font-bold text-primary">{reportKpi.producedTotal}</p>
+              <p className="text-[11px] text-text-muted mt-1">OK + NG processed count</p>
+            </div>
+            <div className="industrial-card p-4">
+              <p className="text-xs uppercase text-text-muted">Target Achievement</p>
+              <p className="mt-2 text-2xl font-bold text-accent">{reportKpi.achievedPct}%</p>
+              <p className="text-[11px] text-text-muted mt-1">Produced vs planned target</p>
+            </div>
+            <div className="industrial-card p-4">
+              <p className="text-xs uppercase text-text-muted">Average Accuracy</p>
+              <p className="mt-2 text-2xl font-bold text-emerald-300">{reportKpi.avgAccuracy}%</p>
+              <p className="text-[11px] text-text-muted mt-1">Machine average pass ratio</p>
+            </div>
+            <div className="industrial-card p-4">
+              <p className="text-xs uppercase text-text-muted">Downtime Events</p>
+              <p className="mt-2 text-2xl font-bold text-warning">{reportKpi.downtimeTotal}</p>
+              <p className="text-[11px] text-text-muted mt-1">PLC Comm + Interlock events</p>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
             <div className="industrial-card p-5">
-              <h2 className="font-bold text-text-main mb-3">Production Snapshot (Today)</h2>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="rounded-lg border border-border bg-bg-dark/70 p-3">
-                  <p className="text-xs text-text-muted uppercase">Completed</p>
-                  <p className="text-xl font-bold text-accent">{summary.parts.completed || 0}</p>
-                </div>
-                <div className="rounded-lg border border-border bg-bg-dark/70 p-3">
-                  <p className="text-xs text-text-muted uppercase">In Progress</p>
-                  <p className="text-xl font-bold text-primary">{summary.parts.inProgress || 0}</p>
-                </div>
-                <div className="rounded-lg border border-border bg-bg-dark/70 p-3">
-                  <p className="text-xs text-text-muted uppercase">NG Parts</p>
-                  <p className="text-xl font-bold text-danger">{summary.parts.ng || 0}</p>
-                </div>
-              </div>
+              <h2 className="font-bold text-text-main mb-3 flex items-center gap-2">
+                <PieIcon size={16} className="text-primary" />
+                Machine-wise Production Share
+              </h2>
+              {productionPieData.length > 0 ? (
+                <ResponsiveContainer width="100%" height={320}>
+                  <PieChart>
+                    <Pie
+                      data={productionPieData}
+                      dataKey="value"
+                      nameKey="name"
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={70}
+                      outerRadius={120}
+                      paddingAngle={2}
+                    >
+                      {productionPieData.map((entry, index) => (
+                        <Cell key={`${entry.name}-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <p className="text-sm text-text-muted">No production data available for pie chart.</p>
+              )}
             </div>
 
             <div className="industrial-card p-5">
-              <h2 className="font-bold text-text-main mb-3">Line Continuity Checklist</h2>
-              <div className="space-y-2 text-sm">
-                <div className="rounded-lg border border-border bg-bg-dark/70 p-3 flex items-center justify-between">
-                  <span className="text-text-main">Scanner and PLC mappings verified</span>
-                  <Activity size={14} className="text-primary" />
+              <h2 className="font-bold text-text-main mb-3 flex items-center gap-2">
+                <PieIcon size={16} className="text-warning" />
+                Machine-wise Downtime Share
+              </h2>
+              {downtimePieData.length > 0 ? (
+                <ResponsiveContainer width="100%" height={320}>
+                  <PieChart>
+                    <Pie
+                      data={downtimePieData}
+                      dataKey="value"
+                      nameKey="name"
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={70}
+                      outerRadius={120}
+                      paddingAngle={2}
+                    >
+                      {downtimePieData.map((entry, index) => (
+                        <Cell key={`${entry.name}-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <p className="text-sm text-text-muted">No downtime events found in current report window.</p>
+              )}
+            </div>
+          </div>
+
+          <div className="industrial-card p-5">
+            <h2 className="font-bold text-text-main mb-3 flex items-center gap-2">
+              <BarChart3 size={16} className="text-primary" />
+              Target vs Production vs Downtime
+            </h2>
+            {targetVsActualData.length > 0 ? (
+              <ResponsiveContainer width="100%" height={360}>
+                <ComposedChart data={targetVsActualData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                  <XAxis dataKey="machine" stroke="#94a3b8" tick={{ fontSize: 11 }} />
+                  <YAxis yAxisId="left" stroke="#94a3b8" />
+                  <YAxis yAxisId="right" orientation="right" stroke="#f59e0b" />
+                  <Tooltip />
+                  <Legend />
+                  <Bar yAxisId="left" dataKey="target" name="Target" fill="#334155" radius={[4, 4, 0, 0]} />
+                  <Bar yAxisId="left" dataKey="produced" name="Produced" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                  <Line yAxisId="right" type="monotone" dataKey="downtimeRate" name="Downtime %" stroke="#f59e0b" strokeWidth={2} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            ) : (
+              <p className="text-sm text-text-muted">No machine chart data available.</p>
+            )}
+          </div>
+
+          <div className="industrial-card p-5">
+            <h2 className="font-bold text-text-main mb-3 flex items-center gap-2">
+              <Target size={16} className="text-primary" />
+              All Machine Report Map
+            </h2>
+            <div className="space-y-2">
+              {topMachines.length === 0 && <p className="text-sm text-text-muted">No machine records found.</p>}
+              {topMachines.map((row) => (
+                <div
+                  key={row.machineId}
+                  className="rounded-lg border border-border bg-bg-dark/70 p-3"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-text-main truncate">
+                        {row.stationNo} | {row.machineName}
+                      </p>
+                      <p className="text-xs text-text-muted">{row.lineName}</p>
+                    </div>
+                    <div className="flex gap-2 text-xs font-semibold">
+                      <span className="rounded-md bg-primary/20 px-2 py-1 text-primary">Target {row.targetQty}</span>
+                      <span className="rounded-md bg-accent/20 px-2 py-1 text-accent">Prod {row.producedQty}</span>
+                      <span className="rounded-md bg-warning/20 px-2 py-1 text-warning">Down {row.downtimeEvents}</span>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                    <div className="rounded-md border border-border bg-bg-card/70 px-2 py-1">
+                      <p className="text-text-muted">Achievement</p>
+                      <p className="font-semibold text-primary">{row.achievementPct}%</p>
+                    </div>
+                    <div className="rounded-md border border-border bg-bg-card/70 px-2 py-1">
+                      <p className="text-text-muted">Accuracy</p>
+                      <p className="font-semibold text-emerald-300">{row.accuracy}%</p>
+                    </div>
+                    <div className="rounded-md border border-border bg-bg-card/70 px-2 py-1">
+                      <p className="text-text-muted">Downtime %</p>
+                      <p className="font-semibold text-warning">{row.downtimeRate}%</p>
+                    </div>
+                    <div className="rounded-md border border-border bg-bg-card/70 px-2 py-1">
+                      <p className="text-text-muted">Target Gap</p>
+                      <p className="font-semibold text-danger">{row.targetGap}</p>
+                    </div>
+                  </div>
                 </div>
-                <div className="rounded-lg border border-border bg-bg-dark/70 p-3 flex items-center justify-between">
-                  <span className="text-text-main">Interlocked parts under response SLA</span>
-                  <AlertTriangle size={14} className="text-warning" />
+              ))}
+            </div>
+          </div>
+
+          <div className="industrial-card p-5">
+            <h2 className="font-bold text-text-main mb-3 flex items-center gap-2">
+              <TrendingUp size={16} className="text-primary" />
+              Station Summary Cards
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+              {stationCards.map((row) => (
+                <div key={row.stationNo} className="rounded-lg border border-border bg-bg-dark/70 p-3">
+                  <p className="text-sm font-bold text-text-main">{row.stationNo}</p>
+                  <p className="text-[11px] text-text-muted mt-1">{(row.lineNames || []).join(", ") || "-"}</p>
+                  <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                    <span className="rounded-md bg-primary/20 px-2 py-1 text-primary">Target {row.targetQty || 0}</span>
+                    <span className="rounded-md bg-accent/20 px-2 py-1 text-accent">Prod {row.processedCount || 0}</span>
+                    <span className="rounded-md bg-emerald-500/20 px-2 py-1 text-emerald-300">Acc {row.accuracy || 0}%</span>
+                    <span className="rounded-md bg-warning/20 px-2 py-1 text-warning">Down {row.downtimeRate || 0}%</span>
+                  </div>
                 </div>
-                <div className="rounded-lg border border-border bg-bg-dark/70 p-3 flex items-center justify-between">
-                  <span className="text-text-main">Bypass/Reset actions tracked with reason</span>
-                  <ShieldCheck size={14} className="text-accent" />
-                </div>
-              </div>
+              ))}
+              {stationCards.length === 0 && <p className="text-sm text-text-muted">No station report rows available.</p>}
             </div>
           </div>
 
@@ -750,28 +1182,6 @@ const MasterSettingsDashboard = () => {
                     <p className="text-xs text-text-muted">{row.interlock_reason || "No reason"} </p>
                   </div>
                   <p className="text-xs text-text-muted">{formatDateTime(row.createdAt)}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="industrial-card p-5">
-            <h2 className="font-bold text-text-main mb-3">Machine Quality Ranking</h2>
-            <div className="space-y-2">
-              {topMachines.length === 0 && <p className="text-sm text-text-muted">No machine records found.</p>}
-              {topMachines.map((row) => (
-                <div
-                  key={row.machineId}
-                  className="rounded-lg border border-border bg-bg-dark/70 p-3 flex flex-wrap justify-between gap-3"
-                >
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-text-main truncate">{row.machineName}</p>
-                    <p className="text-xs text-text-muted">Machine ID: {row.machineId}</p>
-                  </div>
-                  <div className="flex gap-2 text-xs font-semibold">
-                    <span className="rounded-md bg-accent/20 px-2 py-1 text-accent">OK {row.ok}</span>
-                    <span className="rounded-md bg-danger/20 px-2 py-1 text-danger">NG {row.ng}</span>
-                  </div>
                 </div>
               ))}
             </div>

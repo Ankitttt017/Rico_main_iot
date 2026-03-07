@@ -49,10 +49,14 @@ const Machine = sequelize.define("Machine", {
     allowNull: true,
   },
   plc_protocol: {
-    type: DataTypes.ENUM("TCP_TEXT", "MODBUS_TCP"),
+    type: DataTypes.ENUM("TCP_TEXT", "MODBUS_TCP", "SLMP"),
     defaultValue: "TCP_TEXT",
   },
   plc_registers: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+  },
+  plc_signal_map: {
     type: DataTypes.TEXT,
     allowNull: true,
   },
@@ -124,6 +128,15 @@ const Machine = sequelize.define("Machine", {
     type: DataTypes.INTEGER,
     allowNull: true,
     defaultValue: 5000,
+  },
+  daily_target_qty: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 0,
+    validate: {
+      min: 0,
+      max: 1000000,
+    },
   },
   status: {
     type: DataTypes.ENUM("ACTIVE", "INACTIVE"),
