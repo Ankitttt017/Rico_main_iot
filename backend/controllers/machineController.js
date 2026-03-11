@@ -1,7 +1,7 @@
 const { Sequelize, Op } = require("sequelize");
 const Machine = require("../models/Machine");
 const PlcRegisterRange = require("../models/PlcRegisterRange");
-const { testPlcConnection, resetPlcState } = require("../services/plcSocketService");
+const { testPlcConnection, resetPlcState, sendPlcCommand } = require("../services/plcCommunicationService");
 const { writeModbusRegister } = require("../services/plcIoService");
 const { clearMachineLock } = require("../services/machineLockService");
 
@@ -184,8 +184,12 @@ function normalizePlcSignalMap(rawMap, fallbackRaw = null) {
     usedKeys.add(key);
     const label = normalizeText(entry.label || key) || key;
     const register = toInt(entry.register ?? entry.registerNo ?? entry.address);
-    const direction = normalizeSignalDirection(entry.direction, ["TRIGGER", "RESET"].includes(key) ? "PC -> PLC" : "PLC -> PC");
+    const direction = normalizeSignalDirection(
+      entry.direction,
+      ["TRIGGER", "RESET"].includes(key) ? "PC -> PLC" : "PLC -> PC"
+    );
     const description = normalizeText(entry.description || "");
+    const device = normalizeText(entry.device ?? entry.deviceCode ?? entry.deviceType ?? entry.slmpDevice ?? "");
     const writable =
       entry.writable === undefined ? direction === "PC -> PLC" || direction === "BIDIRECTIONAL" : Boolean(entry.writable);
 
@@ -196,6 +200,7 @@ function normalizePlcSignalMap(rawMap, fallbackRaw = null) {
       direction,
       writable,
       description: description || null,
+      device: device ? device.toUpperCase() : null,
     });
   }
 
@@ -227,11 +232,14 @@ function parsePlcSignalMap(rawValue) {
     .map((entry) => ({
       key: normalizeUpper(entry?.key || entry?.signal || entry?.name),
       label: normalizeText(entry?.label || entry?.key || entry?.signal || entry?.name),
-      register: toInt(entry?.register ?? entry?.registerNo ?? entry?.address),
-      direction: normalizeSignalDirection(entry?.direction),
-      writable: Boolean(entry?.writable),
-      description: normalizeText(entry?.description || "") || null,
-    }))
+        register: toInt(entry?.register ?? entry?.registerNo ?? entry?.address),
+        direction: normalizeSignalDirection(entry?.direction),
+        writable: Boolean(entry?.writable),
+        description: normalizeText(entry?.description || "") || null,
+        device: normalizeText(entry?.device || entry?.deviceCode || entry?.deviceType || entry?.slmpDevice || "")
+          ? normalizeText(entry?.device || entry?.deviceCode || entry?.deviceType || entry?.slmpDevice || "").toUpperCase()
+          : null,
+      }))
     .filter((entry) => entry.key);
 }
 
@@ -256,11 +264,13 @@ function serializePlcConfigSnapshot(config = {}) {
     startedValue: toInt(config.startedValue),
     endOkValue: toInt(config.endOkValue),
     endNgValue: toInt(config.endNgValue),
+    blockValue: toInt(config.blockValue),
     resetValue: toInt(config.resetValue),
     testTimeoutMs: toInt(config.testTimeoutMs),
     testRetryCount: toInt(config.testRetryCount),
     heartbeatRegister: toInt(config.heartbeatRegister),
     heartbeatStaleMs: toInt(config.heartbeatStaleMs),
+    slmpDevice: normalizeText(config.slmpDevice) ? normalizeText(config.slmpDevice).toUpperCase() : null,
   };
 
   const hasAnyValue = Object.values(snapshot).some((entry) => entry !== null && entry !== undefined);
@@ -313,16 +323,19 @@ function refreshPlcConfigSnapshot(payload) {
       startedValue: payload.plc_started_value,
       endOkValue: payload.plc_end_ok_value,
       endNgValue: payload.plc_end_ng_value,
+      blockValue: payload.plc_block_value,
       resetValue: payload.plc_reset_value,
       testTimeoutMs: payload.plc_test_timeout_ms,
       testRetryCount: payload.plc_test_retry_count,
       heartbeatRegister: payload.plc_heartbeat_register,
       heartbeatStaleMs: payload.plc_heartbeat_stale_ms,
+      slmpDevice: payload.plc_slmp_device,
     }) || payload.plc_registers;
 }
 
 async function hydratePayloadFromRange(payload) {
-  if (String(payload.plc_protocol || "").toUpperCase() !== "MODBUS_TCP") {
+  const protocol = String(payload.plc_protocol || "").toUpperCase();
+  if (!["MODBUS_TCP", "SLMP"].includes(protocol)) {
     return;
   }
 
@@ -336,7 +349,11 @@ async function hydratePayloadFromRange(payload) {
     throw new Error("Configured plcRangeId does not exist");
   }
 
-  payload.plc_protocol = toProtocol(range.plc_protocol || payload.plc_protocol);
+  const rangeProtocol = toProtocol(range.plc_protocol || payload.plc_protocol);
+  if (rangeProtocol !== protocol) {
+    throw new Error(`Selected plcRangeId protocol ${rangeProtocol} does not match machine protocol ${protocol}`);
+  }
+  payload.plc_protocol = rangeProtocol;
   payload.plc_ip = normalizeText(payload.plc_ip || range.plc_ip) || null;
   payload.plc_port = toInt(payload.plc_port ?? range.plc_port);
   payload.machine_ip = normalizeText(payload.machine_ip || payload.plc_ip || range.plc_ip) || null;
@@ -449,6 +466,8 @@ function toMachinePayload(body = {}, existingMachine = null) {
     toInt(body.plcEndOkValue ?? body.plc_end_ok_value ?? plcConfigInput.endOkValue ?? existingMachine?.plc_end_ok_value) ?? 3;
   const plcEndNgValue =
     toInt(body.plcEndNgValue ?? body.plc_end_ng_value ?? plcConfigInput.endNgValue ?? existingMachine?.plc_end_ng_value) ?? 4;
+  const plcBlockValue =
+    toInt(body.plcBlockValue ?? body.plc_block_value ?? plcConfigInput.blockValue ?? existingMachine?.plc_block_value) ?? 2;
   const plcResetValue =
     toInt(body.plcResetValue ?? body.plc_reset_value ?? plcConfigInput.resetValue ?? existingMachine?.plc_reset_value) ?? 9;
   const plcTestTimeoutMs =
@@ -471,6 +490,9 @@ function toMachinePayload(body = {}, existingMachine = null) {
         plcConfigInput.heartbeatStaleMs ??
         existingMachine?.plc_heartbeat_stale_ms
     ) ?? 5000;
+  const plcSlmpDeviceRaw =
+    normalizeText(body.plcSlmpDevice ?? body.plc_slmp_device ?? plcConfigInput.slmpDevice ?? existingMachine?.plc_slmp_device) || "";
+  const plcSlmpDevice = plcSlmpDeviceRaw ? plcSlmpDeviceRaw.toUpperCase() : null;
   const dailyTargetQty =
     toInt(body.dailyTargetQty ?? body.daily_target_qty ?? existingMachine?.daily_target_qty) ?? 0;
 
@@ -488,11 +510,13 @@ function toMachinePayload(body = {}, existingMachine = null) {
       startedValue: plcStartedValue,
       endOkValue: plcEndOkValue,
       endNgValue: plcEndNgValue,
+      blockValue: plcBlockValue,
       resetValue: plcResetValue,
       testTimeoutMs: plcTestTimeoutMs,
       testRetryCount: plcTestRetryCount,
       heartbeatRegister: plcHeartbeatRegister,
       heartbeatStaleMs: plcHeartbeatStaleMs,
+      slmpDevice: plcSlmpDevice,
     });
 
   const machineIp =
@@ -527,11 +551,13 @@ function toMachinePayload(body = {}, existingMachine = null) {
     plc_started_value: plcStartedValue,
     plc_end_ok_value: plcEndOkValue,
     plc_end_ng_value: plcEndNgValue,
+    plc_block_value: plcBlockValue,
     plc_reset_value: plcResetValue,
     plc_test_timeout_ms: plcTestTimeoutMs,
     plc_test_retry_count: plcTestRetryCount,
     plc_heartbeat_register: plcHeartbeatRegister,
     plc_heartbeat_stale_ms: plcHeartbeatStaleMs,
+    plc_slmp_device: plcSlmpDevice,
     daily_target_qty: Math.max(dailyTargetQty, 0),
     status,
     is_active: isActive,
@@ -553,11 +579,13 @@ function toMachineResponse(machine) {
     startedValue: machine.plc_started_value ?? 2,
     endOkValue: machine.plc_end_ok_value ?? 3,
     endNgValue: machine.plc_end_ng_value ?? 4,
+    blockValue: machine.plc_block_value ?? 2,
     resetValue: machine.plc_reset_value ?? 9,
     testTimeoutMs: machine.plc_test_timeout_ms ?? 2000,
     testRetryCount: machine.plc_test_retry_count ?? 2,
     heartbeatRegister: machine.plc_heartbeat_register ?? null,
     heartbeatStaleMs: machine.plc_heartbeat_stale_ms ?? 5000,
+    slmpDevice: machine.plc_slmp_device ?? null,
   };
   const plcSignalMap = parsePlcSignalMap(machine.plc_signal_map);
   return {
@@ -590,11 +618,13 @@ function toMachineResponse(machine) {
     plcStartedValue: machine.plc_started_value,
     plcEndOkValue: machine.plc_end_ok_value,
     plcEndNgValue: machine.plc_end_ng_value,
+    plcBlockValue: machine.plc_block_value,
     plcResetValue: machine.plc_reset_value,
     plcTestTimeoutMs: machine.plc_test_timeout_ms,
     plcTestRetryCount: machine.plc_test_retry_count,
     plcHeartbeatRegister: machine.plc_heartbeat_register,
     plcHeartbeatStaleMs: machine.plc_heartbeat_stale_ms,
+    plcSlmpDevice: machine.plc_slmp_device,
     dailyTargetQty: machine.daily_target_qty ?? 0,
     isRunning: Boolean(machine.is_running),
     runningPartId: machine.running_part_id || null,
@@ -627,6 +657,15 @@ function validateMachinePayload(payload) {
     }
   }
 
+  if (payload.plc_protocol === "SLMP") {
+    if (payload.plc_start_register === null || payload.plc_start_register === undefined) {
+      missing.push("plcStartRegister");
+    }
+    if (payload.plc_status_register === null || payload.plc_status_register === undefined) {
+      missing.push("plcStatusRegister");
+    }
+  }
+
   if (payload.plc_protocol === "MODBUS_TCP") {
     if (payload.plc_range_id === null || payload.plc_range_id === undefined) {
       missing.push("plcRangeId");
@@ -642,19 +681,27 @@ function validateMachinePayload(payload) {
   return missing;
 }
 
-async function validateModbusRangeAndRegisterUsage(payload, excludeMachineId = null) {
-  if (String(payload.plc_protocol || "").toUpperCase() !== "MODBUS_TCP") {
+async function validateRangeAndRegisterUsage(payload, excludeMachineId = null) {
+  const protocol = String(payload.plc_protocol || "").toUpperCase();
+  if (!["MODBUS_TCP", "SLMP"].includes(protocol)) {
     return;
   }
 
   const rangeId = toInt(payload.plc_range_id);
   if (!rangeId) {
-    throw new Error("plcRangeId is required for MODBUS_TCP");
+    if (protocol === "MODBUS_TCP") {
+      throw new Error("plcRangeId is required for MODBUS_TCP");
+    }
+    return;
   }
 
   const range = await PlcRegisterRange.findByPk(rangeId);
   if (!range) {
     throw new Error("Configured plcRangeId does not exist");
+  }
+  const rangeProtocol = toProtocol(range.plc_protocol || payload.plc_protocol);
+  if (rangeProtocol !== protocol) {
+    throw new Error(`Configured plcRangeId protocol ${rangeProtocol} does not match ${protocol}`);
   }
   if (String(range.status || "ACTIVE").toUpperCase() !== "ACTIVE") {
     throw new Error("Configured plcRangeId is INACTIVE. Select an ACTIVE range.");
@@ -707,6 +754,95 @@ async function validateModbusRangeAndRegisterUsage(payload, excludeMachineId = n
   }
 }
 
+const SLMP_DEFAULT_DEVICE = normalizeUpper(process.env.PLC_SLMP_DEVICE || "D");
+
+function resolveSlmpDeviceForSignal(signalKey, machine = {}) {
+  const defaultDevice = normalizeUpper(machine.plc_slmp_device || SLMP_DEFAULT_DEVICE);
+  const signalMap = parsePlcSignalMap(machine.plc_signal_map);
+  if (signalMap) {
+    const entry = signalMap.find((row) => normalizeUpper(row.key) === normalizeUpper(signalKey));
+    if (entry?.device) {
+      return normalizeUpper(entry.device);
+    }
+  }
+  return defaultDevice || SLMP_DEFAULT_DEVICE;
+}
+
+function buildSlmpRegisterEntries(machine = {}) {
+  return [
+    { key: "TRIGGER", label: "startRegister", register: toInt(machine.plc_start_register) },
+    { key: "STATUS", label: "statusRegister", register: toInt(machine.plc_status_register) },
+    { key: "RESET", label: "resetRegister", register: toInt(machine.plc_reset_register) },
+    { key: "PART_ID_HASH", label: "partRegister", register: toInt(machine.plc_part_register) },
+    { key: "STATION_HASH", label: "stationRegister", register: toInt(machine.plc_station_register) },
+  ]
+    .filter((entry) => entry.register !== null)
+    .map((entry) => ({
+      ...entry,
+      device: resolveSlmpDeviceForSignal(entry.key, machine),
+    }));
+}
+
+async function validateSlmpRegisterOverlap(payload, excludeMachineId = null) {
+  if (String(payload.plc_protocol || "").toUpperCase() !== "SLMP") {
+    return;
+  }
+
+  const plcIp = normalizeText(payload.plc_ip);
+  const plcPort = toInt(payload.plc_port);
+  if (!plcIp || plcPort === null) {
+    return;
+  }
+
+  const currentEntries = buildSlmpRegisterEntries(payload);
+  const seen = new Set();
+  for (const entry of currentEntries) {
+    const key = `${entry.device}:${entry.register}`;
+    if (seen.has(key)) {
+      throw new Error(`SLMP register ${entry.device}${entry.register} assigned multiple times in same machine`);
+    }
+    seen.add(key);
+  }
+
+  const peers = await Machine.findAll({
+    where: {
+      plc_protocol: "SLMP",
+      plc_ip: plcIp,
+      plc_port: plcPort,
+      ...(excludeMachineId ? { id: { [Op.ne]: excludeMachineId } } : {}),
+    },
+    attributes: [
+      "id",
+      "machine_name",
+      "operation_no",
+      "plc_slmp_device",
+      "plc_signal_map",
+      "plc_start_register",
+      "plc_status_register",
+      "plc_reset_register",
+      "plc_part_register",
+      "plc_station_register",
+    ],
+  });
+
+  for (const peer of peers) {
+    const peerEntries = buildSlmpRegisterEntries(peer);
+    for (const entry of currentEntries) {
+      if (!entry.device || entry.register === null) {
+        continue;
+      }
+      const conflict = peerEntries.find(
+        (row) => row.device === entry.device && row.register === entry.register
+      );
+      if (conflict) {
+        throw new Error(
+          `SLMP register ${entry.device}${entry.register} already used by ${peer.machine_name} (${peer.operation_no}) as ${conflict.label}`
+        );
+      }
+    }
+  }
+}
+
 function handleSequelizeError(error, res) {
   if (error.name === "SequelizeUniqueConstraintError") {
     return res.status(409).json({
@@ -754,7 +890,8 @@ exports.createMachine = async (req, res) => {
     if (missing.length > 0) {
       return res.status(400).json({ error: `Required fields: ${missing.join(", ")}` });
     }
-    await validateModbusRangeAndRegisterUsage(payload);
+    await validateRangeAndRegisterUsage(payload);
+    await validateSlmpRegisterOverlap(payload);
     const machine = await Machine.create(payload);
     res.status(201).json(toMachineResponse(machine));
   } catch (error) {
@@ -778,7 +915,8 @@ exports.updateMachine = async (req, res) => {
     if (missing.length > 0) {
       return res.status(400).json({ error: `Required fields: ${missing.join(", ")}` });
     }
-    await validateModbusRangeAndRegisterUsage(payload, machine.id);
+    await validateRangeAndRegisterUsage(payload, machine.id);
+    await validateSlmpRegisterOverlap(payload, machine.id);
 
     await machine.update(payload);
     res.json(toMachineResponse(machine));
@@ -921,6 +1059,87 @@ exports.resetPlc = async (req, res) => {
     });
   } catch (error) {
     res.status(400).json({ error: error.message || "PLC reset failed" });
+  }
+};
+
+exports.sendPlcCommand = async (req, res) => {
+  let plcContext = {};
+  try {
+    const machineId = toInt(req.body.machineId ?? req.body.id);
+    const existingMachine = machineId !== null ? await Machine.findByPk(machineId) : null;
+    if (machineId !== null && !existingMachine) {
+      return res.status(404).json({ error: "Machine not found" });
+    }
+
+    const command = normalizeUpper(req.body.command ?? req.body.plcCommand);
+    if (!["START_OPERATION", "BLOCK_OPERATION", "RESET_OPERATION"].includes(command)) {
+      return res.status(400).json({ error: "Invalid command. Use START_OPERATION, BLOCK_OPERATION, or RESET_OPERATION." });
+    }
+
+    const payload = toMachinePayload({
+      machineName: req.body.machineName || existingMachine?.machine_name || "PLC_CMD",
+      lineName: req.body.lineName || existingMachine?.line_name || "LINE",
+      sequenceNo: req.body.sequenceNo ?? existingMachine?.sequence_no ?? 1,
+      operationNo: req.body.operationNo || req.body.stationNo || existingMachine?.operation_no || "OP-CMD",
+      plcIp: req.body.plcIp ?? req.body.plc_ip ?? req.body.machineIp ?? req.body.machine_ip,
+      plcPort: req.body.plcPort ?? req.body.plc_port ?? req.body.machinePort ?? req.body.machine_port,
+      plcProtocol: req.body.plcProtocol ?? req.body.plc_protocol ?? existingMachine?.plc_protocol,
+      plcConfig: req.body.plcConfig,
+      plcRegisters: req.body.plcRegisters ?? req.body.plc_registers,
+      plcUnitId: req.body.plcUnitId ?? req.body.plc_unit_id,
+      plcStartRegister: req.body.plcStartRegister ?? req.body.plc_start_register,
+      plcStatusRegister: req.body.plcStatusRegister ?? req.body.plc_status_register,
+      plcStationRegister: req.body.plcStationRegister ?? req.body.plc_station_register,
+      plcPartRegister: req.body.plcPartRegister ?? req.body.plc_part_register,
+      plcResetRegister: req.body.plcResetRegister ?? req.body.plc_reset_register,
+      plcStartValue: req.body.plcStartValue ?? req.body.plc_start_value,
+      plcStartedValue: req.body.plcStartedValue ?? req.body.plc_started_value,
+      plcEndOkValue: req.body.plcEndOkValue ?? req.body.plc_end_ok_value,
+      plcEndNgValue: req.body.plcEndNgValue ?? req.body.plc_end_ng_value,
+      plcBlockValue: req.body.plcBlockValue ?? req.body.plc_block_value,
+      plcResetValue: req.body.plcResetValue ?? req.body.plc_reset_value,
+      plcSlmpDevice: req.body.plcSlmpDevice ?? req.body.plc_slmp_device,
+      status: "ACTIVE",
+    }, existingMachine);
+    await hydratePayloadFromRange(payload);
+    plcContext = {
+      ip: payload.plc_ip,
+      port: payload.plc_port,
+      protocol: payload.plc_protocol,
+    };
+
+    if (!payload.plc_ip || !payload.plc_port) {
+      return res.status(400).json({ error: "plcIp and plcPort are required for PLC command" });
+    }
+
+    const partId = req.body.partId ?? req.body.part_id ?? null;
+    const stationNo = req.body.stationNo ?? req.body.station_no ?? payload.operation_no ?? null;
+    if (command === "START_OPERATION" && !partId) {
+      return res.status(400).json({ error: "partId is required for START_OPERATION" });
+    }
+
+    const result = await sendPlcCommand({
+      ip: payload.plc_ip,
+      port: payload.plc_port,
+      protocol: payload.plc_protocol,
+      machine: payload,
+      command,
+      partId,
+      stationNo,
+    });
+
+    res.json({
+      message: `PLC command sent (${command})`,
+      command,
+      result,
+    });
+  } catch (error) {
+    const message = withPlcConnectivityHint(error.message || "PLC command failed", {
+      ip: plcContext.ip ?? req.body.plcIp ?? req.body.plc_ip ?? req.body.machineIp ?? req.body.machine_ip,
+      port: plcContext.port ?? req.body.plcPort ?? req.body.plc_port ?? req.body.machinePort ?? req.body.machine_port,
+      protocol: plcContext.protocol ?? req.body.plcProtocol ?? req.body.plc_protocol,
+    });
+    res.status(400).json({ error: message });
   }
 };
 

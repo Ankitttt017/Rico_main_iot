@@ -8,6 +8,47 @@ import {
   MACHINE_TABLE_COLUMNS,
 } from "../utils/machineFields";
 
+const SLMP_DEVICE_OPTIONS = ["D", "M", "X", "Y", "W", "L", "F", "V", "B", "R"];
+const SLMP_SIGNAL_KEY_BY_ROLE = {
+  startRegister: "TRIGGER",
+  statusRegister: "STATUS",
+  stationRegister: "STATION_HASH",
+  resetRegister: "RESET",
+  partRegister: "PART_ID_HASH",
+};
+const REGISTER_LABEL_BY_ROLE = {
+  startRegister: "Trigger Register",
+  statusRegister: "Interlock Register",
+  stationRegister: "Complete Register",
+  resetRegister: "Reset Register",
+  partRegister: "Part Register",
+};
+const MACHINE_REGISTER_FALLBACKS = {
+  startRegister: "plcStartRegister",
+  statusRegister: "plcStatusRegister",
+  stationRegister: "plcStationRegister",
+  resetRegister: "plcResetRegister",
+  partRegister: "plcPartRegister",
+};
+
+function normalizeProtocol(value, fallback = "TCP_TEXT") {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (!normalized) {
+    return fallback;
+  }
+  if (normalized === "MODBUS") {
+    return "MODBUS_TCP";
+  }
+  if (["TCP", "TEXT"].includes(normalized)) {
+    return "TCP_TEXT";
+  }
+  return normalized;
+}
+
+function normalizeRangeProtocol(value) {
+  return normalizeProtocol(value, "MODBUS_TCP");
+}
+
 function createEmptyForm() {
   return {
     machineName: "",
@@ -19,16 +60,19 @@ function createEmptyForm() {
     plcPort: "",
     plcProtocol: "TCP_TEXT",
     plcRangeId: "",
+    plcSlmpDevice: "D",
     plcConfig: {
       rangeId: "",
       startRegister: "",
       statusRegister: "",
+      partRegister: "",
       stationRegister: "",
       resetRegister: "",
       startValue: "1",
       startedValue: "2",
       endOkValue: "3",
       endNgValue: "4",
+      blockValue: "2",
     },
     plcSignalMap: "",
     status: "ACTIVE",
@@ -71,12 +115,113 @@ function parseSignalMapInput(value) {
   }
 }
 
+function normalizeUpper(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function resolveSignalMapEntry(signalMap, signalKey) {
+  if (!signalMap || !signalKey) {
+    return null;
+  }
+  const target = normalizeUpper(signalKey);
+  if (Array.isArray(signalMap)) {
+    return (
+      signalMap.find((entry) => normalizeUpper(entry?.key || entry?.signalKey) === target) || null
+    );
+  }
+  if (typeof signalMap === "object") {
+    const direct = signalMap[signalKey] ?? signalMap[target];
+    if (direct && typeof direct === "object") {
+      return direct;
+    }
+    const matchedKey = Object.keys(signalMap).find((key) => normalizeUpper(key) === target);
+    if (matchedKey) {
+      const candidate = signalMap[matchedKey];
+      if (candidate && typeof candidate === "object") {
+        return candidate;
+      }
+    }
+  }
+  return null;
+}
+
+function resolveSlmpDeviceForSignal(signalMap, signalKey, fallbackDevice) {
+  const entry = resolveSignalMapEntry(signalMap, signalKey);
+  const candidate = entry?.device ?? entry?.deviceCode;
+  return normalizeUpper(candidate) || fallbackDevice;
+}
+
+function formatSlmpAddress(device, register) {
+  return `${device}${register}`;
+}
+
+function getMachineRegisterValue(machine, roleKey) {
+  if (!machine) {
+    return null;
+  }
+  const config = machine.plcConfig || {};
+  if (config[roleKey] !== undefined && config[roleKey] !== null && config[roleKey] !== "") {
+    return toNullableNumber(config[roleKey]);
+  }
+  const fallbackKey = MACHINE_REGISTER_FALLBACKS[roleKey];
+  return fallbackKey ? toNullableNumber(machine[fallbackKey]) : null;
+}
+
+function buildDefaultSlmpSignalMap(deviceCode, config = {}) {
+  const device = String(deviceCode || "D").trim().toUpperCase() || "D";
+  const entries = [
+    {
+      key: "TRIGGER",
+      label: "START_CMD",
+      register: toNullableNumber(config.startRegister),
+      direction: "PC -> PLC",
+      writable: true,
+      device,
+    },
+    {
+      key: "STATUS",
+      label: "STATUS",
+      register: toNullableNumber(config.statusRegister),
+      direction: "PLC -> PC",
+      writable: false,
+      device,
+    },
+    {
+      key: "PART_ID_HASH",
+      label: "PART_ID_HASH",
+      register: toNullableNumber(config.partRegister),
+      direction: "PC -> PLC",
+      writable: true,
+      device,
+    },
+    {
+      key: "RESET",
+      label: "RESET_CMD",
+      register: toNullableNumber(config.resetRegister),
+      direction: "PC -> PLC",
+      writable: true,
+      device,
+    },
+    {
+      key: "STATION_HASH",
+      label: "STATION_HASH",
+      register: toNullableNumber(config.stationRegister),
+      direction: "PC -> PLC",
+      writable: true,
+      device,
+    },
+  ];
+
+  return JSON.stringify(entries, null, 2);
+}
+
 function clearRangeAssignments(config = {}) {
   return {
     ...config,
     rangeId: "",
     startRegister: "",
     statusRegister: "",
+    partRegister: "",
     stationRegister: "",
     resetRegister: "",
   };
@@ -96,16 +241,19 @@ function buildFormFromMachine(machine) {
     plcPort: toFormValue(machine.plcPort, ""),
     plcProtocol: machine.plcProtocol || "TCP_TEXT",
     plcRangeId: toFormValue(plcRangeId, ""),
+    plcSlmpDevice: machine.plcSlmpDevice || "D",
     plcConfig: {
       rangeId: toFormValue(plcRangeId, ""),
       startRegister: toFormValue(config.startRegister ?? machine.plcStartRegister, ""),
       statusRegister: toFormValue(config.statusRegister ?? machine.plcStatusRegister, ""),
+      partRegister: toFormValue(config.partRegister ?? machine.plcPartRegister, ""),
       stationRegister: toFormValue(config.stationRegister ?? machine.plcStationRegister, ""),
       resetRegister: toFormValue(config.resetRegister ?? machine.plcResetRegister, ""),
       startValue: toFormValue(config.startValue ?? machine.plcStartValue, "1"),
       startedValue: toFormValue(config.startedValue ?? machine.plcStartedValue, "2"),
       endOkValue: toFormValue(config.endOkValue ?? machine.plcEndOkValue, "3"),
       endNgValue: toFormValue(config.endNgValue ?? machine.plcEndNgValue, "4"),
+      blockValue: toFormValue(config.blockValue ?? machine.plcBlockValue, "2"),
     },
     plcSignalMap: machine.plcSignalMap ? JSON.stringify(machine.plcSignalMap, null, 2) : "",
     status: machine.status || "ACTIVE",
@@ -122,12 +270,14 @@ function toSubmitPayload(formData) {
     rangeId: plcRangeId,
     startRegister: toNullableNumber(cfg.startRegister),
     statusRegister: toNullableNumber(cfg.statusRegister),
+    partRegister: toNullableNumber(cfg.partRegister),
     stationRegister: toNullableNumber(cfg.stationRegister),
     resetRegister: toNullableNumber(cfg.resetRegister),
     startValue: toNumberWithDefault(cfg.startValue, 1),
     startedValue: toNumberWithDefault(cfg.startedValue, 2),
     endOkValue: toNumberWithDefault(cfg.endOkValue, 3),
     endNgValue: toNumberWithDefault(cfg.endNgValue, 4),
+    blockValue: toNumberWithDefault(cfg.blockValue, 2),
   };
 
   return {
@@ -141,6 +291,8 @@ function toSubmitPayload(formData) {
     plcProtocol: formData.plcProtocol,
     plcRangeId,
     plcConfig,
+    plcBlockValue: plcConfig.blockValue,
+    plcSlmpDevice: String(formData.plcSlmpDevice || "").trim().toUpperCase() || null,
     plcSignalMap: parseSignalMapInput(formData.plcSignalMap),
     status: formData.status || "ACTIVE",
     machineIp: plcIp,
@@ -200,10 +352,25 @@ const MachinePage = () => {
     [plcRanges]
   );
 
+  const normalizedProtocol = normalizeProtocol(formData.plcProtocol, "TCP_TEXT");
+  const isModbusProtocol = normalizedProtocol === "MODBUS_TCP";
+  const isSlmpProtocol = normalizedProtocol === "SLMP";
+  const usesRange = isModbusProtocol || isSlmpProtocol;
+
+  const activeRangesByProtocol = useMemo(() => {
+    if (!usesRange) {
+      return activeRanges;
+    }
+    return activeRanges.filter(
+      (row) => normalizeRangeProtocol(row.plcProtocol) === normalizedProtocol
+    );
+  }, [activeRanges, normalizedProtocol, usesRange]);
+
   const plcIpOptions = useMemo(() => {
     const options = [];
     const seen = new Set();
-    for (const row of activeRanges) {
+    const rangePool = usesRange ? activeRangesByProtocol : activeRanges;
+    for (const row of rangePool) {
       const ip = String(row.plcIp || "").trim();
       if (!ip || seen.has(ip)) {
         continue;
@@ -216,12 +383,13 @@ const MachinePage = () => {
       options.push(currentIp);
     }
     return options.sort((a, b) => a.localeCompare(b));
-  }, [activeRanges, formData.plcIp]);
+  }, [activeRanges, activeRangesByProtocol, formData.plcIp, usesRange]);
 
   const selectableRanges = useMemo(() => {
     const selectedIp = String(formData.plcIp || "").trim();
     const map = new Map();
-    for (const row of activeRanges.filter((entry) => !selectedIp || String(entry.plcIp || "").trim() === selectedIp)) {
+    const rangePool = usesRange ? activeRangesByProtocol : activeRanges;
+    for (const row of rangePool.filter((entry) => !selectedIp || String(entry.plcIp || "").trim() === selectedIp)) {
       map.set(String(row.id), row);
     }
 
@@ -231,9 +399,7 @@ const MachinePage = () => {
     }
 
     return Array.from(map.values());
-  }, [activeRanges, editingMachine, formData.plcIp, rangeById]);
-
-  const isModbusProtocol = String(formData.plcProtocol || "").toUpperCase() === "MODBUS_TCP";
+  }, [activeRanges, activeRangesByProtocol, editingMachine, formData.plcIp, rangeById, usesRange]);
 
   const resetForm = () => {
     setFormData(createEmptyForm());
@@ -322,7 +488,7 @@ const MachinePage = () => {
   }, []);
 
   useEffect(() => {
-    if (!showModal || String(formData.plcProtocol || "").toUpperCase() !== "MODBUS_TCP") {
+    if (!showModal || !usesRange) {
       setRangeRegisters(null);
       setRangeRegistersError("");
       return;
@@ -335,7 +501,7 @@ const MachinePage = () => {
     }
 
     loadRangeRegisters(formData.plcRangeId, editingMachine?.id || null);
-  }, [showModal, formData.plcProtocol, formData.plcRangeId, editingMachine?.id, loadRangeRegisters]);
+  }, [showModal, usesRange, formData.plcRangeId, editingMachine?.id, loadRangeRegisters]);
 
   useEffect(() => {
     if (!showModal) {
@@ -344,17 +510,17 @@ const MachinePage = () => {
     if (editingMachine) {
       return;
     }
-    if (String(formData.plcProtocol || "").toUpperCase() !== "MODBUS_TCP") {
+    if (!usesRange) {
       return;
     }
     if (formData.plcRangeId) {
       return;
     }
-    if (activeRanges.length === 0) {
+    if (activeRangesByProtocol.length === 0) {
       return;
     }
 
-    const firstRange = activeRanges[0];
+    const firstRange = activeRangesByProtocol[0];
     const nextRangeId = String(firstRange.id);
     setFormData((prev) => ({
       ...prev,
@@ -366,7 +532,7 @@ const MachinePage = () => {
         rangeId: nextRangeId,
       },
     }));
-  }, [showModal, editingMachine, formData.plcProtocol, formData.plcRangeId, activeRanges]);
+  }, [showModal, editingMachine, usesRange, formData.plcRangeId, activeRangesByProtocol]);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -384,6 +550,13 @@ const MachinePage = () => {
       if (["TCP_TEXT", "SLMP"].includes(String(payload.plcProtocol || "").toUpperCase())) {
         if (!payload.plcIp || !Number.isFinite(Number(payload.plcPort))) {
           alert("For TCP_TEXT/SLMP, PLC IP and PLC Port are required.");
+          return;
+        }
+      }
+      if (String(payload.plcProtocol || "").toUpperCase() === "SLMP") {
+        const cfg = payload.plcConfig || {};
+        if (!Number.isFinite(Number(cfg.startRegister)) || !Number.isFinite(Number(cfg.statusRegister))) {
+          alert("For SLMP, Start Register and Status Register are required.");
           return;
         }
       }
@@ -446,6 +619,8 @@ const MachinePage = () => {
         "Started Value",
         "End OK Value",
         "End NG Value",
+        "Block Value",
+        "SLMP Device",
         "Status",
       ],
     ];
@@ -472,6 +647,8 @@ const MachinePage = () => {
         cfg.startedValue ?? "",
         cfg.endOkValue ?? "",
         cfg.endNgValue ?? "",
+        cfg.blockValue ?? "",
+        machine.plcSlmpDevice || "",
         machine.status || "",
       ]);
     }
@@ -562,15 +739,18 @@ const MachinePage = () => {
 
     if (key === "plcProtocol") {
       const normalized = String(value || "").toUpperCase();
+      const rangesByProtocol = activeRanges.filter(
+        (row) => normalizeRangeProtocol(row.plcProtocol) === normalized
+      );
       setFormData((prev) => {
         if (normalized === "MODBUS_TCP") {
-          const candidateRanges = activeRanges.filter(
+          const candidateRanges = rangesByProtocol.filter(
             (row) => String(row.plcIp || "").trim() === String(prev.plcIp || "").trim()
           );
           const range =
             rangeById[toNullableNumber(prev.plcRangeId)] ||
             candidateRanges[0] ||
-            activeRanges[0] ||
+            rangesByProtocol[0] ||
             null;
           return {
             ...prev,
@@ -582,6 +762,30 @@ const MachinePage = () => {
               ...(prev.plcConfig || {}),
               rangeId: range ? String(range.id) : "",
             },
+          };
+        }
+
+        if (normalized === "SLMP") {
+          const nextConfig = clearRangeAssignments(prev.plcConfig);
+          const hasSignalMap = String(prev.plcSignalMap || "").trim().length > 0;
+          const candidateRanges = rangesByProtocol.filter(
+            (row) => String(row.plcIp || "").trim() === String(prev.plcIp || "").trim()
+          );
+          const range = candidateRanges[0] || rangesByProtocol[0] || null;
+          const nextRangeId = range ? String(range.id) : "";
+          return {
+            ...prev,
+            plcProtocol: normalized,
+            plcIp: range?.plcIp || prev.plcIp || "",
+            plcPort: toFormValue(range?.plcPort, prev.plcPort || ""),
+            plcRangeId: nextRangeId,
+            plcConfig: {
+              ...nextConfig,
+              rangeId: nextRangeId,
+            },
+            plcSignalMap: hasSignalMap
+              ? prev.plcSignalMap
+              : buildDefaultSlmpSignalMap(prev.plcSlmpDevice, prev.plcConfig || {}),
           };
         }
 
@@ -610,7 +814,8 @@ const MachinePage = () => {
 
   const updateSelectedPlcIp = (ipValue) => {
     const normalizedIp = String(ipValue || "").trim();
-    const candidateRanges = activeRanges.filter((row) => String(row.plcIp || "").trim() === normalizedIp);
+    const rangePool = usesRange ? activeRangesByProtocol : activeRanges;
+    const candidateRanges = rangePool.filter((row) => String(row.plcIp || "").trim() === normalizedIp);
     const currentRangeId = toNullableNumber(formData.plcRangeId);
     const currentRange =
       currentRangeId && candidateRanges.some((entry) => Number(entry.id) === currentRangeId)
@@ -634,6 +839,19 @@ const MachinePage = () => {
   };
 
   const updateSelectedRange = (rangeId) => {
+    if (!rangeId) {
+      setFormData((prev) => ({
+        ...prev,
+        plcRangeId: "",
+        plcConfig: {
+          ...clearRangeAssignments(prev.plcConfig),
+          rangeId: "",
+        },
+      }));
+      setRangeRegisters(null);
+      setRangeRegistersError("");
+      return;
+    }
     const range = rangeById[toNullableNumber(rangeId)] || null;
     setFormData((prev) => ({
       ...prev,
@@ -690,6 +908,151 @@ const MachinePage = () => {
     [formData.plcConfig, formData.plcRangeId, rangeById, rangeRegisters]
   );
 
+  const slmpRegisterConflicts = useMemo(() => {
+    if (!showModal || !isSlmpProtocol) {
+      return null;
+    }
+    const plcIp = String(formData.plcIp || "").trim();
+    const plcPort = toNullableNumber(formData.plcPort);
+    if (!plcIp || plcPort === null) {
+      return null;
+    }
+
+    const signalMap = parseSignalMapInput(formData.plcSignalMap);
+    const defaultDevice = normalizeUpper(formData.plcSlmpDevice || "D") || "D";
+    const currentAssignments = [
+      {
+        role: "startRegister",
+        signalKey: SLMP_SIGNAL_KEY_BY_ROLE.startRegister,
+        register: toNullableNumber(formData.plcConfig?.startRegister),
+      },
+      {
+        role: "statusRegister",
+        signalKey: SLMP_SIGNAL_KEY_BY_ROLE.statusRegister,
+        register: toNullableNumber(formData.plcConfig?.statusRegister),
+      },
+      {
+        role: "stationRegister",
+        signalKey: SLMP_SIGNAL_KEY_BY_ROLE.stationRegister,
+        register: toNullableNumber(formData.plcConfig?.stationRegister),
+      },
+      {
+        role: "resetRegister",
+        signalKey: SLMP_SIGNAL_KEY_BY_ROLE.resetRegister,
+        register: toNullableNumber(formData.plcConfig?.resetRegister),
+      },
+    ]
+      .filter((entry) => entry.register !== null)
+      .map((entry) => ({
+        ...entry,
+        label: REGISTER_LABEL_BY_ROLE[entry.role] || entry.role,
+        device: resolveSlmpDeviceForSignal(signalMap, entry.signalKey, defaultDevice),
+      }));
+
+    const localMessages = [];
+    const localMap = new Map();
+    for (const entry of currentAssignments) {
+      const key = `${entry.device}:${entry.register}`;
+      const labels = localMap.get(key) || [];
+      labels.push(entry.label);
+      localMap.set(key, labels);
+    }
+    for (const [key, labels] of localMap.entries()) {
+      if (labels.length > 1) {
+        const [device, register] = key.split(":");
+        localMessages.push(`${formatSlmpAddress(device, register)} used by ${labels.join(" + ")}.`);
+      }
+    }
+
+    const peerMap = new Map();
+    for (const machine of machines) {
+      if (editingMachine && String(machine.id) === String(editingMachine.id)) {
+        continue;
+      }
+      if (normalizeProtocol(machine.plcProtocol, "TCP_TEXT") !== "SLMP") {
+        continue;
+      }
+      const peerIp = String(machine.plcIp || "").trim();
+      const peerPort = toNullableNumber(machine.plcPort);
+      if (!peerIp || peerPort === null) {
+        continue;
+      }
+      if (peerIp !== plcIp || peerPort !== plcPort) {
+        continue;
+      }
+      const peerSignalMap = machine.plcSignalMap || null;
+      const peerDefaultDevice = normalizeUpper(machine.plcSlmpDevice || "D") || "D";
+      const peerRoles = ["startRegister", "statusRegister", "stationRegister", "resetRegister", "partRegister"];
+      for (const role of peerRoles) {
+        const register = getMachineRegisterValue(machine, role);
+        if (register === null) {
+          continue;
+        }
+        const signalKey = SLMP_SIGNAL_KEY_BY_ROLE[role] || role;
+        const device = resolveSlmpDeviceForSignal(peerSignalMap, signalKey, peerDefaultDevice);
+        const key = `${device}:${register}`;
+        if (!peerMap.has(key)) {
+          peerMap.set(key, []);
+        }
+        peerMap.get(key).push({
+          machineName: machine.machineName || "Machine",
+          operationNo: machine.operationNo || "",
+          roleLabel: REGISTER_LABEL_BY_ROLE[role] || role,
+        });
+      }
+    }
+
+    const peerMessages = [];
+    const seenKeys = new Set();
+    for (const entry of currentAssignments) {
+      const key = `${entry.device}:${entry.register}`;
+      if (seenKeys.has(key)) {
+        continue;
+      }
+      const matches = peerMap.get(key);
+      if (!matches || matches.length === 0) {
+        continue;
+      }
+      seenKeys.add(key);
+      const target = matches
+        .map((match) => {
+          const op = match.operationNo ? ` (${match.operationNo})` : "";
+          return `${match.machineName}${op} - ${match.roleLabel}`;
+        })
+        .join(", ");
+      peerMessages.push(`${formatSlmpAddress(entry.device, entry.register)} already used by ${target}.`);
+    }
+
+    if (localMessages.length === 0 && peerMessages.length === 0) {
+      return null;
+    }
+    return { local: localMessages, peer: peerMessages };
+  }, [
+    editingMachine,
+    formData.plcConfig,
+    formData.plcIp,
+    formData.plcPort,
+    formData.plcSignalMap,
+    formData.plcSlmpDevice,
+    isSlmpProtocol,
+    machines,
+    showModal,
+  ]);
+
+  const handleRegenerateSlmpSignalMap = () => {
+    if (!isSlmpProtocol) {
+      return;
+    }
+    const hasExisting = String(formData.plcSignalMap || "").trim().length > 0;
+    if (hasExisting && !window.confirm("Regenerate SLMP signal map? This will overwrite the current mapping.")) {
+      return;
+    }
+    setFormData((prev) => ({
+      ...prev,
+      plcSignalMap: buildDefaultSlmpSignalMap(prev.plcSlmpDevice, prev.plcConfig || {}),
+    }));
+  };
+
   const renderCellValue = (machine, key) => {
     if (key === "status") {
       return (
@@ -709,13 +1072,14 @@ const MachinePage = () => {
       return <span className="font-mono text-primary">#{String(machine.sequenceNo ?? "-").padStart(2, "0")}</span>;
     }
 
-    if (key === "plcRangeId") {
-      const rangeId = toNullableNumber(machine.plcRangeId || machine.plcConfig?.rangeId);
-      const range = rangeId ? rangeById[rangeId] : null;
+      if (key === "plcRangeId") {
+        const rangeId = toNullableNumber(machine.plcRangeId || machine.plcConfig?.rangeId);
+        const range = rangeId ? rangeById[rangeId] : null;
 
-      if (String(machine.plcProtocol || "").toUpperCase() !== "MODBUS_TCP") {
-        return <span className="text-text-muted text-xs">N/A</span>;
-      }
+        const protocol = String(machine.plcProtocol || "").toUpperCase();
+        if (!["MODBUS_TCP", "SLMP"].includes(protocol)) {
+          return <span className="text-text-muted text-xs">N/A</span>;
+        }
 
       if (!rangeId) {
         return <span className="text-danger text-xs">Not linked</span>;
@@ -729,23 +1093,24 @@ const MachinePage = () => {
       );
     }
 
-    if (key === "plcConfig") {
-      const cfg = machine.plcConfig || null;
-      if (!cfg) {
-        return <span className="font-mono text-xs text-text-main">-</span>;
-      }
+      if (key === "plcConfig") {
+        const cfg = machine.plcConfig || null;
+        if (!cfg) {
+          return <span className="font-mono text-xs text-text-main">-</span>;
+        }
 
-      if (String(machine.plcProtocol || "").toUpperCase() !== "MODBUS_TCP") {
-        return <span className="font-mono text-xs text-text-main">{machine.plcProtocol || "TCP_TEXT"}</span>;
-      }
+        const protocol = String(machine.plcProtocol || "").toUpperCase();
+        if (protocol !== "MODBUS_TCP" && protocol !== "SLMP") {
+          return <span className="font-mono text-xs text-text-main">{machine.plcProtocol || "TCP_TEXT"}</span>;
+        }
 
-      return (
-        <span className="font-mono text-xs text-text-main">
-          TRG:{cfg.startRegister ?? "-"} | INT:{cfg.statusRegister ?? "-"} | CMP:{cfg.stationRegister ?? "-"} | RST:
-          {cfg.resetRegister ?? "-"}
-        </span>
-      );
-    }
+        return (
+          <span className="font-mono text-xs text-text-main">
+            TRG:{cfg.startRegister ?? "-"} | INT:{cfg.statusRegister ?? "-"} | CMP:{cfg.stationRegister ?? "-"} | RST:
+            {cfg.resetRegister ?? "-"}
+          </span>
+        );
+      }
 
     return <span className="text-text-main">{machine[key] ?? "-"}</span>;
   };
@@ -987,38 +1352,7 @@ const MachinePage = () => {
               ))}
             </div>
 
-            {!isModbusProtocol ? (
-              <div className="mt-6 border border-border rounded-2xl p-4 bg-bg-dark/40 space-y-4">
-                <p className="text-sm font-bold text-text-main uppercase tracking-wide">PLC Binding</p>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-text-muted uppercase">
-                      Select PLC IP <span className="text-primary">*</span>
-                    </label>
-                    <input
-                      value={formData.plcIp}
-                      onChange={(event) => updateField("plcIp", event.target.value)}
-                      placeholder="192.168.0.10"
-                      required
-                      className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-text-muted uppercase">
-                      Auto Port <span className="text-primary">*</span>
-                    </label>
-                    <input
-                      type="number"
-                      value={formData.plcPort}
-                      onChange={(event) => updateField("plcPort", event.target.value)}
-                      placeholder="502"
-                      required
-                      className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none"
-                    />
-                  </div>
-                </div>
-              </div>
-            ) : (
+            {isModbusProtocol ? (
               <div className="mt-6 border border-border rounded-2xl p-4 bg-bg-dark/40 space-y-5">
                 <div>
                   <p className="text-sm font-bold text-text-main uppercase tracking-wide">PLC Binding</p>
@@ -1133,10 +1467,211 @@ const MachinePage = () => {
                   </div>
                 </div>
               </div>
+            ) : isSlmpProtocol ? (
+              <div className="mt-6 border border-border rounded-2xl p-4 bg-bg-dark/40 space-y-5">
+                <p className="text-sm font-bold text-text-main uppercase tracking-wide">PLC Binding</p>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-text-muted uppercase">
+                      PLC IP <span className="text-primary">*</span>
+                    </label>
+                    <input
+                      value={formData.plcIp}
+                      onChange={(event) => updateField("plcIp", event.target.value)}
+                      placeholder="192.168.0.10"
+                      required
+                      className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-text-muted uppercase">
+                      PLC Port <span className="text-primary">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      value={formData.plcPort}
+                      onChange={(event) => updateField("plcPort", event.target.value)}
+                      placeholder="5010"
+                      required
+                      className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-text-muted uppercase">PLC Range (Optional)</label>
+                    <select
+                      value={formData.plcRangeId}
+                      onChange={(event) => updateSelectedRange(event.target.value)}
+                      className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none"
+                    >
+                      <option value="">No range</option>
+                      {selectableRanges.map((range) => (
+                        <option key={range.id} value={range.id}>
+                          {range.rangeName} ({range.rangeStart}-{range.rangeEnd})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-text-muted uppercase">SLMP Device Code</label>
+                    <select
+                      value={formData.plcSlmpDevice}
+                      onChange={(event) => updateField("plcSlmpDevice", event.target.value)}
+                      className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none"
+                    >
+                      {SLMP_DEVICE_OPTIONS.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="rounded-xl border border-border bg-bg-dark/70 px-3 py-2 text-xs text-text-muted">
+                    Use `plcSignalMap` to override device codes per signal when needed.
+                  </div>
+                </div>
+
+                {rangeRegistersError ? (
+                  <div className="rounded-xl border border-danger/40 bg-danger/10 text-danger px-3 py-2 text-xs">
+                    {rangeRegistersError}
+                  </div>
+                ) : null}
+
+                <div className="space-y-2">
+                  <p className="text-sm font-bold text-text-main uppercase tracking-wide">Handshake Mapping</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    {MACHINE_REGISTER_ROLE_FIELDS.map((field) => {
+                      const required = ["startRegister", "statusRegister"].includes(field.key);
+                      const useRangeRegisters = Boolean(formData.plcRangeId);
+                      const options = useRangeRegisters ? getRoleRegisterOptions(field.key) : [];
+                      return (
+                        <div key={field.key} className="space-y-1">
+                          <label className="text-xs font-bold text-text-muted uppercase flex items-center gap-1">
+                            {field.label}
+                            {required && <span className="text-primary">*</span>}
+                          </label>
+                          {useRangeRegisters ? (
+                            <select
+                              value={formData.plcConfig?.[field.key] ?? ""}
+                              onChange={(event) => updatePlcConfigField(field.key, event.target.value)}
+                              required={required}
+                              disabled={rangeRegistersLoading}
+                              className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none disabled:opacity-60"
+                            >
+                              <option value="">Select register</option>
+                              {options.map((registerNo) => (
+                                <option key={`${field.key}-${registerNo}`} value={registerNo}>
+                                  {registerNo}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              type="number"
+                              value={formData.plcConfig?.[field.key] ?? ""}
+                              onChange={(event) => updatePlcConfigField(field.key, event.target.value)}
+                              required={required}
+                              placeholder="Register No"
+                              className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none"
+                            />
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {rangeRegistersLoading ? <p className="text-xs text-text-muted">Loading register occupancy...</p> : null}
+                </div>
+
+                {slmpRegisterConflicts?.local?.length ? (
+                  <div className="rounded-xl border border-danger/40 bg-danger/10 text-danger px-3 py-2 text-xs space-y-1">
+                    <p className="font-semibold uppercase tracking-wide text-[10px]">Duplicate Registers In This Machine</p>
+                    {slmpRegisterConflicts.local.map((message, index) => (
+                      <p key={`slmp-local-${index}`}>{message}</p>
+                    ))}
+                  </div>
+                ) : null}
+
+                {slmpRegisterConflicts?.peer?.length ? (
+                  <div className="rounded-xl border border-warning/40 bg-warning/10 text-warning px-3 py-2 text-xs space-y-1">
+                    <p className="font-semibold uppercase tracking-wide text-[10px]">Registers Already Used On This PLC</p>
+                    {slmpRegisterConflicts.peer.map((message, index) => (
+                      <p key={`slmp-peer-${index}`}>{message}</p>
+                    ))}
+                  </div>
+                ) : null}
+
+                <div className="space-y-2">
+                  <p className="text-sm font-bold text-text-main uppercase tracking-wide">Value Mapping</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    {MACHINE_MODBUS_TUNING_FIELD_CONFIG.map((field) => (
+                      <div key={field.key} className="space-y-1">
+                        <label className="text-xs font-bold text-text-muted uppercase flex items-center gap-1">
+                          {field.label}
+                          {field.required && <span className="text-primary">*</span>}
+                        </label>
+                        <input
+                          type={field.type || "text"}
+                          value={formData.plcConfig?.[field.key] ?? ""}
+                          onChange={(event) => updatePlcConfigField(field.key, event.target.value)}
+                          required={field.required}
+                          placeholder={field.placeholder || ""}
+                          className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-6 border border-border rounded-2xl p-4 bg-bg-dark/40 space-y-4">
+                <p className="text-sm font-bold text-text-main uppercase tracking-wide">PLC Binding</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-text-muted uppercase">
+                      PLC IP <span className="text-primary">*</span>
+                    </label>
+                    <input
+                      value={formData.plcIp}
+                      onChange={(event) => updateField("plcIp", event.target.value)}
+                      placeholder="192.168.0.10"
+                      required
+                      className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-text-muted uppercase">
+                      PLC Port <span className="text-primary">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      value={formData.plcPort}
+                      onChange={(event) => updateField("plcPort", event.target.value)}
+                      placeholder="5000"
+                      required
+                      className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
             )}
 
             <div className="mt-6 border border-border rounded-2xl p-4 bg-bg-dark/40 space-y-2">
-              <p className="text-sm font-bold text-text-main uppercase tracking-wide">Advanced Signal Map (Optional)</p>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-bold text-text-main uppercase tracking-wide">Advanced Signal Map (Optional)</p>
+                {isSlmpProtocol ? (
+                  <button
+                    type="button"
+                    onClick={handleRegenerateSlmpSignalMap}
+                    className="inline-flex items-center gap-2 rounded-lg border border-border bg-bg-dark px-3 py-1.5 text-[11px] font-semibold text-text-main hover:border-primary/60"
+                  >
+                    <RefreshCw size={14} />
+                    Regenerate SLMP Map
+                  </button>
+                ) : null}
+              </div>
               <p className="text-xs text-text-muted">
                 For protocol-specific I/O mapping (including SLMP), provide JSON array/object. If blank, default TRIGGER/INTERLOCK/COMPLETE/RESET mapping is used.
               </p>
@@ -1144,7 +1679,7 @@ const MachinePage = () => {
                 rows={8}
                 value={formData.plcSignalMap}
                 onChange={(event) => updateField("plcSignalMap", event.target.value)}
-                placeholder={'[{"key":"TRIGGER","label":"START_CMD","register":100,"direction":"PC -> PLC","writable":true}]'}
+                placeholder={'[{"key":"TRIGGER","label":"START_CMD","register":100,"direction":"PC -> PLC","writable":true,"device":"D"}]'}
                 className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main font-mono text-xs focus:border-primary/50 outline-none"
               />
             </div>

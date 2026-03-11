@@ -52,6 +52,12 @@ export const MACHINE_REGISTER_ROLE_FIELDS = [
     description: "Interlock/feedback status register.",
   },
   {
+    key: "partRegister",
+    label: "Part ID Register",
+    required: false,
+    description: "Optional register for PART_ID hash/value.",
+  },
+  {
     key: "stationRegister",
     label: "Complete Register",
     required: true,
@@ -72,6 +78,13 @@ export const MACHINE_MODBUS_TUNING_FIELD_CONFIG = [
     type: "number",
     required: true,
     placeholder: "1",
+  },
+  {
+    key: "blockValue",
+    label: "Block Value",
+    type: "number",
+    required: true,
+    placeholder: "2",
   },
   {
     key: "startedValue",

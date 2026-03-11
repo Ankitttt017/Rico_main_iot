@@ -5,7 +5,7 @@ const Part = require("../models/Part");
 const OperationLog = require("../models/OperationLog");
 const ProductionLog = require("../models/ProductionLog");
 const { saveScan } = require("../services/scanService");
-const { executePlcHandshake } = require("../services/plcSocketService");
+const { executePlcHandshake } = require("../services/plcCommunicationService");
 const { emitRealtime } = require("../services/realtimeService");
 const { markScannerHeartbeat } = require("../services/scannerHealthService");
 const {

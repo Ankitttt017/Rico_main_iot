@@ -105,10 +105,19 @@ const Machine = sequelize.define("Machine", {
     allowNull: true,
     defaultValue: 4,
   },
+  plc_block_value: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    defaultValue: 2,
+  },
   plc_reset_value: {
     type: DataTypes.INTEGER,
     allowNull: true,
     defaultValue: 9,
+  },
+  plc_slmp_device: {
+    type: DataTypes.STRING,
+    allowNull: true,
   },
   plc_test_timeout_ms: {
     type: DataTypes.INTEGER,

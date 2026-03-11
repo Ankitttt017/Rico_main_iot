@@ -85,6 +85,10 @@ const IoMonitor = () => {
   const [plcTesting, setPlcTesting] = useState(false);
   const [plcResetting, setPlcResetting] = useState(false);
   const [plcWriting, setPlcWriting] = useState(false);
+  const [plcCommanding, setPlcCommanding] = useState(false);
+  const [plcCommand, setPlcCommand] = useState("START_OPERATION");
+  const [commandPartId, setCommandPartId] = useState("");
+  const [commandStationNo, setCommandStationNo] = useState("");
   const [writeSignal, setWriteSignal] = useState("TRIGGER");
   const [writeValue, setWriteValue] = useState("");
   const [customRegister, setCustomRegister] = useState("");
@@ -195,6 +199,17 @@ const IoMonitor = () => {
   }, [selectedMachineId, selectedPlcIp]);
 
   const selectedMachine = filteredMachines.find((machine) => String(machine.id) === String(selectedMachineId)) || null;
+
+  useEffect(() => {
+    if (!selectedMachine) {
+      setCommandStationNo("");
+      setCommandPartId("");
+      return;
+    }
+    setCommandStationNo(selectedMachine.operationNo || selectedMachine.stationNo || "");
+    setCommandPartId("");
+  }, [selectedMachine]);
+
   const rows = useMemo(() => (Array.isArray(snapshot?.rows) ? snapshot.rows : []), [snapshot?.rows]);
   const writableSignalOptions = useMemo(() => {
     const seen = new Set();
@@ -391,6 +406,44 @@ const IoMonitor = () => {
     }
   };
 
+  const handleSendPlcCommand = async () => {
+    if (!selectedMachine) {
+      return;
+    }
+    const command = String(plcCommand || "").trim().toUpperCase();
+    if (!command) {
+      setControlResult({ type: "error", message: "Select a PLC command." });
+      return;
+    }
+    if (command === "START_OPERATION" && !String(commandPartId || "").trim()) {
+      setControlResult({ type: "error", message: "Part ID is required for START_OPERATION." });
+      return;
+    }
+
+    try {
+      setPlcCommanding(true);
+      setControlResult(null);
+      const response = await machineApi.sendPlcCommand({
+        machineId: selectedMachine.id,
+        command,
+        partId: String(commandPartId || "").trim() || undefined,
+        stationNo: String(commandStationNo || "").trim() || undefined,
+      });
+      setControlResult({
+        type: "success",
+        message: response?.message || `PLC command sent (${command}).`,
+      });
+      await loadSnapshot({ silent: false });
+    } catch (error) {
+      setControlResult({
+        type: "error",
+        message: toErrorMessage(error, "PLC command failed"),
+      });
+    } finally {
+      setPlcCommanding(false);
+    }
+  };
+
   const mappedRegister =
     writeSignal === "CUSTOM"
       ? toIntOrNull(customRegister)
@@ -552,7 +605,7 @@ const IoMonitor = () => {
             <div className="grid grid-cols-1 lg:grid-cols-[auto_auto_1fr] gap-3">
               <button
                 onClick={handleTestPlc}
-                disabled={!selectedMachine || plcTesting || plcResetting || plcWriting}
+                disabled={!selectedMachine || plcTesting || plcResetting || plcWriting || plcCommanding}
                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-border bg-bg-card px-4 py-2.5 text-sm text-text-main hover:border-primary disabled:opacity-60"
               >
                 <Activity size={14} className={plcTesting ? "animate-spin" : ""} />
@@ -560,7 +613,7 @@ const IoMonitor = () => {
               </button>
               <button
                 onClick={handleResetPlc}
-                disabled={!selectedMachine || plcResetting || plcTesting || plcWriting}
+                disabled={!selectedMachine || plcResetting || plcTesting || plcWriting || plcCommanding}
                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-warning/40 bg-bg-card px-4 py-2.5 text-sm text-warning hover:bg-warning/10 disabled:opacity-60"
               >
                 <RotateCcw size={14} className={plcResetting ? "animate-spin" : ""} />
@@ -629,13 +682,63 @@ const IoMonitor = () => {
                 <label className="text-xs font-bold uppercase text-text-muted">Action</label>
                 <button
                   onClick={handleWritePlcValue}
-                  disabled={!selectedMachine || plcWriting || plcTesting || plcResetting}
+                  disabled={!selectedMachine || plcWriting || plcTesting || plcResetting || plcCommanding}
                   className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-bg-dark hover:brightness-110 disabled:opacity-60"
                 >
                   <Save size={14} className={plcWriting ? "animate-pulse" : ""} />
                   {plcWriting ? "Writing..." : "Write Value"}
                 </button>
               </div>
+            </div>
+
+            <div className="rounded-xl border border-border bg-bg-dark/70 px-3 py-3 space-y-3">
+              <p className="text-xs uppercase tracking-wide text-text-muted">Manual PLC Command</p>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                <div className="space-y-1">
+                  <label className="text-xs font-bold uppercase text-text-muted">Command</label>
+                  <select
+                    value={plcCommand}
+                    onChange={(event) => setPlcCommand(event.target.value)}
+                    className="w-full rounded-xl border border-border bg-bg-dark px-3 py-2.5 text-sm text-text-main focus:border-primary focus:outline-none"
+                  >
+                    <option value="START_OPERATION">START_OPERATION</option>
+                    <option value="BLOCK_OPERATION">BLOCK_OPERATION</option>
+                    <option value="RESET_OPERATION">RESET_OPERATION</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-bold uppercase text-text-muted">Part ID</label>
+                  <input
+                    value={commandPartId}
+                    onChange={(event) => setCommandPartId(event.target.value)}
+                    placeholder="PART1234"
+                    className="w-full rounded-xl border border-border bg-bg-dark px-3 py-2.5 text-sm text-text-main focus:border-primary focus:outline-none"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-bold uppercase text-text-muted">Station No</label>
+                  <input
+                    value={commandStationNo}
+                    onChange={(event) => setCommandStationNo(event.target.value)}
+                    placeholder="OP-10"
+                    className="w-full rounded-xl border border-border bg-bg-dark px-3 py-2.5 text-sm text-text-main focus:border-primary focus:outline-none"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-bold uppercase text-text-muted">Action</label>
+                  <button
+                    onClick={handleSendPlcCommand}
+                    disabled={!selectedMachine || plcCommanding || plcTesting || plcResetting || plcWriting}
+                    className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-bg-dark hover:brightness-110 disabled:opacity-60"
+                  >
+                    <Save size={14} className={plcCommanding ? "animate-pulse" : ""} />
+                    {plcCommanding ? "Sending..." : "Send Command"}
+                  </button>
+                </div>
+              </div>
+              <p className="text-[11px] text-text-muted">
+                START_OPERATION requires Part ID. Station defaults to the selected machine operation.
+              </p>
             </div>
 
             {controlResult ? (

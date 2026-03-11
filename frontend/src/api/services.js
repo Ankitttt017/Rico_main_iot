@@ -41,6 +41,10 @@ export const machineApi = {
     const { data } = await apiClient.post(ENDPOINTS.machineResetPlc, payload);
     return data;
   },
+  sendPlcCommand: async (payload) => {
+    const { data } = await apiClient.post(ENDPOINTS.machinePlcCommand, payload);
+    return data;
+  },
   writePlcValue: async (payload) => {
     const { data } = await apiClient.post(ENDPOINTS.machineWritePlcValue, payload);
     return data;

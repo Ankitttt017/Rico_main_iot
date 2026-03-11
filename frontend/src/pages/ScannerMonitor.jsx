@@ -34,8 +34,7 @@ const ScannerMonitor = () => {
     try {
       const response = await scannerApi.listConnections();
       const configured = Array.isArray(response?.configured) ? response.configured : [];
-      const unmanaged = Array.isArray(response?.unmanaged) ? response.unmanaged : [];
-      setRows([...configured, ...unmanaged]);
+      setRows(configured);
       if (status.type === "error") {
         setStatus({ type: "", message: "" });
       }

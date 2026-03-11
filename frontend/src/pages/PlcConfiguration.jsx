@@ -50,8 +50,45 @@ const PlcConfiguration = () => {
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [status, setStatus] = useState({ type: "", message: "" });
+  const [plcTemplateKey, setPlcTemplateKey] = useState("");
 
   const parsedRange = useMemo(() => parseRangeInput(formData.rangeInput), [formData.rangeInput]);
+
+  const plcTemplates = useMemo(() => {
+    const map = new Map();
+    for (const row of ranges) {
+      const ip = String(row.plcIp || "").trim();
+      const port = Number(row.plcPort);
+      const protocol = String(row.plcProtocol || "MODBUS_TCP").toUpperCase();
+      if (!ip || !Number.isFinite(port)) {
+        continue;
+      }
+      const key = `${ip}|${port}|${protocol}`;
+      if (map.has(key)) {
+        continue;
+      }
+      const name = String(row.plcName || "").trim();
+      const label = `${name ? `${name} | ` : ""}${ip}:${port} | ${protocol}`;
+      map.set(key, {
+        key,
+        plcName: name,
+        plcIp: ip,
+        plcPort: String(port),
+        plcProtocol: protocol,
+        label,
+      });
+    }
+    return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
+  }, [ranges]);
+
+  const plcTemplateByKey = useMemo(
+    () =>
+      plcTemplates.reduce((acc, entry) => {
+        acc[entry.key] = entry;
+        return acc;
+      }, {}),
+    [plcTemplates]
+  );
 
   const handshakePreview = useMemo(() => {
     if (!parsedRange) {
@@ -92,9 +129,27 @@ const PlcConfiguration = () => {
   }, [loadData]);
 
   const updateField = (key, value) => {
+    if (["plcName", "plcIp", "plcPort", "plcProtocol"].includes(key)) {
+      setPlcTemplateKey("");
+    }
     setFormData((prev) => ({
       ...prev,
       [key]: value,
+    }));
+  };
+
+  const applyPlcTemplate = (templateKey) => {
+    setPlcTemplateKey(templateKey);
+    const template = plcTemplateByKey[templateKey];
+    if (!template) {
+      return;
+    }
+    setFormData((prev) => ({
+      ...prev,
+      plcName: template.plcName || prev.plcName,
+      plcIp: template.plcIp,
+      plcPort: template.plcPort,
+      plcProtocol: template.plcProtocol,
     }));
   };
 
@@ -130,7 +185,10 @@ const PlcConfiguration = () => {
       });
 
       setStatus({ type: "success", message: "PLC range saved." });
-      setFormData(createForm());
+      setFormData((prev) => ({
+        ...prev,
+        rangeInput: "",
+      }));
       await loadData(false);
     } catch (error) {
       const responseData = error?.response?.data;
@@ -249,6 +307,25 @@ const PlcConfiguration = () => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <form onSubmit={handleSubmit} className="lg:col-span-1 space-y-4 bg-bg-card p-6 rounded-2xl border border-border">
           <h2 className="font-bold text-primary uppercase text-xs tracking-widest">PLC Setup</h2>
+
+          {plcTemplates.length > 0 ? (
+            <div>
+              <label className="text-[10px] font-bold text-text-muted uppercase">Use Existing PLC</label>
+              <select
+                value={plcTemplateKey}
+                onChange={(event) => applyPlcTemplate(event.target.value)}
+                className="w-full bg-bg-dark p-3 rounded-xl border border-border mt-1 font-mono"
+              >
+                <option value="">Select PLC profile</option>
+                {plcTemplates.map((entry) => (
+                  <option key={entry.key} value={entry.key}>
+                    {entry.label}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[10px] text-text-muted mt-1">Applies PLC name, IP, port, and protocol.</p>
+            </div>
+          ) : null}
 
           <div>
             <label className="text-[10px] font-bold text-text-muted uppercase">PLC Name</label>

@@ -8,6 +8,7 @@ export const ENDPOINTS = {
   machineTarget: (id) => `/machines/${encodeURIComponent(id)}/target`,
   machineTestPlc: "/machines/test-plc",
   machineResetPlc: "/machines/reset-plc",
+  machinePlcCommand: "/machines/plc-command",
   machineWritePlcValue: "/machines/write-plc-value",
   plcConfig: {
     ranges: "/plc-config/ranges",
