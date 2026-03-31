@@ -1,4 +1,5 @@
-const { sleep, withTimeout, hashToRegisterValue } = require("./utils");
+// UPGRADE 1 COMPLETE — 32-bit Part/Station hash via FC16 dual-register writes
+const { sleep, withTimeout, hashToRegisterValue, split32To16 } = require("./utils");
 const { withSocket } = require("./socketPool");
 
 const DEFAULT_CONNECT_TIMEOUT_MS = Number(process.env.PLC_CONNECT_TIMEOUT_MS || 2000);
@@ -28,6 +29,44 @@ function buildWriteSingleRegisterFrame(transactionId, unitId, register, value) {
   frame.writeUInt16BE(register, 8);
   frame.writeUInt16BE(value & 0xffff, 10);
   return frame;
+}
+
+/**
+ * FC16 — Write Multiple Registers (Modbus Function Code 0x10)
+ * Used for 32-bit hash writes: writes 2 consecutive 16-bit registers.
+ * @param {number} transactionId
+ * @param {number} unitId
+ * @param {number} startRegister - Base register address (N). Writes to N and N+1.
+ * @param {number[]} values - Array of 16-bit values [highWord, lowWord]
+ */
+function buildWriteMultipleRegistersFrame(transactionId, unitId, startRegister, values) {
+  const regCount = values.length;
+  const byteCount = regCount * 2;
+  // MBAP(6) + unitId(1) + FC(1) + startReg(2) + regCount(2) + byteCount(1) + data(byteCount)
+  const frame = Buffer.alloc(6 + 1 + 1 + 2 + 2 + 1 + byteCount);
+  let offset = 0;
+  frame.writeUInt16BE(transactionId, offset); offset += 2;  // Transaction ID
+  frame.writeUInt16BE(0, offset);             offset += 2;  // Protocol ID
+  frame.writeUInt16BE(7 + byteCount, offset); offset += 2;  // Length
+  frame.writeUInt8(unitId, offset);           offset += 1;  // Unit ID
+  frame.writeUInt8(0x10, offset);             offset += 1;  // FC16
+  frame.writeUInt16BE(startRegister, offset); offset += 2;  // Start Address
+  frame.writeUInt16BE(regCount, offset);      offset += 2;  // Register Count
+  frame.writeUInt8(byteCount, offset);        offset += 1;  // Byte Count
+  for (const val of values) {
+    frame.writeUInt16BE(val & 0xffff, offset); offset += 2;
+  }
+  return frame;
+}
+
+function parseModbusFC16WriteResponse(packet) {
+  if (packet.length < 12) throw new Error("Invalid Modbus FC16 write response");
+  const functionCode = packet.readUInt8(7);
+  if (functionCode === 0x90) {
+    const code = packet.readUInt8(8);
+    throw new Error(`Modbus FC16 exception code ${code}`);
+  }
+  if (functionCode !== 0x10) throw new Error(`Unexpected Modbus function code ${functionCode}`);
 }
 
 function parseModbusReadResponse(packet) {
@@ -159,13 +198,40 @@ async function handshake({ ip, port, partId, stationNo, machine }) {
       throw new Error(`PLC Modbus status timeout (${acceptedValues.join(",")})`);
     };
 
+    // FC16 dual-register write helper for 32-bit hashes
+    const writeHashRegisters = async (baseRegister, strValue, label) => {
+      const startTime = Date.now();
+      const hash32 = hashToRegisterValue(strValue);
+      const [highWord, lowWord] = split32To16(hash32);
+      
+      const frame = buildWriteMultipleRegistersFrame(nextTransactionId(), unitId, baseRegister, [highWord, lowWord]);
+      const packet = await sendAndReceivePacket(socket, frame, DEFAULT_CONNECT_TIMEOUT_MS);
+      parseModbusFC16WriteResponse(packet);
+
+      const durationMs = Date.now() - startTime;
+      console.log(
+        `[PLC:MODBUS] ${label} WRITE SUCCESS | hash32=${hash32} reg[${baseRegister}]=0x${highWord.toString(16).padStart(4,'0')} reg[${baseRegister+1}]=0x${lowWord.toString(16).padStart(4,'0')} | duration=${durationMs}ms`
+      );
+
+      // Implementation DSC-5.1.2: Write Verification
+      const verifyFrame = buildReadHoldingFrame(nextTransactionId(), unitId, baseRegister, 2);
+      const verifyPacket = await sendAndReceivePacket(socket, verifyFrame, DEFAULT_CONNECT_TIMEOUT_MS);
+      const verifyBuffer = verifyPacket.subarray(9);
+      const readHigh = verifyBuffer.readUInt16BE(0);
+      const readLow = verifyBuffer.readUInt16BE(2);
+
+      if (readHigh !== highWord || readLow !== lowWord) {
+        throw new Error(`MODBUS_WRITE_VERIFY_FAIL for ${label}: Expected 0x${highWord.toString(16)}${lowWord.toString(16)}, got 0x${readHigh.toString(16)}${readLow.toString(16)}`);
+      }
+    };
+
     let startCommandActive = false;
     try {
       if (partRegister !== null) {
-        await writeRegister(partRegister, hashToRegisterValue(partId));
+        await writeHashRegisters(partRegister, partId, "PART_ID_HASH");
       }
       if (stationRegister !== null) {
-        await writeRegister(stationRegister, hashToRegisterValue(stationNo));
+        await writeHashRegisters(stationRegister, stationNo, "STATION_HASH");
       }
 
       await writeRegister(startRegister, startValue);
@@ -318,10 +384,22 @@ async function sendCommand({ ip, port, command, machine, partId, stationNo }) {
     };
 
     if (normalized === "START_OPERATION" && Number.isFinite(machine?.plc_part_register)) {
-      await writeRegister(Number(machine.plc_part_register), hashToRegisterValue(partId));
+      const hash32p = hashToRegisterValue(partId);
+      const [phigh, plow] = split32To16(hash32p);
+      const pBase = Number(machine.plc_part_register);
+      console.log(`[PLC:MODBUS] sendCommand PART_ID_HASH hash32=${hash32p} reg[${pBase}]=0x${phigh.toString(16)} reg[${pBase+1}]=0x${plow.toString(16)}`);
+      const pFrame = buildWriteMultipleRegistersFrame(nextTransactionId(), unitId, pBase, [phigh, plow]);
+      const pPacket = await sendAndReceivePacket(socket, pFrame, DEFAULT_CONNECT_TIMEOUT_MS);
+      parseModbusFC16WriteResponse(pPacket);
     }
     if (normalized === "START_OPERATION" && Number.isFinite(machine?.plc_station_register)) {
-      await writeRegister(Number(machine.plc_station_register), hashToRegisterValue(stationNo));
+      const hash32s = hashToRegisterValue(stationNo);
+      const [shigh, slow] = split32To16(hash32s);
+      const sBase = Number(machine.plc_station_register);
+      console.log(`[PLC:MODBUS] sendCommand STATION_HASH hash32=${hash32s} reg[${sBase}]=0x${shigh.toString(16)} reg[${sBase+1}]=0x${slow.toString(16)}`);
+      const sFrame = buildWriteMultipleRegistersFrame(nextTransactionId(), unitId, sBase, [shigh, slow]);
+      const sPacket = await sendAndReceivePacket(socket, sFrame, DEFAULT_CONNECT_TIMEOUT_MS);
+      parseModbusFC16WriteResponse(sPacket);
     }
     await writeRegister(commandRegister, commandValue);
     if (normalized === "RESET_OPERATION" && Number.isFinite(resetRegister)) {

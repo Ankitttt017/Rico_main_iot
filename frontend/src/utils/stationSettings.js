@@ -69,7 +69,7 @@ function readLegacySettings() {
       if (Object.keys(normalized).length > 0) {
         return normalized;
       }
-    } catch (_error) {
+    } catch {
       // Ignore malformed legacy payloads.
     }
   }
@@ -87,7 +87,7 @@ export function getStationFeatureSettings() {
     if (raw) {
       return normalizeFeatureMap(JSON.parse(raw));
     }
-  } catch (_error) {
+  } catch {
     // Ignore malformed storage payloads and fallback to defaults.
   }
 

@@ -1,127 +1,83 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Boxes, QrCode, RefreshCw, Save, Settings2 } from "lucide-react";
+import { 
+  Boxes, 
+  QrCode, 
+  RefreshCw, 
+  Save, 
+  Settings2, 
+  PlusCircle, 
+  Filter, 
+  Database,
+  ArrowRightCircle,
+  Hash,
+  Activity
+} from "lucide-react";
 import { packingApi } from "../api/services";
 import GlobalPopup from "../components/GlobalPopup";
 
 function toPositiveInt(value, fallback) {
   const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return fallback;
-  }
-  return Math.trunc(parsed);
+  return (!Number.isFinite(parsed) || parsed <= 0) ? fallback : Math.trunc(parsed);
 }
 
 function formatDateTime(value) {
-  if (!value) {
-    return "-";
-  }
+  if (!value) return "-";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "-";
-  }
-  return date.toLocaleString();
+  return isNaN(date.getTime()) ? "-" : date.toLocaleString();
 }
 
-function toBars(value) {
-  const CODE_39 = {
-    "0": "nnnwwnwnn",
-    "1": "wnnwnnnnw",
-    "2": "nnwwnnnnw",
-    "3": "wnwwnnnnn",
-    "4": "nnnwwnnnw",
-    "5": "wnnwwnnnn",
-    "6": "nnwwwnnnn",
-    "7": "nnnwnnwnw",
-    "8": "wnnwnnwnn",
-    "9": "nnwwnnwnn",
-    A: "wnnnnwnnw",
-    B: "nnwnnwnnw",
-    C: "wnwnnwnnn",
-    D: "nnnnwwnnw",
-    E: "wnnnwwnnn",
-    F: "nnwnwwnnn",
-    G: "nnnnnwwnw",
-    H: "wnnnnwwnn",
-    I: "nnwnnwwnn",
-    J: "nnnnwwwnn",
-    K: "wnnnnnnww",
-    L: "nnwnnnnww",
-    M: "wnwnnnnwn",
-    N: "nnnnwnnww",
-    O: "wnnnwnnwn",
-    P: "nnwnwnnwn",
-    Q: "nnnnnnwww",
-    R: "wnnnnnwwn",
-    S: "nnwnnnwwn",
-    T: "nnnnwnwwn",
-    U: "wwnnnnnnw",
-    V: "nwwnnnnnw",
-    W: "wwwnnnnnn",
-    X: "nwnnwnnnw",
-    Y: "wwnnwnnnn",
-    Z: "nwwnwnnnn",
-    "-": "nwnnnnwnw",
-    ".": "wwnnnnwnn",
-    " ": "nwwnnnwnn",
-    $: "nwnwnwnnn",
-    "/": "nwnwnnnwn",
-    "+": "nwnnnwnwn",
-    "%": "nnnwnwnwn",
-    "*": "nwnnwnwnn",
-  };
-
-  const sanitized = String(value || "EMPTY")
-    .toUpperCase()
-    .replace(/[^0-9A-Z\-\.\$\/\+\% ]/g, "");
-  const encoded = `*${sanitized || "EMPTY"}*`;
-  const segments = [{ isBar: false, width: 10 }];
-
-  for (let charIndex = 0; charIndex < encoded.length; charIndex += 1) {
-    const pattern = CODE_39[encoded[charIndex]];
-    if (!pattern) {
-      continue;
-    }
-    for (let index = 0; index < pattern.length; index += 1) {
-      segments.push({
-        isBar: index % 2 === 0,
-        width: pattern[index] === "w" ? 3 : 1,
-      });
-    }
-    if (charIndex < encoded.length - 1) {
-      segments.push({ isBar: false, width: 1 });
-    }
-  }
-
-  segments.push({ isBar: false, width: 10 });
-  return segments;
-}
-
+/**
+ * Premium SVG Barcode Preview
+ */
 function BarcodePreview({ value }) {
-  const bars = useMemo(() => toBars(value), [value]);
-  const width = bars.reduce((sum, entry) => sum + entry.width, 0);
-  let cursor = 0;
+  const bars = useMemo(() => {
+    const CODE_39 = {
+      "0": "nnnwwnwnn", "1": "wnnwnnnnw", "2": "nnwwnnnnw", "3": "wnwwnnnnn",
+      "4": "nnnwwnnnw", "5": "wnnwwnnnn", "6": "nnwwwnnnn", "7": "nnnwnnwnw",
+      "8": "wnnwnnwnn", "9": "nnwwnnwnn", A: "wnnnnnwnnw", B: "nnwnnwnnw",
+      C: "wnwnnwnnn", D: "nnnnwwnnw", E: "wnnnwwnnn", F: "nnwnwwnnn",
+      G: "nnnnnwwnw", H: "wnnnnwwnn", I: "nnwnnwwnn", J: "nnnnwwwnn",
+      K: "wnnnnnnww", L: "nnwnnnnww", M: "wnwnnnnwn", N: "nnnnwnnww",
+      O: "wnnnwnnwn", P: "nnwnwnnwn", Q: "nnnnnnwww", R: "wnnnnnwwn",
+      S: "nnwnnnwwn", T: "nnnnwnwwn", U: "wwnnnnnnw", V: "nwwnnnnnw",
+      W: "wwwnnnnnn", X: "nwnnwnnnw", Y: "wwnnwnnnn", Z: "nwwnwnnnn",
+      "-": "nwnnnnwnw", ".": "wwnnnnwnn", " ": "nwwnnnwnn", $: "nwnwnwnnn",
+      "/": "nwnwnnnwn", "+": "nwnnnwnwn", "%": "nnnwnwnwn", "*": "nwnnwnwnn",
+    };
+    const sanitized = String(value || "EMPTY").toUpperCase().replace(/[^0-9A-Z.$/+% -]/g, "");
+    const encoded = `*${sanitized || "EMPTY"}*`;
+    const segments = [{ isBar: false, width: 10 }];
+    for (let i = 0; i < encoded.length; i++) {
+      const pattern = CODE_39[encoded[i]];
+      if (!pattern) continue;
+      for (let j = 0; j < pattern.length; j++) {
+        segments.push({ isBar: j % 2 === 0, width: pattern[j] === "w" ? 3 : 1 });
+      }
+      if (i < encoded.length - 1) segments.push({ isBar: false, width: 1 });
+    }
+    segments.push({ isBar: false, width: 10 });
+    return segments;
+  }, [value]);
+
+  const width = bars.reduce((sum, b) => sum + b.width, 0);
+  let cur = 0;
 
   return (
-    <svg viewBox={`0 0 ${width} 70`} className="w-full h-16 rounded-lg bg-white p-1">
-      {bars.map((entry, index) => {
-        const x = cursor;
-        cursor += entry.width;
-        return entry.isBar ? <rect key={`${x}-${entry.width}-${index}`} x={x} y={0} width={entry.width} height={70} fill="#000" /> : null;
-      })}
-    </svg>
+    <div className="bg-white p-3 rounded-xl border border-white/10 shadow-inner">
+      <svg viewBox={`0 0 ${width} 60`} className="w-full h-12">
+        {bars.map((s, i) => {
+          const x = cur; cur += s.width;
+          return s.isBar ? <rect key={i} x={x} y={0} width={s.width} height={60} fill="#000" /> : null;
+        })}
+      </svg>
+    </div>
   );
 }
 
 const PackingManagement = () => {
   const [settings, setSettings] = useState({
-    boxPrefix: "BOX",
-    boxSeparator: "-",
-    serialPadding: 4,
-    nextSerial: 1,
-    defaultCapacity: 65,
-    autoCreateNextBox: true,
-    labelPrefix: "PKG",
-    preview: "BOX-0001",
+    boxPrefix: "BOX", boxSeparator: "-", serialPadding: 4, nextSerial: 1,
+    defaultCapacity: 65, autoCreateNextBox: true, labelPrefix: "PKG", preview: "BOX-0001"
   });
   const [boxes, setBoxes] = useState([]);
   const [stats, setStats] = useState({ total: 0, open: 0, closed: 0 });
@@ -131,345 +87,233 @@ const PackingManagement = () => {
   const [saving, setSaving] = useState(false);
   const [generating, setGenerating] = useState(false);
 
-  const previewCode = useMemo(() => settings.preview || "BOX-0001", [settings.preview]);
-
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [settingsPayload, boxesPayload, statsPayload] = await Promise.all([
+      const [s, b, all] = await Promise.all([
         packingApi.managementSettings(),
-        packingApi.managementBoxes({ limit: 300, status: statusFilter === "ALL" ? undefined : statusFilter }),
-        packingApi.managementBoxes({ limit: 1000 }),
+        packingApi.managementBoxes({ limit: 100, status: statusFilter === "ALL" ? undefined : statusFilter }),
+        packingApi.managementBoxes({ limit: 1000 })
       ]);
-
-      setSettings((prev) => ({
-        ...prev,
-        ...settingsPayload,
-      }));
-
-      const rows = boxesPayload?.rows || [];
-      const allRows = statsPayload?.rows || [];
-      setBoxes(rows);
+      setSettings(prev => ({ ...prev, ...s }));
+      setBoxes(b?.rows || []);
+      const allRows = all?.rows || [];
       setStats({
-        total: Number(statsPayload?.total || allRows.length),
-        open: allRows.filter((entry) => String(entry.status || "").toUpperCase() === "OPEN").length,
-        closed: allRows.filter((entry) => String(entry.status || "").toUpperCase() === "CLOSED").length,
+        total: all?.total || allRows.length,
+        open: allRows.filter(r => r.status?.toUpperCase() === "OPEN").length,
+        closed: allRows.filter(r => r.status?.toUpperCase() === "CLOSED").length
       });
-    } catch (error) {
-      const apiMessage = error.response?.data?.error || "";
-      const normalized = String(apiMessage).toLowerCase();
-      const statusCode = Number(error?.response?.status || 0);
-      const setupHint =
-        normalized.includes("doesn't exist") ||
-        normalized.includes("unknown column") ||
-        normalized.includes("no such table")
-          ? "Packing management database schema not ready. Restart backend once to apply new tables/columns."
-          : null;
-      const routeHint =
-        statusCode === 404
-          ? "Packing management API routes are not available on running backend. Restart backend server from this project."
-          : null;
-      setPopup({
-        type: "ERROR",
-        title: "Load Failed",
-        message: routeHint || setupHint || apiMessage || "Unable to load packing management",
-      });
-    } finally {
-      setLoading(false);
-    }
+    } catch (err) {
+      console.error(err);
+      setPopup({ type: "ERROR", title: "Sync Failed", message: err.response?.data?.error || "Network error in management hub." });
+    } finally { setLoading(false); }
   }, [statusFilter]);
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
-
-  const updateField = (key, value) => {
-    setSettings((prev) => ({ ...prev, [key]: value }));
-  };
+  useEffect(() => { loadData(); }, [loadData]);
 
   const saveSettings = async () => {
     setSaving(true);
     try {
-      const payload = {
-        boxPrefix: String(settings.boxPrefix || "").trim().toUpperCase(),
-        boxSeparator: String(settings.boxSeparator ?? "-"),
+      const p = {
+        boxPrefix: settings.boxPrefix.trim().toUpperCase(),
+        boxSeparator: settings.boxSeparator || "-",
         serialPadding: toPositiveInt(settings.serialPadding, 4),
         nextSerial: toPositiveInt(settings.nextSerial, 1),
         defaultCapacity: Math.min(500, Math.max(1, toPositiveInt(settings.defaultCapacity, 65))),
-        autoCreateNextBox: settings.autoCreateNextBox === true,
-        labelPrefix: String(settings.labelPrefix || "").trim().toUpperCase(),
+        autoCreateNextBox: !!settings.autoCreateNextBox,
+        labelPrefix: settings.labelPrefix.trim().toUpperCase()
       };
-      const response = await packingApi.updateManagementSettings(payload);
-      setSettings((prev) => ({
-        ...prev,
-        ...(response.settings || {}),
-      }));
-      setPopup({
-        type: "SUCCESS",
-        title: "Settings Saved",
-        message: "Packing box format and auto-increment settings updated.",
-      });
-      await loadData();
-    } catch (error) {
-      const statusCode = Number(error?.response?.status || 0);
-      setPopup({
-        type: "ERROR",
-        title: "Save Failed",
-        message:
-          statusCode === 404
-            ? "Packing settings API not found (404). Restart backend server from this project and try again."
-            : error.response?.data?.error || "Unable to save settings",
-      });
-    } finally {
-      setSaving(false);
-    }
+      await packingApi.updateManagementSettings(p);
+      setPopup({ type: "SUCCESS", title: "Configuration Locked", message: "Global packing parameters updated successfully." });
+      loadData();
+    } catch (err) {
+      setPopup({ type: "ERROR", title: "Write Failed", message: err.response?.data?.error || "Unable to persist settings." });
+    } finally { setSaving(false); }
   };
 
   const generateNextBox = async () => {
     setGenerating(true);
     try {
-      const response = await packingApi.generateNext();
-      setPopup({
-        type: "SUCCESS",
-        title: "Box Generated",
-        message: `New box ${response?.box?.boxNumber || "-"} created successfully.`,
-      });
-      await loadData();
-    } catch (error) {
-      const statusCode = Number(error?.response?.status || 0);
-      setPopup({
-        type: "ERROR",
-        title: "Generate Failed",
-        message:
-          statusCode === 404
-            ? "Box generation API not found (404). Restart backend server from this project and try again."
-            : error.response?.data?.error || "Unable to generate next box",
-      });
-    } finally {
-      setGenerating(false);
-    }
+      const res = await packingApi.generateNext();
+      setPopup({ type: "SUCCESS", title: "Sequence Advanced", message: `Box unit ${res?.box?.boxNumber} initialized.` });
+      loadData();
+    } catch (err) {
+      setPopup({ type: "ERROR", title: "Generation Gap", message: err.response?.data?.error || "Sequence violation occurred." });
+    } finally { setGenerating(false); }
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 rise-in">
       <GlobalPopup popup={popup} onClose={() => setPopup(null)} simple />
 
-      <div className="industrial-card p-5">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">Packing Setup</p>
-            <h1 className="mt-1 text-2xl font-bold text-text-main">Packing Management</h1>
-            <p className="text-sm text-text-muted mt-1">
-              Define auto box-number format, serial increment, and monitor all generated packing boxes.
-            </p>
+      {/* Header Section */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+             <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+             <span className="text-[10px] font-black text-primary uppercase tracking-widest">Master Orchestration</span>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={loadData}
-              className="inline-flex items-center gap-2 rounded-xl border border-border bg-bg-card px-3 py-2 text-sm text-text-main hover:border-primary"
-              disabled={loading}
-            >
-              <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
-              Refresh
-            </button>
-            <button
-              onClick={saveSettings}
-              className="inline-flex items-center gap-2 rounded-xl bg-primary px-3 py-2 text-sm font-semibold text-bg-dark hover:brightness-110 disabled:opacity-60"
-              disabled={saving}
-            >
-              <Save size={14} />
-              Save Settings
-            </button>
-          </div>
+          <h1 className="text-3xl font-black text-text-main tracking-tight flex items-center gap-3">
+             <Settings2 className="text-primary" /> System Logic Hub
+          </h1>
+          <p className="text-text-muted text-sm font-medium mt-1">Configure automated distribution & container mapping protocols</p>
         </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 industrial-card p-5">
-          <h2 className="font-bold text-text-main mb-4 flex items-center gap-2">
-            <Settings2 size={16} className="text-primary" />
-            Auto Box Number Format
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="text-xs uppercase tracking-wide text-text-muted">Box Prefix</label>
-              <input
-                value={settings.boxPrefix || ""}
-                onChange={(event) => updateField("boxPrefix", event.target.value.toUpperCase())}
-                className="mt-1 w-full rounded-lg border border-border bg-bg-dark px-3 py-2.5 text-text-main focus:border-primary focus:outline-none font-mono"
-                placeholder="BOX"
-              />
-            </div>
-            <div>
-              <label className="text-xs uppercase tracking-wide text-text-muted">Separator</label>
-              <input
-                value={settings.boxSeparator || "-"}
-                onChange={(event) => updateField("boxSeparator", event.target.value)}
-                className="mt-1 w-full rounded-lg border border-border bg-bg-dark px-3 py-2.5 text-text-main focus:border-primary focus:outline-none font-mono"
-                placeholder="-"
-              />
-            </div>
-            <div>
-              <label className="text-xs uppercase tracking-wide text-text-muted">Serial Padding</label>
-              <input
-                type="number"
-                min={1}
-                max={10}
-                value={settings.serialPadding || 4}
-                onChange={(event) => updateField("serialPadding", event.target.value)}
-                className="mt-1 w-full rounded-lg border border-border bg-bg-dark px-3 py-2.5 text-text-main focus:border-primary focus:outline-none font-mono"
-              />
-            </div>
-            <div>
-              <label className="text-xs uppercase tracking-wide text-text-muted">Next Serial</label>
-              <input
-                type="number"
-                min={1}
-                value={settings.nextSerial || 1}
-                onChange={(event) => updateField("nextSerial", event.target.value)}
-                className="mt-1 w-full rounded-lg border border-border bg-bg-dark px-3 py-2.5 text-text-main focus:border-primary focus:outline-none font-mono"
-              />
-            </div>
-            <div>
-              <label className="text-xs uppercase tracking-wide text-text-muted">Default Box Capacity</label>
-              <input
-                type="number"
-                min={1}
-                max={500}
-                value={settings.defaultCapacity || 65}
-                onChange={(event) => updateField("defaultCapacity", event.target.value)}
-                className="mt-1 w-full rounded-lg border border-border bg-bg-dark px-3 py-2.5 text-text-main focus:border-primary focus:outline-none font-mono"
-              />
-            </div>
-            <div>
-              <label className="text-xs uppercase tracking-wide text-text-muted">Label Prefix</label>
-              <input
-                value={settings.labelPrefix || "PKG"}
-                onChange={(event) => updateField("labelPrefix", event.target.value.toUpperCase())}
-                className="mt-1 w-full rounded-lg border border-border bg-bg-dark px-3 py-2.5 text-text-main focus:border-primary focus:outline-none font-mono"
-                placeholder="PKG"
-              />
-            </div>
-          </div>
-
-          <div className="mt-4 flex items-center gap-2">
-            <input
-              id="auto-next-box"
-              type="checkbox"
-              checked={settings.autoCreateNextBox === true}
-              onChange={(event) => updateField("autoCreateNextBox", event.target.checked)}
-              className="h-4 w-4 accent-[var(--app-primary)]"
-            />
-            <label htmlFor="auto-next-box" className="text-sm text-text-main">
-              Auto-create next box immediately after current box is full
-            </label>
-          </div>
-        </div>
-
-        <div className="industrial-card p-5">
-          <h2 className="font-bold text-text-main mb-4 flex items-center gap-2">
-            <QrCode size={16} className="text-primary" />
-            Live Preview
-          </h2>
-          <div className="rounded-lg border border-border bg-bg-dark/70 p-3">
-            <p className="text-xs uppercase text-text-muted">Next Box Number</p>
-            <p className="text-lg font-mono text-primary mt-1">{previewCode}</p>
-            <div className="mt-3">
-              <BarcodePreview value={previewCode} />
-            </div>
-            <p className="mt-2 text-xs text-text-muted">
-              This code is auto-generated serial-wise and increments after each generated box.
-            </p>
-          </div>
+        <div className="flex items-center gap-3">
           <button
-            onClick={generateNextBox}
-            disabled={generating}
-            className="mt-4 w-full inline-flex items-center justify-center gap-2 rounded-lg bg-accent px-3 py-2.5 text-sm font-semibold text-bg-dark hover:brightness-110 disabled:opacity-60"
+            onClick={loadData}
+            className="h-11 px-4 rounded-xl border border-border bg-bg-card text-text-muted hover:text-primary transition-all flex items-center gap-2"
           >
-            <Boxes size={14} />
-            {generating ? "Generating..." : "Generate Next Box Now"}
+            <RefreshCw size={18} className={loading ? "animate-spin" : ""} />
+            <span className="text-sm font-bold uppercase tracking-wider">Sync</span>
+          </button>
+          <button
+            onClick={saveSettings}
+            disabled={saving}
+            className="h-11 px-6 rounded-xl bg-primary text-on-strong font-black uppercase tracking-widest flex items-center gap-2 hover:brightness-110 shadow-lg shadow-primary/20 transition-all disabled:opacity-50"
+          >
+            <Save size={18} /> Push Configuration
           </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="industrial-card p-4">
-          <p className="text-xs uppercase text-text-muted">Total Boxes</p>
-          <p className="mt-2 text-2xl font-bold text-text-main">{stats.total}</p>
-        </div>
-        <div className="industrial-card p-4">
-          <p className="text-xs uppercase text-amber-300">Open / Pending</p>
-          <p className="mt-2 text-2xl font-bold text-amber-200">{stats.open}</p>
-        </div>
-        <div className="industrial-card p-4">
-          <p className="text-xs uppercase text-emerald-300">Completed / Closed</p>
-          <p className="mt-2 text-2xl font-bold text-emerald-200">{stats.closed}</p>
-        </div>
+      {/* Stats Quick Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {[
+          { label: "Active Pipeline", val: stats.total, icon: Database, color: "text-primary", bg: "bg-primary/5" },
+          { label: "Pending Fulfillment", val: stats.open, icon: Activity, color: "text-amber-400", bg: "bg-amber-400/5" },
+          { label: "Validated Units", val: stats.closed, icon: PlusCircle, color: "text-emerald-400", bg: "bg-emerald-400/5" }
+        ].map((s, i) => (
+          <div key={i} className={`industrial-card p-6 flex items-center justify-between ${s.bg}`}>
+            <div>
+              <p className="text-[10px] font-black text-text-muted uppercase tracking-widest mb-1">{s.label}</p>
+              <p className={`text-3xl font-black ${s.color} font-mono`}>{s.val}</p>
+            </div>
+            <s.icon className={`${s.color} opacity-40`} size={40} />
+          </div>
+        ))}
       </div>
 
-      <div className="industrial-card p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-          <h2 className="font-bold text-text-main">Generated Box Registry</h2>
-          <div className="flex items-center gap-2">
-            <label className="text-xs uppercase tracking-wide text-text-muted">Filter</label>
-            <select
-              value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value)}
-              className="rounded-lg border border-border bg-bg-dark px-3 py-2 text-sm text-text-main focus:border-primary focus:outline-none"
-            >
-              <option value="ALL">All</option>
-              <option value="OPEN">Open</option>
-              <option value="CLOSED">Closed</option>
-            </select>
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+        {/* Settings Form */}
+        <div className="xl:col-span-8 industrial-card p-0 overflow-hidden">
+          <div className="px-6 py-5 border-b border-border bg-bg-dark/40 flex items-center gap-3">
+             <Hash size={18} className="text-primary" />
+             <h2 className="text-xs font-black text-text-main uppercase tracking-widest">Logic & Prefix Standards</h2>
+          </div>
+          <div className="p-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {[
+              { label: "Container Prefix", key: "boxPrefix", type: "text" },
+              { label: "Identity Separator", key: "boxSeparator", type: "text" },
+              { label: "Serial Padding", key: "serialPadding", type: "number" },
+              { label: "Sequence Counter", key: "nextSerial", type: "number" },
+              { label: "Unit Capacity", key: "defaultCapacity", type: "number" },
+              { label: "Label Prefix", key: "labelPrefix", type: "text" }
+            ].map(f => (
+              <div key={f.key} className="space-y-1.5">
+                <label className="text-[10px] font-black text-text-muted uppercase tracking-widest ml-1">{f.label}</label>
+                <input
+                  type={f.type}
+                  value={settings[f.key]}
+                  onChange={e => setSettings(p => ({ ...p, [f.key]: f.type === 'number' ? e.target.value : e.target.value.toUpperCase() }))}
+                  className="w-full h-11 bg-bg-dark border border-border rounded-xl px-4 font-mono text-sm text-text-main focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all outline-none"
+                />
+              </div>
+            ))}
+          </div>
+          <div className="px-8 py-5 bg-bg-dark/40 border-t border-border flex items-center gap-3">
+             <div className="flex items-center gap-3 cursor-pointer group" onClick={() => setSettings(p => ({ ...p, autoCreateNextBox: !p.autoCreateNextBox }))}>
+                <div className={`w-10 h-6 rounded-full p-1 transition-colors ${settings.autoCreateNextBox ? 'bg-primary' : 'bg-border'}`}>
+                   <div className={`w-4 h-4 rounded-full bg-bg-card transition-transform ${settings.autoCreateNextBox ? 'translate-x-4' : ''}`} />
+                </div>
+                <span className="text-xs font-bold text-text-main group-hover:text-primary transition-colors">Continuous sequence auto-generation protocol</span>
+             </div>
           </div>
         </div>
 
-        <div className="overflow-auto">
-          <table className="w-full min-w-[1100px] text-sm">
-            <thead className="bg-bg-dark/70 text-text-muted text-xs uppercase tracking-wide">
+        {/* Live Preview Card */}
+        <div className="xl:col-span-4 industrial-card p-6 space-y-6 border-t-4 border-t-primary">
+          <div>
+            <h2 className="text-xs font-black text-text-main uppercase tracking-widest mb-4 flex items-center gap-2">
+               <QrCode size={16} className="text-primary" /> Generation Preview
+            </h2>
+            <div className="bg-bg-dark border border-border rounded-2xl p-6 mb-6 shadow-inner text-center">
+               <p className="text-[10px] font-black text-text-muted uppercase tracking-widest mb-2">Next Logical Identity</p>
+               <p className="text-2xl font-black text-primary font-mono tracking-tighter mb-4">{settings.preview || "UNCONFIGURED"}</p>
+               <BarcodePreview value={settings.preview} />
+            </div>
+            <button
+              onClick={generateNextBox}
+              disabled={generating}
+              className="w-full h-12 rounded-xl bg-accent text-on-strong font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:brightness-110 shadow-lg shadow-accent/20 transition-all disabled:opacity-50"
+            >
+              <PlusCircle size={18} /> {generating ? "Mapping..." : "Manual Pulse Logic"}
+            </button>
+            <p className="mt-4 text-[10px] text-text-muted font-bold italic text-center">Force sequence advance will burn current ID.</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Box Registry Table */}
+      <div className="industrial-card p-0 overflow-hidden">
+        <div className="px-6 py-5 border-b border-border bg-bg-dark/40 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Filter size={16} className="text-primary" />
+            <h2 className="text-xs font-black text-text-main uppercase tracking-widest">Identity Registry</h2>
+          </div>
+          <select
+            value={statusFilter}
+            onChange={e => setStatusFilter(e.target.value)}
+            className="bg-bg-dark border border-border rounded-lg px-3 py-1.5 text-[10px] font-black text-text-main uppercase tracking-widest focus:outline-none focus:border-primary"
+          >
+            <option value="ALL">All Nodes</option>
+            <option value="OPEN">Pending</option>
+            <option value="CLOSED">Sealed</option>
+          </select>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead className="bg-bg-dark/60 text-[9px] font-black text-text-muted uppercase tracking-widest border-b border-border">
               <tr>
-                <th className="px-3 py-2 text-left">Serial</th>
-                <th className="px-3 py-2 text-left">Box Number</th>
-                <th className="px-3 py-2 text-left">Capacity</th>
-                <th className="px-3 py-2 text-left">Packed</th>
-                <th className="px-3 py-2 text-left">Status</th>
-                <th className="px-3 py-2 text-left">Source</th>
-                <th className="px-3 py-2 text-left">Label</th>
-                <th className="px-3 py-2 text-left">Created At</th>
-                <th className="px-3 py-2 text-left">Completed At</th>
+                <th className="px-6 py-4">Serial</th>
+                <th className="px-6 py-4">Box Identity</th>
+                <th className="px-6 py-4">Capacity</th>
+                <th className="px-6 py-4">Packed</th>
+                <th className="px-6 py-4">Node Status</th>
+                <th className="px-6 py-4">Mapping Target</th>
+                <th className="px-6 py-4">Created At</th>
+                <th className="px-6 py-4">Action</th>
               </tr>
             </thead>
-            <tbody>
-              {boxes.map((row) => (
-                <tr key={row.id} className="border-t border-border/60">
-                  <td className="px-3 py-2 font-mono text-text-main">{row.serialNo || "-"}</td>
-                  <td className="px-3 py-2 font-mono text-primary">{row.boxNumber}</td>
-                  <td className="px-3 py-2 text-text-main">{row.capacity}</td>
-                  <td className="px-3 py-2 text-text-main">{row.packedCount}</td>
-                  <td className="px-3 py-2">
-                    <span
-                      className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${
-                        String(row.status || "").toUpperCase() === "CLOSED"
-                          ? "bg-emerald-500/20 text-emerald-300"
-                          : "bg-amber-500/20 text-amber-300"
-                      }`}
-                    >
-                      {String(row.status || "").toUpperCase() === "OPEN" ? "PENDING" : row.status}
+            <tbody className="divide-y divide-border/20 text-xs">
+              {boxes.length === 0 ? (
+                <tr><td colSpan={8} className="px-6 py-12 text-center text-text-muted italic opacity-30">Registry is empty. Initialize logic above.</td></tr>
+              ) : boxes.map(r => (
+                <tr key={r.id} className="hover:bg-primary/5 transition-colors group">
+                  <td className="px-6 py-4 font-mono font-black text-text-muted">{r.serialNo}</td>
+                  <td className="px-6 py-4">
+                    <span className="font-black text-primary font-mono text-sm">{r.boxNumber}</span>
+                  </td>
+                  <td className="px-6 py-4 font-bold text-text-main">{r.capacity}</td>
+                  <td className="px-6 py-4">
+                     <div className="flex items-center gap-2">
+                        <div className="w-16 h-1 bg-border rounded-full overflow-hidden">
+                           <div className="h-full bg-primary" style={{ width: `${(r.packedCount/r.capacity)*100}%` }} />
+                        </div>
+                        <span className="font-mono font-bold">{r.packedCount}</span>
+                     </div>
+                  </td>
+                  <td className="px-6 py-4">
+                    <span className={`px-2 py-1 rounded text-[9px] font-black uppercase border ${r.status?.toUpperCase() === 'CLOSED' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-amber-400/10 border-amber-400/20 text-amber-400'}`}>
+                      {r.status || "OPEN"}
                     </span>
                   </td>
-                  <td className="px-3 py-2 text-text-main">{row.generationSource || "-"}</td>
-                  <td className="px-3 py-2 font-mono text-text-main">{row.labelCode || "-"}</td>
-                  <td className="px-3 py-2 text-text-muted">{formatDateTime(row.createdAt)}</td>
-                  <td className="px-3 py-2 text-text-muted">{formatDateTime(row.closedAt)}</td>
-                </tr>
-              ))}
-              {!loading && boxes.length === 0 && (
-                <tr>
-                  <td className="px-3 py-6 text-center text-text-muted" colSpan={9}>
-                    No boxes found for selected filter.
+                  <td className="px-6 py-4 font-mono text-text-muted italic">{r.labelCode || "—"}</td>
+                  <td className="px-6 py-4 text-text-muted font-mono whitespace-nowrap">{formatDateTime(r.createdAt)}</td>
+                  <td className="px-6 py-4">
+                     <button className="p-2 text-text-muted hover:text-primary transition-colors"><ArrowRightCircle size={18} /></button>
                   </td>
                 </tr>
-              )}
+              ))}
             </tbody>
           </table>
         </div>

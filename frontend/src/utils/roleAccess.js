@@ -10,7 +10,7 @@ export const ACCESS_LEVEL_OPTIONS = [
 export const ROLE_KEYS = ["admin", "engineer", "supervisor", "operator"];
 
 export const MODULE_ACCESS_META = [
-  { key: "dashboard", label: "Dashboard" },
+  { key: "dashboard", label: "Master Console" },
   { key: "production", label: "Production" },
   { key: "io_monitor", label: "I/O Monitor" },
   { key: "part_journey", label: "Part Journey" },
@@ -30,7 +30,7 @@ const DEFAULT_FALLBACK = { admin: "VIEW_EDIT", engineer: "VIEW", supervisor: "VI
 const VALID_ACCESS = new Set(ACCESS_LEVEL_OPTIONS.map((entry) => entry.value));
 
 export const DEFAULT_ROLE_ACCESS_SETTINGS = {
-  dashboard: { admin: "VIEW_EDIT", engineer: "VIEW", supervisor: "VIEW", operator: "HIDDEN" },
+  dashboard: { admin: "VIEW_EDIT", engineer: "VIEW", supervisor: "VIEW", operator: "VIEW" },
   production: { admin: "VIEW_EDIT", engineer: "VIEW", supervisor: "VIEW", operator: "HIDDEN" },
   io_monitor: { admin: "VIEW_CONTROL", engineer: "VIEW_CONTROL", supervisor: "VIEW", operator: "VIEW" },
   part_journey: { admin: "VIEW", engineer: "VIEW", supervisor: "VIEW", operator: "VIEW" },
@@ -104,7 +104,7 @@ export function getRoleAccessSettings() {
       return normalizeRoleAccessSettings(DEFAULT_ROLE_ACCESS_SETTINGS);
     }
     return normalizeRoleAccessSettings(JSON.parse(raw));
-  } catch (_error) {
+  } catch {
     return normalizeRoleAccessSettings(DEFAULT_ROLE_ACCESS_SETTINGS);
   }
 }

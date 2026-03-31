@@ -1,471 +1,204 @@
+// PlcConfiguration.jsx — Clean PLC Register Management
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Cpu, Download, RefreshCw, Save, Trash2 } from "lucide-react";
+import { Cpu, Plus, Save, Trash2, RefreshCw, Download, AlertTriangle, Info } from "lucide-react";
+import toast from "react-hot-toast";
+import ConfirmModal from "../components/ConfirmModal";
 import { plcConfigApi } from "../api/services";
 
-const RANGE_REGEX = /^\s*(\d+)\s*[-:]\s*(\d+)\s*$/;
-
-function createForm() {
-  return {
-    plcName: "",
-    plcIp: "",
-    plcPort: "502",
-    plcProtocol: "MODBUS_TCP",
-    rangeInput: "",
-    status: "ACTIVE",
-  };
-}
-
-function parseRangeInput(inputValue) {
-  const normalized = String(inputValue || "").trim();
-  const match = normalized.match(RANGE_REGEX);
-  if (!match) {
-    return null;
-  }
-
-  const start = Number(match[1]);
-  const size = Number(match[2]);
-  if (!Number.isFinite(start) || !Number.isFinite(size) || size < 4) {
-    return null;
-  }
-
-  return {
-    start: Math.trunc(start),
-    size: Math.trunc(size),
-    end: Math.trunc(start + size - 1),
-  };
-}
-
-function toCsvCell(value) {
-  const text = String(value ?? "");
-  if (!text.includes(",") && !text.includes('"') && !text.includes("\n")) {
-    return text;
-  }
-  return `"${text.replace(/"/g, '""')}"`;
-}
+const PROTO_OPTIONS = [
+  { value: "MODBUS_TCP", label: "Modbus TCP" },
+  { value: "TCP_TEXT", label: "Generic TCP Text" },
+  { value: "SLMP", label: "SLMP (Mitsubishi)" },
+];
 
 const PlcConfiguration = () => {
   const [ranges, setRanges] = useState([]);
-  const [formData, setFormData] = useState(() => createForm());
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [formData, setFormData] = useState({
+    plcName: "", plcIp: "", plcPort: "502", plcProtocol: "MODBUS_TCP", rangeInput: "",
+  });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [status, setStatus] = useState({ type: "", message: "" });
-  const [plcTemplateKey, setPlcTemplateKey] = useState("");
+  const [deleteId, setDeleteId] = useState(null);
 
-  const parsedRange = useMemo(() => parseRangeInput(formData.rangeInput), [formData.rangeInput]);
-
-  const plcTemplates = useMemo(() => {
-    const map = new Map();
-    for (const row of ranges) {
-      const ip = String(row.plcIp || "").trim();
-      const port = Number(row.plcPort);
-      const protocol = String(row.plcProtocol || "MODBUS_TCP").toUpperCase();
-      if (!ip || !Number.isFinite(port)) {
-        continue;
-      }
-      const key = `${ip}|${port}|${protocol}`;
-      if (map.has(key)) {
-        continue;
-      }
-      const name = String(row.plcName || "").trim();
-      const label = `${name ? `${name} | ` : ""}${ip}:${port} | ${protocol}`;
-      map.set(key, {
-        key,
-        plcName: name,
-        plcIp: ip,
-        plcPort: String(port),
-        plcProtocol: protocol,
-        label,
-      });
-    }
-    return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
-  }, [ranges]);
-
-  const plcTemplateByKey = useMemo(
-    () =>
-      plcTemplates.reduce((acc, entry) => {
-        acc[entry.key] = entry;
-        return acc;
-      }, {}),
-    [plcTemplates]
-  );
-
-  const handshakePreview = useMemo(() => {
-    if (!parsedRange) {
-      return null;
-    }
-    return [
-      { key: "trigger", label: "Trigger Register", reg: parsedRange.start },
-      { key: "interlock", label: "Interlock Register", reg: parsedRange.start + 1 },
-      { key: "complete", label: "Complete Register", reg: parsedRange.start + 2 },
-      { key: "reset", label: "Reset Register", reg: parsedRange.start + 3 },
-    ];
-  }, [parsedRange]);
-
-  const loadData = useCallback(async (showLoader = true) => {
-    if (showLoader) {
-      setLoading(true);
-    } else {
-      setRefreshing(true);
-    }
-
+  const loadData = useCallback(async () => {
+    setLoading(true);
     try {
       const data = await plcConfigApi.listRanges();
       setRanges(data || []);
-      setStatus({ type: "", message: "" });
-    } catch (error) {
-      setStatus({
-        type: "error",
-        message: error.response?.data?.error || "Failed to load PLC ranges",
-      });
+    } catch {
+      toast.error("Failed to load PLC ranges");
     } finally {
       setLoading(false);
-      setRefreshing(false);
     }
   }, []);
 
-  useEffect(() => {
-    loadData(true);
-  }, [loadData]);
+  useEffect(() => { loadData(); }, [loadData]);
 
-  const updateField = (key, value) => {
-    if (["plcName", "plcIp", "plcPort", "plcProtocol"].includes(key)) {
-      setPlcTemplateKey("");
-    }
-    setFormData((prev) => ({
-      ...prev,
-      [key]: value,
-    }));
-  };
+  const updateField = (key, value) => setFormData(prev => ({ ...prev, [key]: value }));
 
-  const applyPlcTemplate = (templateKey) => {
-    setPlcTemplateKey(templateKey);
-    const template = plcTemplateByKey[templateKey];
-    if (!template) {
-      return;
-    }
-    setFormData((prev) => ({
-      ...prev,
-      plcName: template.plcName || prev.plcName,
-      plcIp: template.plcIp,
-      plcPort: template.plcPort,
-      plcProtocol: template.plcProtocol,
-    }));
-  };
-
-  const handleSubmit = async (event) => {
-    event.preventDefault();
-    if (!parsedRange) {
-      setStatus({
-        type: "error",
-        message: "Range format should be start-size and minimum size is 4 (example: 100-10).",
-      });
-      return;
-    }
-
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
     try {
-      setSaving(true);
-      const rangeSeed = String(formData.plcName || "").trim() || String(formData.plcIp || "").trim() || "RANGE";
-      const rangeName = `${rangeSeed}_${parsedRange.start}-${parsedRange.end}`;
-
-      await plcConfigApi.createRange({
-        rangeName,
-        plcName: String(formData.plcName || "").trim(),
-        plcIp: String(formData.plcIp || "").trim(),
-        plcPort: Number(formData.plcPort),
-        plcProtocol: formData.plcProtocol,
-        rangeInput: String(formData.rangeInput || "").trim(),
-        status: formData.status,
-        defaultRegisters: {
-          startRegister: parsedRange.start,
-          statusRegister: parsedRange.start + 1,
-          stationRegister: parsedRange.start + 2,
-          resetRegister: parsedRange.start + 3,
-        },
-      });
-
-      setStatus({ type: "success", message: "PLC range saved." });
-      setFormData((prev) => ({
-        ...prev,
-        rangeInput: "",
-      }));
-      await loadData(false);
-    } catch (error) {
-      const responseData = error?.response?.data;
-      const text = typeof responseData === "string" ? responseData : JSON.stringify(responseData || {});
-      const cannotPost =
-        Number(error?.response?.status || 0) === 404 && text.toUpperCase().includes("CANNOT POST");
-
-      setStatus({
-        type: "error",
-        message: cannotPost
-          ? "API route not found. Restart backend and confirm latest server code is running."
-          : error.response?.data?.error || "Failed to save PLC range",
-      });
+      // Basic validation (you can enhance)
+      if (!formData.plcIp || !formData.rangeInput) {
+        toast.error("IP and Range are required");
+        return;
+      }
+      await plcConfigApi.createRange({ ...formData, rangeName: `Block_${formData.rangeInput}` });
+      toast.success("Register block added successfully");
+      setShowAddModal(false);
+      setFormData({ plcName: "", plcIp: "", plcPort: "502", plcProtocol: "MODBUS_TCP", rangeInput: "" });
+      await loadData();
+    } catch (err) {
+      toast.error(err.response?.data?.error || "Failed to save");
     } finally {
       setSaving(false);
     }
   };
 
-  const deleteRange = async (row) => {
-    if (!window.confirm(`Delete range ${row.rangeName}?`)) {
-      return;
-    }
-
+  const handleDelete = async () => {
+    if (!deleteId) return;
     try {
-      await plcConfigApi.deleteRange(row.id);
-      await loadData(false);
-      setStatus({ type: "success", message: "Range deleted." });
-    } catch (error) {
-      setStatus({
-        type: "error",
-        message: error.response?.data?.error || "Failed to delete range",
-      });
+      await plcConfigApi.deleteRange(deleteId);
+      toast.success("Block deleted");
+      await loadData();
+    } catch {
+      toast.error("Delete failed");
+    } finally {
+      setDeleteId(null);
     }
-  };
-
-  const downloadForPlc = () => {
-    const rows = [["PLC IP", "PLC Port", "Protocol", "Range", "Signal", "Register"]];
-
-    for (const row of ranges) {
-      const start = Number(row.rangeStart);
-      if (!Number.isFinite(start)) {
-        continue;
-      }
-
-      const signals = [
-        ["Trigger Register", start],
-        ["Interlock Register", start + 1],
-        ["Complete Register", start + 2],
-        ["Reset Register", start + 3],
-      ];
-
-      for (const [signalLabel, registerNo] of signals) {
-        rows.push([
-          row.plcIp || "",
-          row.plcPort ?? "",
-          row.plcProtocol || "",
-          `${row.rangeStart}-${row.rangeEnd}`,
-          signalLabel,
-          registerNo,
-        ]);
-      }
-    }
-
-    const csv = rows.map((row) => row.map((entry) => toCsvCell(entry)).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "plc_handshake_mapping.csv";
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.URL.revokeObjectURL(url);
   };
 
   return (
-    <div className="p-6 space-y-6 text-text-main bg-bg-dark min-h-screen">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Cpu className="text-primary" /> PLC Handshake Master
-          </h1>
-          <p className="text-sm text-text-muted">Define PLC register ranges once and bind machines dynamically.</p>
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex justify-between items-center">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-primary/10 rounded-2xl flex items-center justify-center text-primary">
+            <Cpu size={24} />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-text-main">PLC Configuration</h1>
+            <p className="text-text-muted text-sm">Manage register blocks and PLC endpoints</p>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => loadData(false)}
-            className="inline-flex items-center gap-2 rounded-xl border border-border bg-bg-card px-3 py-2 text-sm text-text-main hover:border-primary disabled:opacity-60"
-            disabled={loading || refreshing}
-          >
-            <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
-            Refresh
+        <div className="flex gap-3">
+          <button onClick={loadData} className="flex items-center gap-2 px-4 py-2 border border-border rounded-xl hover:bg-bg-dark transition">
+            <RefreshCw size={16} /> Refresh
           </button>
-          <button
-            onClick={downloadForPlc}
-            className="inline-flex items-center gap-2 rounded-xl bg-accent px-3 py-2 text-sm font-semibold text-bg-dark hover:brightness-110"
-          >
-            <Download size={14} />
-            Export for PLC Dev
+          <button onClick={() => setShowAddModal(true)} className="flex items-center gap-2 bg-primary text-on-strong px-5 py-2 rounded-2xl font-semibold hover:brightness-105 transition">
+            <Plus size={18} /> Add Register Block
           </button>
         </div>
-      </header>
+      </div>
 
-      {status.message ? (
-        <div
-          className={`rounded-xl border px-4 py-3 text-sm ${
-            status.type === "success"
-              ? "border-accent/40 bg-accent/10 text-accent"
-              : "border-danger/40 bg-danger/10 text-danger"
-          }`}
-        >
-          {status.message}
+      {/* Table */}
+      <div className="bg-bg-card border border-border rounded-3xl overflow-hidden">
+        <div className="px-6 py-4 border-b border-border flex justify-between bg-bg-dark/50">
+          <h2 className="font-semibold">Registered Blocks</h2>
+          <span className="text-sm text-text-muted">{ranges.length} blocks</span>
         </div>
-      ) : null}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <form onSubmit={handleSubmit} className="lg:col-span-1 space-y-4 bg-bg-card p-6 rounded-2xl border border-border">
-          <h2 className="font-bold text-primary uppercase text-xs tracking-widest">PLC Setup</h2>
-
-          {plcTemplates.length > 0 ? (
-            <div>
-              <label className="text-[10px] font-bold text-text-muted uppercase">Use Existing PLC</label>
-              <select
-                value={plcTemplateKey}
-                onChange={(event) => applyPlcTemplate(event.target.value)}
-                className="w-full bg-bg-dark p-3 rounded-xl border border-border mt-1 font-mono"
-              >
-                <option value="">Select PLC profile</option>
-                {plcTemplates.map((entry) => (
-                  <option key={entry.key} value={entry.key}>
-                    {entry.label}
-                  </option>
-                ))}
-              </select>
-              <p className="text-[10px] text-text-muted mt-1">Applies PLC name, IP, port, and protocol.</p>
-            </div>
-          ) : null}
-
-          <div>
-            <label className="text-[10px] font-bold text-text-muted uppercase">PLC Name</label>
-            <input
-              value={formData.plcName}
-              onChange={(event) => updateField("plcName", event.target.value)}
-              placeholder="Line 1 Main PLC"
-              className="w-full bg-bg-dark p-3 rounded-xl border border-border mt-1"
-            />
-          </div>
-
-          <div>
-            <label className="text-[10px] font-bold text-text-muted uppercase">PLC IP Address</label>
-            <input
-              required
-              value={formData.plcIp}
-              onChange={(event) => updateField("plcIp", event.target.value)}
-              placeholder="192.168.1.50"
-              className="w-full bg-bg-dark p-3 rounded-xl border border-border mt-1 font-mono"
-            />
-          </div>
-
-          <div>
-            <label className="text-[10px] font-bold text-text-muted uppercase">PLC Port</label>
-            <input
-              required
-              type="number"
-              value={formData.plcPort}
-              onChange={(event) => updateField("plcPort", event.target.value)}
-              className="w-full bg-bg-dark p-3 rounded-xl border border-border mt-1 font-mono"
-            />
-          </div>
-
-          <div>
-            <label className="text-[10px] font-bold text-text-muted uppercase">Protocol</label>
-            <select
-              value={formData.plcProtocol}
-              onChange={(event) => updateField("plcProtocol", event.target.value)}
-              className="w-full bg-bg-dark p-3 rounded-xl border border-border mt-1 font-mono"
-            >
-              <option value="MODBUS_TCP">MODBUS_TCP</option>
-              <option value="TCP_TEXT">TCP_TEXT</option>
-              <option value="SLMP">SLMP</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="text-[10px] font-bold text-primary uppercase">Register Range (Start-Size)</label>
-            <input
-              required
-              value={formData.rangeInput}
-              onChange={(event) => updateField("rangeInput", event.target.value)}
-              placeholder="100-10"
-              className="w-full bg-bg-dark p-3 rounded-xl border-2 border-primary/50 mt-1 font-mono text-lg"
-            />
-          </div>
-
-          <div>
-            <label className="text-[10px] font-bold text-text-muted uppercase">Status</label>
-            <select
-              value={formData.status}
-              onChange={(event) => updateField("status", event.target.value)}
-              className="w-full bg-bg-dark p-3 rounded-xl border border-border mt-1"
-            >
-              <option value="ACTIVE">ACTIVE</option>
-              <option value="INACTIVE">INACTIVE</option>
-            </select>
-          </div>
-
-          {handshakePreview ? (
-            <div className="bg-primary/5 p-4 rounded-xl border border-primary/20 space-y-2">
-              <p className="text-[10px] font-black text-primary uppercase tracking-widest">Auto Handshake Mapping</p>
-              {handshakePreview.map((row) => (
-                <div key={row.key} className="flex justify-between text-[11px] border-b border-white/5 pb-1">
-                  <span className="text-text-muted">{row.label}</span>
-                  <span className="font-mono font-bold text-accent">R{row.reg}</span>
-                </div>
-              ))}
-            </div>
-          ) : null}
-
-          <button
-            type="submit"
-            disabled={saving}
-            className="w-full bg-primary text-bg-dark font-bold py-3 rounded-xl mt-4 flex justify-center gap-2 disabled:opacity-60"
-          >
-            <Save size={18} /> {saving ? "Saving..." : "Save PLC Config"}
-          </button>
-        </form>
-
-        <div className="lg:col-span-2 bg-bg-card rounded-2xl border border-border overflow-hidden">
-          <div className="px-4 py-3 border-b border-border text-sm font-semibold text-text-main">Configured PLC Ranges</div>
+        {loading ? (
+          <div className="py-20 text-center text-text-muted">Loading...</div>
+        ) : ranges.length === 0 ? (
+          <div className="py-20 text-center text-text-muted">No register blocks yet. Click "Add Register Block".</div>
+        ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead className="bg-bg-dark/50 text-[10px] uppercase text-text-muted">
-                <tr>
-                  <th className="p-4">PLC IP</th>
-                  <th className="p-4">Port</th>
-                  <th className="p-4">Protocol</th>
-                  <th className="p-4">Range</th>
-                  <th className="p-4">Status</th>
-                  <th className="p-4 text-right">Action</th>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border bg-bg-dark/30 text-text-muted text-xs uppercase tracking-widest">
+                  <th className="px-6 py-4 text-left">PLC Name</th>
+                  <th className="px-6 py-4 text-left">Endpoint</th>
+                  <th className="px-6 py-4 text-left">Protocol</th>
+                  <th className="px-6 py-4 text-left">Range</th>
+                  <th className="px-6 py-4 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border">
-                {!loading && ranges.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="p-6 text-center text-sm text-text-muted">
-                      No PLC ranges configured.
+              <tbody className="divide-y divide-border/50">
+                {ranges.map(r => (
+                  <tr key={r.id} className="hover:bg-bg-dark/10 transition">
+                    <td className="px-6 py-4 font-medium">{r.plcName || "—"}</td>
+                    <td className="px-6 py-4 font-mono text-primary">{r.plcIp}:{r.plcPort}</td>
+                    <td className="px-6 py-4">
+                      <span className="px-3 py-1 text-xs bg-primary/10 text-primary rounded-full">{r.plcProtocol}</span>
+                    </td>
+                    <td className="px-6 py-4 font-mono">R{r.rangeStart}–R{r.rangeEnd}</td>
+                    <td className="px-6 py-4 text-right">
+                      <button onClick={() => setDeleteId(r.id)} className="p-2 text-danger hover:bg-danger/10 rounded-xl transition">
+                        <Trash2 size={18} />
+                      </button>
                     </td>
                   </tr>
-                ) : (
-                  ranges.map((row) => (
-                    <tr key={row.id} className="hover:bg-white/5 transition-colors">
-                      <td className="p-4 font-mono text-sm">{row.plcIp || "-"}</td>
-                      <td className="p-4 font-mono text-sm">{row.plcPort ?? "-"}</td>
-                      <td className="p-4 font-mono text-sm">{row.plcProtocol || "-"}</td>
-                      <td className="p-4">
-                        <span className="bg-bg-dark px-2 py-1 rounded border border-border text-xs font-mono text-accent">
-                          {row.rangeStart} - {row.rangeEnd}
-                        </span>
-                      </td>
-                      <td className="p-4 text-xs font-bold text-accent">{row.status || "ACTIVE"}</td>
-                      <td className="p-4 text-right">
-                        <button
-                          onClick={() => deleteRange(row)}
-                          className="text-danger p-2 hover:bg-danger/10 rounded-lg"
-                          title="Delete range"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))
-                )}
+                ))}
               </tbody>
             </table>
           </div>
-        </div>
+        )}
       </div>
+
+      {/* Add Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-bg-card border border-border rounded-3xl max-w-lg w-full overflow-hidden">
+            <div className="px-6 py-5 border-b border-border flex justify-between items-center">
+              <h3 className="font-semibold text-lg">Add New Register Block</h3>
+              <button onClick={() => setShowAddModal(false)} className="text-text-muted hover:text-text-main">✕</button>
+            </div>
+
+            <form onSubmit={handleSubmit} className="p-6 space-y-5">
+              <div>
+                <label className="block text-xs font-semibold text-text-muted mb-1.5">PLC Friendly Name</label>
+                <input value={formData.plcName} onChange={e => updateField("plcName", e.target.value)}
+                  placeholder="OP-010 Main PLC" className="w-full bg-bg-dark border border-border rounded-2xl px-4 py-3 text-sm focus:border-primary outline-none" />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-text-muted mb-1.5">IP Address</label>
+                  <input value={formData.plcIp} onChange={e => updateField("plcIp", e.target.value)}
+                    placeholder="192.168.1.100" className="w-full bg-bg-dark border border-border rounded-2xl px-4 py-3 text-sm font-mono focus:border-primary outline-none" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-text-muted mb-1.5">Port</label>
+                  <input type="number" value={formData.plcPort} onChange={e => updateField("plcPort", e.target.value)}
+                    className="w-full bg-bg-dark border border-border rounded-2xl px-4 py-3 text-sm font-mono focus:border-primary outline-none" />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-text-muted mb-1.5">Protocol</label>
+                <select value={formData.plcProtocol} onChange={e => updateField("plcProtocol", e.target.value)}
+                  className="w-full bg-bg-dark border border-border rounded-2xl px-4 py-3 text-sm focus:border-primary outline-none">
+                  {PROTO_OPTIONS.map(opt => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-text-muted mb-1.5">Range (start-size)</label>
+                <input value={formData.rangeInput} onChange={e => updateField("rangeInput", e.target.value)}
+                  placeholder="100-12" className="w-full bg-bg-dark border border-border rounded-2xl px-4 py-3 text-sm font-mono focus:border-primary outline-none" />
+                <p className="text-xs text-text-muted mt-1">Example: 100-12 means R100 to R111 (min 6 registers recommended)</p>
+              </div>
+
+              <div className="flex gap-3 pt-4">
+                <button type="button" onClick={() => setShowAddModal(false)} className="flex-1 py-3 text-text-muted font-medium border border-border rounded-2xl hover:bg-bg-dark transition">
+                  Cancel
+                </button>
+                <button type="submit" disabled={saving} className="flex-1 py-3 bg-primary text-on-strong font-semibold rounded-2xl hover:brightness-105 transition disabled:opacity-70">
+                  {saving ? "Saving..." : "Add Block"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      <ConfirmModal isOpen={!!deleteId} onConfirm={handleDelete} onCancel={() => setDeleteId(null)} title="Delete block?" message="This action cannot be undone." />
     </div>
   );
 };

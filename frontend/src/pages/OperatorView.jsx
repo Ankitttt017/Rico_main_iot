@@ -1,1179 +1,1001 @@
+// ============================================================
+//  OperatorView.jsx — IndusTrace Premium Redesign
+//  Color Theme: Navy / Steel / Amber / Linen
+//  Clean professional layout — operator-friendly
+//  No override/jargon — simple readable labels
+// ============================================================
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import {
-  AlertTriangle,
-  CheckCircle2,
-  Clock3,
-  Factory,
-  Gauge,
-  RefreshCw,
-  ShieldCheck,
-  Wrench,
+  AlertTriangle, CheckCircle2, Clock3, Factory,
+  Gauge, RefreshCw, ShieldCheck, Wrench,
+  Wifi, WifiOff, Activity, TrendingUp,
+  BarChart2, Target, Cpu, Radio,
 } from "lucide-react";
 import { machineApi, stationSettingsApi, traceabilityApi } from "../api/services";
 import GlobalPopup from "../components/GlobalPopup";
 import { getMachineStage } from "../utils/machineFields";
 import { getStationFeatureSettings, getStationFeatures, saveStationFeatureSettings } from "../utils/stationSettings";
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:4000";
-const LIVE_REFRESH_COOLDOWN_MS = 350;
-const QR_EVENT_DEDUPE_MS = 3000;
-const POPUP_EVENT_DEDUPE_MS = 1800;
-const OPERATOR_QR_STATE_STORAGE_KEY = "operator-last-qr-signal";
+const SOCKET_URL             = import.meta.env.VITE_SOCKET_URL || "http://localhost:4000";
+const LIVE_REFRESH_COOLDOWN  = 350;
+const QR_EVENT_DEDUPE_MS     = 3000;
+const POPUP_EVENT_DEDUPE_MS  = 1800;
+const QR_STORAGE_KEY         = "operator-last-qr-signal";
 
-function normalizePartId(value) {
-  return String(value || "").trim();
+// ── Design tokens ─────────────────────────────────────────────────────────
+const DS = `
+  @keyframes ovSpin   { to{transform:rotate(360deg)} }
+  @keyframes ovFadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+  @keyframes ovPulse  { 0%,100%{opacity:1} 50%{opacity:.4} }
+  @keyframes ovPing   { 0%{transform:scale(1);opacity:.7} 100%{transform:scale(2.2);opacity:0} }
+  :root{
+    --ov-navy:  26,50,99;   --ov-steel: 84,119,146;
+    --ov-amber: 250,185,91; --ov-linen: 232,226,219;
+    --ov-ok:    34,197,94;  --ov-ng:    239,68,68;
+    --ov-wip:   249,115,22; --ov-idle:  148,163,184;
+  }
+  [data-theme="light"]{
+    --ov-bg-card:   255,255,255; --ov-bg-surf:  240,236,230;
+    --ov-bg-input:  255,255,255;
+    --ov-txt-pri:   26,50,99;    --ov-txt-sec:  84,119,146;
+    --ov-txt-muted: 140,160,180;
+    --ov-bdr: 84,119,146; --ov-bop: 0.14;
+  }
+  [data-theme="dark"]{
+    --ov-bg-card:   20,34,62;  --ov-bg-surf:  16,26,50;
+    --ov-bg-input:  14,22,44;
+    --ov-txt-pri:   232,226,219; --ov-txt-sec: 120,160,190;
+    --ov-txt-muted: 84,119,146;
+    --ov-bdr: 84,119,146; --ov-bop: 0.18;
+  }
+`;
+let _ovDS = false;
+function injectDS() {
+  if (_ovDS||typeof document==="undefined") return;
+  _ovDS=true;
+  const el=document.createElement("style"); el.textContent=DS; document.head.appendChild(el);
+  if (!document.documentElement.hasAttribute("data-theme"))
+    document.documentElement.setAttribute("data-theme","dark");
 }
 
-function extractQrDecision(payload = {}) {
-  const primary = String(
-    payload.qrResult || payload.decision || payload.outcome || payload.scanOutcome || payload.qrDecision || payload.qrStatus || ""
-  )
-    .trim()
-    .toUpperCase();
+const C = {
+  navy:  (o=1) => `rgba(var(--ov-navy),${o})`,
+  steel: (o=1) => `rgba(var(--ov-steel),${o})`,
+  amber: (o=1) => `rgba(var(--ov-amber),${o})`,
+  linen: (o=1) => `rgba(var(--ov-linen),${o})`,
+  ok:    (o=1) => `rgba(var(--ov-ok),${o})`,
+  ng:    (o=1) => `rgba(var(--ov-ng),${o})`,
+  wip:   (o=1) => `rgba(var(--ov-wip),${o})`,
+  idle:  (o=1) => `rgba(var(--ov-idle),${o})`,
+  bg:    (v="card") => `rgb(var(--ov-bg-${v}))`,
+  txt:   (v="pri")  => `rgb(var(--ov-txt-${v}))`,
+  bdr:   (o)        => `rgba(var(--ov-bdr),${o||"var(--ov-bop)"})`,
+};
+const SH  = `0 2px 12px rgba(var(--ov-navy),.08),0 1px 3px rgba(var(--ov-navy),.05)`;
+const SHM = `0 4px 20px rgba(var(--ov-navy),.14),0 2px 6px rgba(var(--ov-navy),.07)`;
 
-  if (primary) {
-    return primary;
-  }
-
-  const fallback = String(payload.reason || payload.result || "")
-    .trim()
-    .toUpperCase();
-  if (["PASS", "OK", "ALLOW"].includes(fallback)) {
-    return "ALLOW";
-  }
-  if (["FAIL", "NG", "BLOCK", "REJECT"].includes(fallback)) {
-    return "BLOCK";
-  }
+// ── Unchanged utility functions ────────────────────────────────────────────
+function normalizePartId(v) { return String(v||"").trim(); }
+function extractQrDecision(payload={}) {
+  const p=String(payload.qrResult||payload.decision||payload.outcome||payload.scanOutcome||payload.qrDecision||payload.qrStatus||"").trim().toUpperCase();
+  if (p) return p;
+  const f=String(payload.reason||payload.result||"").trim().toUpperCase();
+  if (["PASS","OK","ALLOW"].includes(f)) return "ALLOW";
+  if (["FAIL","NG","BLOCK","REJECT"].includes(f)) return "BLOCK";
   return "";
 }
-
-function hasQrDecision(payload = {}) {
-  const decision = extractQrDecision(payload);
-  return ["ALLOW", "PASS", "OK", "ACCEPT", "VALID", "BLOCK", "FAIL", "NG", "REJECT", "INVALID"].includes(decision);
+function hasQrDecision(payload={}) {
+  return ["ALLOW","PASS","OK","ACCEPT","VALID","BLOCK","FAIL","NG","REJECT","INVALID"].includes(extractQrDecision(payload));
 }
-
-function toQrSignal(payload = {}) {
-  const decision = extractQrDecision(payload);
-  let label = "QR WAIT";
-  let tone = "border-slate-500/60 bg-slate-500/10";
-  let textTone = "text-slate-200";
-
-  if (["ALLOW", "PASS", "OK", "ACCEPT", "VALID"].includes(decision)) {
-    label = "QR PASS";
-    tone = "border-emerald-500/75 bg-emerald-500/14";
-    textTone = "text-emerald-200";
-  } else if (["BLOCK", "FAIL", "NG", "REJECT", "INVALID"].includes(decision)) {
-    label = "QR FAIL";
-    tone = "border-rose-500/75 bg-rose-500/14";
-    textTone = "text-rose-200";
-  }
-
+function toQrSignal(payload={}) {
+  const d=extractQrDecision(payload);
+  const isPass=["ALLOW","PASS","OK","ACCEPT","VALID"].includes(d);
+  const isFail=["BLOCK","FAIL","NG","REJECT","INVALID"].includes(d);
   return {
-    id: `${Date.now()}-${Math.random()}`,
-    label,
-    tone,
-    textTone,
-    partId: normalizePartId(payload.partId || payload.part_id),
-    stationNo: String(payload.stationNo || payload.station_no || "").trim().toUpperCase(),
-    decision,
-    reason: String(payload.reason || payload.qrReason || "").trim(),
-    message: String(payload.message || "").trim(),
-    timestamp: payload.timestamp || new Date().toISOString(),
+    id:`${Date.now()}-${Math.random()}`,
+    label:isPass?"QR PASS":isFail?"QR FAIL":"QR WAIT",
+    variant:isPass?"ok":isFail?"ng":"idle",
+    partId:normalizePartId(payload.partId||payload.part_id),
+    stationNo:String(payload.stationNo||payload.station_no||"").trim().toUpperCase(),
+    decision:d,
+    reason:String(payload.reason||payload.qrReason||"").trim(),
+    message:String(payload.message||"").trim(),
+    timestamp:payload.timestamp||new Date().toISOString(),
   };
 }
-
-function formatScanErrorMessage(payload = {}) {
-  const reason = String(payload.reason || "").trim().toUpperCase();
-  const station = String(payload.stationNo || payload.station_no || "").trim().toUpperCase();
-  const expected = String(payload.expectedStation || payload.expected_station || "").trim().toUpperCase();
-
-  if (reason === "DUPLICATE_SCAN") {
-    return `Duplicate scan at ${station || "station"}. Reset required before re-scan.`;
-  }
-  if (reason === "PREVIOUS_STATION_NOT_COMPLETED") {
-    return expected
-      ? `Station sequence error. Complete ${expected} first.`
-      : "Station sequence error. Previous station not completed.";
-  }
-  if (reason === "INVALID_QR_FORMAT") {
-    return String(payload.message || "").trim() || "Invalid QR format. Scan correct component code.";
-  }
-  if (reason === "QR_RULE_CONFIG_ERROR") {
-    return String(payload.message || "").trim() || "QR rule configuration is invalid. Contact supervisor/admin.";
-  }
-  if (reason === "ALREADY_COMPLETED") {
-    return "Part already completed. Re-scan is not allowed.";
-  }
-  if (reason === "PART_INTERLOCKED") {
-    return "Part interlocked. Reset required from control flow.";
-  }
-  if (reason === "STATION_NOT_CONFIGURED") {
-    return "Station not configured in machine master. Contact supervisor.";
-  }
-  if (reason === "INVALID_INPUT") {
-    return "Invalid scan input. Re-scan the QR code.";
-  }
-  if (reason === "SCAN_RESULT_NG") {
-    return "QR validation failed (NG). Send part to rejection flow.";
-  }
-  if (reason) {
-    return reason.replaceAll("_", " ");
-  }
-  return String(payload.message || "Scan blocked");
+function formatScanErrorMessage(payload={}) {
+  const reason=String(payload.reason||"").trim().toUpperCase();
+  const station=String(payload.stationNo||payload.station_no||"").trim().toUpperCase();
+  const expected=String(payload.expectedStation||payload.expected_station||"").trim().toUpperCase();
+  if (reason==="DUPLICATE_SCAN") return `Duplicate scan at ${station||"station"}. Reset required before re-scan.`;
+  if (reason==="PREVIOUS_STATION_NOT_COMPLETED") return expected?`Station sequence error. Complete ${expected} first.`:"Station sequence error. Previous station not completed.";
+  if (reason==="INVALID_QR_FORMAT") return String(payload.message||"").trim()||"Invalid QR format. Scan correct component code.";
+  if (reason==="QR_RULE_CONFIG_ERROR") return String(payload.message||"").trim()||"QR rule configuration is invalid. Contact supervisor.";
+  if (reason==="ALREADY_COMPLETED") return "Part already completed. Re-scan is not allowed.";
+  if (reason==="PART_INTERLOCKED") return "Part interlocked. Reset required from control flow.";
+  if (reason==="STATION_NOT_CONFIGURED") return "Station not configured in machine master. Contact supervisor.";
+  if (reason==="INVALID_INPUT") return "Invalid scan input. Re-scan the QR code.";
+  if (reason==="SCAN_RESULT_NG") return "QR validation failed (NG). Send part to rejection flow.";
+  if (reason) return reason.replaceAll("_"," ");
+  return String(payload.message||"Scan blocked");
 }
-
-function shouldSuppressPopupPayload(payload = {}) {
-  const partId = normalizePartId(payload.partId || payload.part_id);
-  const station = String(payload.stationNo || payload.station_no || "").trim();
-  const message = String(payload.message || payload.error || "").trim().toUpperCase();
-
-  if (!partId && !station && !message) {
-    return true;
-  }
-
-  if (!partId && message.includes("PART NOT FOUND")) {
-    return true;
-  }
-
+function shouldSuppressPopupPayload(payload={}) {
+  const partId=normalizePartId(payload.partId||payload.part_id);
+  const station=String(payload.stationNo||payload.station_no||"").trim();
+  const message=String(payload.message||payload.error||"").trim().toUpperCase();
+  if (!partId&&!station&&!message) return true;
+  if (!partId&&message.includes("PART NOT FOUND")) return true;
   return false;
 }
-
 function normalizeDecisionState(value) {
-  const normalized = String(value || "").trim().toUpperCase();
-  if (["ALLOW", "PASS", "OK", "ACCEPT", "VALID"].includes(normalized)) {
-    return "PASS";
-  }
-  if (["BLOCK", "FAIL", "NG", "REJECT", "INVALID"].includes(normalized)) {
-    return "FAIL";
-  }
-  if (normalized === "WAIT") {
-    return "WAIT";
-  }
+  const n=String(value||"").trim().toUpperCase();
+  if (["ALLOW","PASS","OK","ACCEPT","VALID"].includes(n)) return "PASS";
+  if (["BLOCK","FAIL","NG","REJECT","INVALID"].includes(n)) return "FAIL";
+  if (n==="WAIT") return "WAIT";
   return "";
 }
-
-function isResetLikePayload(payload = {}) {
-  const status = String(payload.status || payload.plcStatus || payload.plc_status || "").trim().toUpperCase();
-  const reason = String(payload.reason || payload.qrReason || "").trim().toUpperCase();
-  const message = String(payload.message || "").trim().toUpperCase();
-
-  return status === "RESET" || reason.includes("RESET") || message.includes("RESET");
+function isResetLikePayload(payload={}) {
+  const status=String(payload.status||payload.plcStatus||payload.plc_status||"").trim().toUpperCase();
+  const reason=String(payload.reason||payload.qrReason||"").trim().toUpperCase();
+  const message=String(payload.message||"").trim().toUpperCase();
+  return status==="RESET"||reason.includes("RESET")||message.includes("RESET");
+}
+function getOperationVariant(status) {
+  const s=String(status||"").trim().toUpperCase();
+  if (s==="ENDED_OK"||s==="PASSED")           return "ok";
+  if (["ENDED_NG","INTERLOCKED","FAILED"].includes(s)) return "ng";
+  if (["PLC_COMM_ERROR","COMM_ERROR"].includes(s))     return "wip";
+  if (["STARTED","PENDING","IN_PROGRESS"].includes(s)) return "wip";
+  return "idle";
+}
+function getOperationLabel(status) {
+  const s=String(status||"").trim().toUpperCase();
+  if (s==="ENDED_OK"||s==="PASSED")           return "Pass";
+  if (["ENDED_NG","INTERLOCKED","FAILED"].includes(s)) return "Fail";
+  if (["PLC_COMM_ERROR","COMM_ERROR"].includes(s))     return "Comm Error";
+  if (["STARTED","PENDING","IN_PROGRESS"].includes(s)) return "Running";
+  return "Waiting";
+}
+function fmtTime(v) { if(!v) return "—"; const d=new Date(v); return isNaN(d)?"—":d.toLocaleTimeString(); }
+function fmtDT(v)   { if(!v) return "—"; const d=new Date(v); return isNaN(d)?"—":d.toLocaleString(); }
+function formatElapsed(timestamp,now) {
+  if (!timestamp) return "0m 00s";
+  const s=String(timestamp||""); if (!s) return "0m 00s";
+  const start=new Date(s).getTime(); if (isNaN(start)) return "0m 00s";
+  const diff=Math.max(0,Math.floor((now-start)/1000));
+  const h=Math.floor(diff/3600), m=Math.floor((diff%3600)/60), sec=diff%60;
+  if (h>0) return `${h}h ${m}m ${String(sec).padStart(2,"0")}s`;
+  return `${m}m ${String(sec).padStart(2,"0")}s`;
 }
 
-function getOperationSignal(status) {
-  const state = String(status || "").trim().toUpperCase();
-  if (state === "ENDED_OK" || state === "PASSED") {
-    return {
-      label: "OP PASS",
-      tone: "border-emerald-500/75 bg-emerald-500/14",
-      textTone: "text-emerald-200",
-    };
-  }
-  if (state === "ENDED_NG" || state === "INTERLOCKED" || state === "FAILED") {
-    return {
-      label: "OP FAIL",
-      tone: "border-rose-500/75 bg-rose-500/14",
-      textTone: "text-rose-200",
-    };
-  }
-  if (state === "PLC_COMM_ERROR" || state === "COMM_ERROR") {
-    return {
-      label: "OP COMM",
-      tone: "border-orange-400/75 bg-orange-400/14",
-      textTone: "text-orange-200",
-    };
-  }
-  if (state === "STARTED" || state === "PENDING" || state === "IN_PROGRESS") {
-    return {
-      label: "OP RUN",
-      tone: "border-amber-500/70 bg-amber-500/12",
-      textTone: "text-amber-200",
-    };
-  }
-  return {
-    label: "OP WAIT",
-    tone: "border-slate-500/60 bg-slate-500/10",
-    textTone: "text-slate-200",
-  };
-}
+// ── Atoms ──────────────────────────────────────────────────────────────────
+const STATUS_MAP = {
+  ok:   {fg:C.ok(),   bg:C.ok(0.1),   bd:C.ok(0.28)  },
+  ng:   {fg:C.ng(),   bg:C.ng(0.1),   bd:C.ng(0.28)  },
+  wip:  {fg:C.wip(),  bg:C.wip(0.1),  bd:C.wip(0.28) },
+  idle: {fg:C.idle(), bg:C.idle(0.08),bd:C.idle(0.2) },
+};
 
-function formatDateTime(value) {
-  if (!value) {
-    return "-";
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "-";
-  }
-  return date.toLocaleString();
-}
+const Badge = ({ variant="idle", label, pulse, size="sm" }) => {
+  const s=STATUS_MAP[variant]||STATUS_MAP.idle;
+  return (
+    <span style={{
+      display:"inline-flex",alignItems:"center",gap:5,
+      padding:size==="lg"?"5px 14px":"3px 10px",
+      borderRadius:99,
+      fontSize:size==="lg"?13:11,fontWeight:700,
+      letterSpacing:"0.04em",
+      color:s.fg,background:s.bg,border:`1px solid ${s.bd}`,
+      whiteSpace:"nowrap",
+    }}>
+      <span style={{width:size==="lg"?8:5,height:size==="lg"?8:5,
+        borderRadius:"50%",background:s.fg,flexShrink:0,
+        animation:pulse?"ovPulse 1.2s ease-in-out infinite":"none"}}/>
+      {label}
+    </span>
+  );
+};
 
-function formatElapsedTime(timestamp, now) {
-  if (!timestamp) {
-    return "0m 00s";
-  }
-  const start = new Date(timestamp).getTime();
-  if (Number.isNaN(start)) {
-    return "0m 00s";
-  }
-  const diff = Math.max(0, Math.floor((now - start) / 1000));
-  const hours = Math.floor(diff / 3600);
-  const minutes = Math.floor((diff % 3600) / 60);
-  const seconds = diff % 60;
-  if (hours > 0) {
-    return `${hours}h ${minutes}m ${String(seconds).padStart(2, "0")}s`;
-  }
-  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
-}
+// Connection dot with ping
+const ConnDot = ({ connected }) => (
+  <div style={{position:"relative",width:10,height:10,flexShrink:0}}>
+    {connected&&(
+      <div style={{position:"absolute",inset:0,borderRadius:"50%",
+        background:C.ok(0.4),animation:"ovPing 1.8s ease-out infinite"}}/>
+    )}
+    <div style={{width:10,height:10,borderRadius:"50%",position:"relative",
+      background:connected?C.ok():C.ng()}}/>
+  </div>
+);
 
+// Info row in sidebar cards
+const InfoRow = ({ label, value, mono, valueColor }) => (
+  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+    gap:8,padding:"5px 0",borderBottom:`1px solid ${C.bdr()}`}}>
+    <span style={{fontSize:11,color:C.txt("muted"),fontWeight:600,flexShrink:0}}>{label}</span>
+    <span style={{
+      fontSize:11,fontWeight:700,
+      color:valueColor||C.txt("pri"),
+      fontFamily:mono?"'DM Mono',monospace":"inherit",
+      textAlign:"right",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
+      maxWidth:160,
+    }}>{value||"—"}</span>
+  </div>
+);
+
+// Section card shell
+const Card = ({ title, icon:Icon, accent, children, right, noPad }) => (
+  <div style={{
+    background:C.bg("card"),border:`1px solid ${C.bdr()}`,
+    borderRadius:14,overflow:"hidden",boxShadow:SH,
+    borderLeft:accent?`3px solid ${accent}`:"none",
+  }}>
+    {(title||right)&&(
+      <div style={{padding:"12px 16px",borderBottom:`1px solid ${C.bdr()}`,
+        background:C.bg("surf"),display:"flex",alignItems:"center",
+        justifyContent:"space-between",gap:8}}>
+        <div style={{display:"flex",alignItems:"center",gap:7}}>
+          {Icon&&<Icon size={14} color={C.steel()}/>}
+          <p style={{fontSize:13,fontWeight:700,color:C.txt("pri")}}>{title}</p>
+        </div>
+        {right}
+      </div>
+    )}
+    <div style={noPad?{}:{padding:16}}>{children}</div>
+  </div>
+);
+
+// Feature toggle row
+const FeatureRow = ({ label, enabled }) => (
+  <div style={{
+    display:"flex",alignItems:"center",justifyContent:"space-between",
+    padding:"8px 12px",borderRadius:8,
+    background:C.bg("surf"),border:`1px solid ${C.bdr()}`,
+    marginBottom:5,
+  }}>
+    <span style={{fontSize:12,color:C.txt("pri")}}>{label}</span>
+    <span style={{
+      fontSize:11,fontWeight:700,
+      color:enabled?C.ok():C.txt("muted"),
+      padding:"2px 8px",borderRadius:99,
+      background:enabled?C.ok(0.1):C.idle(0.08),
+      border:`1px solid ${enabled?C.ok(0.25):C.bdr()}`,
+    }}>
+      {enabled?"Enabled":"Disabled"}
+    </span>
+  </div>
+);
+
+// Large decision display
+const DecisionDisplay = ({ label, variant, sub1, sub2, accent }) => {
+  const s=STATUS_MAP[variant]||STATUS_MAP.idle;
+  return (
+    <div style={{
+      borderRadius:12,padding:"14px 16px",
+      background:s.bg,border:`1px solid ${s.bd}`,
+      borderLeft:accent?`3px solid ${s.fg}`:"none",
+    }}>
+      <p style={{fontSize:10,fontWeight:800,textTransform:"uppercase",
+        letterSpacing:"0.1em",color:C.txt("muted"),marginBottom:6}}>{label}</p>
+      <p style={{fontSize:24,fontWeight:900,color:s.fg,lineHeight:1,
+        fontFamily:"'DM Mono',monospace",marginBottom:6}}>{variant==="ok"?"✓ PASS":variant==="ng"?"✗ FAIL":variant==="wip"?"● RUNNING":"○ WAITING"}</p>
+      {sub1&&<p style={{fontSize:11,color:C.txt("muted"),fontFamily:"'DM Mono',monospace",marginBottom:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sub1}</p>}
+      {sub2&&<p style={{fontSize:10,color:C.txt("muted"),overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sub2}</p>}
+    </div>
+  );
+};
+
+// ══════════════════════════════════════════════════════════════════════════
+//  MAIN COMPONENT
+// ══════════════════════════════════════════════════════════════════════════
 const OperatorView = () => {
-  const user = useMemo(() => {
-    try {
-      return JSON.parse(localStorage.getItem("user") || "{}");
-    } catch {
-      return {};
-    }
-  }, []);
+  injectDS();
 
-  const [machines, setMachines] = useState([]);
-  const [selectedMachineId, setSelectedMachineId] = useState("");
-  const [liveState, setLiveState] = useState(null);
-  const [stationStats, setStationStats] = useState(null);
-  const [stationSettings, setStationSettings] = useState(() => getStationFeatureSettings());
-  const [loadingMachines, setLoadingMachines] = useState(true);
-  const [loadingStats, setLoadingStats] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [popup, setPopup] = useState(null);
-  const [qrSignal, setQrSignal] = useState(null);
-  const [qrFeed, setQrFeed] = useState([]);
-  const [clockTick, setClockTick] = useState(Date.now());
+  const user = useMemo(()=>{ try{return JSON.parse(localStorage.getItem("user")||"{}");} catch{return{};} },[]);
+
+  const [machines,         setMachines]         = useState([]);
+  const [selectedMachineId,setSelectedMachineId]= useState("");
+  const [liveState,        setLiveState]        = useState(null);
+  const [stationStats,     setStationStats]     = useState(null);
+  const [stationSettings,  setStationSettings]  = useState(()=>getStationFeatureSettings());
+  const [loadingMachines,  setLoadingMachines]  = useState(true);
+  const [loadingStats,     setLoadingStats]     = useState(false);
+  const [refreshing,       setRefreshing]       = useState(false);
+  const [popup,            setPopup]            = useState(null);
+  const [qrSignal,         setQrSignal]         = useState(null);
+  const [qrFeed,           setQrFeed]           = useState([]);
+  const [clockTick,        setClockTick]        = useState(Date.now());
 
   const selectedMachineIdRef = useRef("");
-  const selectedStationRef = useRef("");
-  const liveRefreshTimerRef = useRef(null);
-  const lastLiveRefreshRef = useRef(0);
-  const lastQrEventRef = useRef({ key: "", at: 0 });
-  const lastPopupEventRef = useRef({ key: "", at: 0 });
+  const selectedStationRef   = useRef("");
+  const liveRefreshTimerRef  = useRef(null);
+  const lastLiveRefreshRef   = useRef(0);
+  const lastQrEventRef       = useRef({key:"",at:0});
+  const lastPopupEventRef    = useRef({key:"",at:0});
 
-  const selectedMachine = useMemo(
-    () => machines.find((entry) => entry.id === Number(selectedMachineId)) || null,
-    [machines, selectedMachineId]
-  );
+  const selectedMachine = useMemo(()=>machines.find(e=>e.id===Number(selectedMachineId))||null,[machines,selectedMachineId]);
+  const selectedStation = useMemo(()=>getMachineStage(selectedMachine),[selectedMachine]);
 
-  const selectedStation = useMemo(() => getMachineStage(selectedMachine), [selectedMachine]);
+  useEffect(()=>{ selectedMachineIdRef.current=String(selectedMachineId||""); },[selectedMachineId]);
+  useEffect(()=>{ selectedStationRef.current=String(selectedStation||"").toUpperCase(); },[selectedStation]);
 
-  useEffect(() => {
-    selectedMachineIdRef.current = String(selectedMachineId || "");
-  }, [selectedMachineId]);
+  const stationFeatureConfig = useMemo(()=>getStationFeatures(selectedStation,stationSettings),[selectedStation,stationSettings]);
 
-  useEffect(() => {
-    selectedStationRef.current = String(selectedStation || "").toUpperCase();
-  }, [selectedStation]);
+  const qualitySummary = stationStats?.summary||{okCount:0,ngCount:0,interlockedCount:0,inProgressCount:0,processedCount:0,accuracy:0};
+  const expectedCount  = Math.max(Number(qualitySummary.processedCount||0)+Number(qualitySummary.inProgressCount||0)+Number(qualitySummary.interlockedCount||0),1);
+  const producedCount  = Number(qualitySummary.processedCount||0);
+  const progressPct    = Math.min(100,Math.round((producedCount/expectedCount)*100));
+  const qualityPct     = Number(qualitySummary.accuracy||0);
+  const machineMode    = liveState?.current?"Running":liveState?.lastEvent?"Idle":"Waiting";
+  const machineClock   = formatElapsed(liveState?.current?.createdAt||liveState?.lastEvent?.createdAt,clockTick);
 
-  const stationFeatureConfig = useMemo(
-    () => getStationFeatures(selectedStation, stationSettings),
-    [selectedStation, stationSettings]
-  );
+  const currentContext  = liveState?.current||stationStats?.current||liveState?.lastEvent||stationStats?.lastEvent||null;
+  const plcHealth       = liveState?.plcHealth||stationStats?.plcHealth||null;
+  const scannerHealth   = liveState?.scannerHealth||stationStats?.scannerHealth||null;
+  const scannerInfo     = liveState?.scanner||stationStats?.scanner||null;
+  const plcConnected    = Boolean(plcHealth?.healthy);
+  const scannerConfigured = String(scannerHealth?.status||"").toUpperCase()!=="NOT_CONFIGURED";
+  const scannerConnected  = Boolean(scannerHealth?.connected);
 
-  const qualitySummary = stationStats?.summary || {
-    okCount: 0,
-    ngCount: 0,
-    interlockedCount: 0,
-    inProgressCount: 0,
-    processedCount: 0,
-    accuracy: 0,
-  };
+  const opVariant = useMemo(()=>getOperationVariant(currentContext?.plcStatus),[currentContext?.plcStatus]);
+  const opLabel   = useMemo(()=>getOperationLabel(currentContext?.plcStatus),[currentContext?.plcStatus]);
 
-  const expectedCount = Math.max(
-    Number(qualitySummary.processedCount || 0) +
-      Number(qualitySummary.inProgressCount || 0) +
-      Number(qualitySummary.interlockedCount || 0),
-    1
-  );
-  const producedCount = Number(qualitySummary.processedCount || 0);
-  const progressPercent = Math.min(100, Math.round((producedCount / expectedCount) * 100));
-  const qualityPercent = Number(qualitySummary.accuracy || 0);
-  const machineMode = liveState?.current ? "Running" : liveState?.lastEvent ? "Idle" : "Waiting";
-  const machineClock = formatElapsedTime(
-    liveState?.current?.createdAt || liveState?.lastEvent?.createdAt,
-    clockTick
-  );
+  const canQuickReset = useMemo(()=>{
+    if (!currentContext?.partId||!selectedStation) return false;
+    const s=String(currentContext?.plcStatus||"").trim().toUpperCase();
+    return ["ENDED_NG","FAILED","NG","INTERLOCKED","PLC_COMM_ERROR","COMM_ERROR","TIMEOUT","PLC_TIMEOUT"].includes(s);
+  },[currentContext?.partId,currentContext?.plcStatus,selectedStation]);
 
-  const currentContext = liveState?.current || stationStats?.current || liveState?.lastEvent || stationStats?.lastEvent || null;
-  const plcHealth = liveState?.plcHealth || stationStats?.plcHealth || null;
-  const scannerHealth = liveState?.scannerHealth || stationStats?.scannerHealth || null;
-  const scannerInfo = liveState?.scanner || stationStats?.scanner || null;
-  const plcConnected = Boolean(plcHealth?.healthy);
-  const scannerConfigured = String(scannerHealth?.status || "").toUpperCase() !== "NOT_CONFIGURED";
-  const scannerConnected = Boolean(scannerHealth?.connected);
-  const operationSignal = useMemo(
-    () => getOperationSignal(currentContext?.plcStatus),
-    [currentContext?.plcStatus]
-  );
-  const canQuickReset = useMemo(() => {
-    if (!currentContext?.partId || !selectedStation) {
-      return false;
-    }
-    const state = String(currentContext?.plcStatus || "").trim().toUpperCase();
-    return ["ENDED_NG", "FAILED", "NG", "INTERLOCKED", "PLC_COMM_ERROR", "COMM_ERROR", "TIMEOUT", "PLC_TIMEOUT"].includes(state);
-  }, [currentContext?.partId, currentContext?.plcStatus, selectedStation]);
-
-  const rejectionSummary = useMemo(() => {
-    const rows = stationStats?.recentParts || [];
-    const grouped = rows.reduce((acc, row) => {
-      const hasRejection = Boolean(row.interlockReason) || String(row.result || "").toUpperCase() === "NG";
-      const reason = hasRejection ? row.interlockReason || "NG without reason" : null;
-      if (!reason) {
-        return acc;
-      }
-      acc[reason] = (acc[reason] || 0) + 1;
+  const rejectionSummary = useMemo(()=>{
+    const rows=stationStats?.recentParts||[];
+    const grouped=rows.reduce((acc,row)=>{
+      const hasR=Boolean(row.interlockReason)||String(row.result||"").toUpperCase()==="NG";
+      const reason=hasR?row.interlockReason||"NG without reason":null;
+      if (!reason) return acc;
+      acc[reason]=(acc[reason]||0)+1;
       return acc;
-    }, {});
+    },{});
+    return Object.entries(grouped).map(([reason,count])=>({reason,count})).sort((a,b)=>b.count-a.count).slice(0,5);
+  },[stationStats?.recentParts]);
 
-    return Object.entries(grouped)
-      .map(([reason, count]) => ({ reason, count }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 5);
-  }, [stationStats?.recentParts]);
+  const trendRows = useMemo(()=>[...(stationStats?.trend||[])].slice(-6),[stationStats?.trend]);
 
-  const trendRows = useMemo(() => {
-    return [...(stationStats?.trend || [])].slice(-6);
-  }, [stationStats?.trend]);
-
-  const loadMachines = useCallback(async () => {
+  // ── Data fetching (unchanged logic) ──────────────────────────────────
+  const loadMachines = useCallback(async()=>{
     setLoadingMachines(true);
     try {
-      const rows = await machineApi.list();
-      setMachines(rows || []);
-      if ((rows || []).length > 0) {
-        setSelectedMachineId((current) => current || String(rows[0].id));
-      } else {
-        setSelectedMachineId("");
-      }
-    } catch (error) {
-      setPopup({
-        type: "ERROR",
-        title: "Machine Load Failed",
-        message: error.response?.data?.error || "Unable to load machines",
-      });
-    } finally {
-      setLoadingMachines(false);
-    }
-  }, []);
+      const rows=await machineApi.list(); setMachines(rows||[]);
+      if ((rows||[]).length>0) setSelectedMachineId(c=>c||String(rows[0].id));
+      else setSelectedMachineId("");
+    } catch(e){ setPopup({type:"ERROR",title:"Machine Load Failed",message:e.response?.data?.error||"Unable to load machines"}); }
+    finally { setLoadingMachines(false); }
+  },[]);
 
-  const loadMachineTelemetry = useCallback(async (machineId, showLoader = true) => {
-    const id = Number(machineId || 0);
-    if (!id) {
-      setLiveState(null);
-      setStationStats(null);
-      return;
-    }
-
-    if (showLoader) {
-      setLoadingStats(true);
-    } else {
-      setRefreshing(true);
-    }
-
+  const loadMachineTelemetry = useCallback(async(machineId,showLoader=true)=>{
+    const id=Number(machineId||0);
+    if (!id){ setLiveState(null); setStationStats(null); return; }
+    if (showLoader) setLoadingStats(true); else setRefreshing(true);
     try {
-      const [live, stats] = await Promise.all([
-        traceabilityApi.liveState(id),
-        traceabilityApi.machineStats(id),
-      ]);
-      setLiveState(live || null);
-      setStationStats(stats || null);
-    } catch (error) {
-      if (showLoader) {
-        setPopup({
-          type: "ERROR",
-          title: "Station Data Error",
-          message: error.response?.data?.error || "Unable to load machine telemetry",
-        });
-      }
-    } finally {
-      setLoadingStats(false);
-      setRefreshing(false);
-    }
-  }, []);
+      const [live,stats]=await Promise.all([traceabilityApi.liveState(id),traceabilityApi.machineStats(id)]);
+      setLiveState(live||null); setStationStats(stats||null);
+    } catch(e){ if (showLoader) setPopup({type:"ERROR",title:"Station Data Error",message:e.response?.data?.error||"Unable to load machine telemetry"}); }
+    finally { setLoadingStats(false); setRefreshing(false); }
+  },[]);
 
-  const scheduleLiveRefresh = useCallback(() => {
-    const activeMachine = selectedMachineIdRef.current;
-    if (!activeMachine) {
-      return;
-    }
+  const scheduleLiveRefresh = useCallback(()=>{
+    const active=selectedMachineIdRef.current; if (!active) return;
+    const elapsed=Date.now()-lastLiveRefreshRef.current;
+    const delay=Math.max(0,LIVE_REFRESH_COOLDOWN-elapsed);
+    if (liveRefreshTimerRef.current) return;
+    liveRefreshTimerRef.current=setTimeout(()=>{
+      liveRefreshTimerRef.current=null; lastLiveRefreshRef.current=Date.now();
+      loadMachineTelemetry(active,false);
+    },delay);
+  },[loadMachineTelemetry]);
 
-    const now = Date.now();
-    const elapsed = now - lastLiveRefreshRef.current;
-    const delay = Math.max(0, LIVE_REFRESH_COOLDOWN_MS - elapsed);
-    if (liveRefreshTimerRef.current) {
-      return;
-    }
+  const isDuplicatePopupEvent = useCallback((payload={})=>{
+    const key=[String(payload.type||"").trim().toUpperCase(),normalizePartId(payload.partId||payload.part_id),
+      String(payload.stationNo||payload.station_no||"").trim().toUpperCase(),
+      normalizeDecisionState(payload.qrResult||payload.qr_result),
+      String(payload.plcStatus||payload.plc_status||"").trim().toUpperCase(),
+      String(payload.reason||payload.qrReason||"").trim().toUpperCase(),
+      String(payload.message||"").trim().toUpperCase()].join("|");
+    if (!key.replaceAll("|","")) return false;
+    const now=Date.now();
+    if (lastPopupEventRef.current.key===key&&now-lastPopupEventRef.current.at<POPUP_EVENT_DEDUPE_MS) return true;
+    lastPopupEventRef.current={key,at:now}; return false;
+  },[]);
 
-    liveRefreshTimerRef.current = setTimeout(() => {
-      liveRefreshTimerRef.current = null;
-      lastLiveRefreshRef.current = Date.now();
-      loadMachineTelemetry(activeMachine, false);
-    }, delay);
-  }, [loadMachineTelemetry]);
-
-  const isDuplicatePopupEvent = useCallback((payload = {}) => {
-    const key = [
-      String(payload.type || "").trim().toUpperCase(),
-      normalizePartId(payload.partId || payload.part_id),
-      String(payload.stationNo || payload.station_no || "").trim().toUpperCase(),
-      normalizeDecisionState(payload.qrResult || payload.qr_result),
-      String(payload.plcStatus || payload.plc_status || "").trim().toUpperCase(),
-      String(payload.reason || payload.qrReason || "").trim().toUpperCase(),
-      String(payload.message || "").trim().toUpperCase(),
-    ].join("|");
-
-    if (!key.replaceAll("|", "")) {
-      return false;
-    }
-
-    const now = Date.now();
-    if (lastPopupEventRef.current.key === key && now - lastPopupEventRef.current.at < POPUP_EVENT_DEDUPE_MS) {
-      return true;
-    }
-
-    lastPopupEventRef.current = { key, at: now };
-    return false;
-  }, []);
-
-  const processQrSignal = useCallback((payload = {}) => {
-    if (!hasQrDecision(payload)) {
-      return false;
-    }
-
-    const payloadMachine = String(payload.machineId || payload.machine_id || "");
-    const payloadStation = String(payload.stationNo || payload.station_no || "").trim().toUpperCase();
-    const activeMachine = selectedMachineIdRef.current;
-    const activeStation = selectedStationRef.current;
-    const relevantByMachine = payloadMachine && payloadMachine === activeMachine;
-    const relevantByStation = payloadStation && payloadStation === activeStation;
-    const isRelevant = relevantByMachine || relevantByStation;
-
-    if (!isRelevant) {
-      return false;
-    }
-
-    const signal = toQrSignal(payload);
-    const dedupeReason = ["BLOCK", "FAIL", "NG", "REJECT", "INVALID"].includes(signal.decision) ? signal.reason : "";
-    const dedupeKey = [signal.partId, signal.stationNo, signal.decision, dedupeReason].join("|");
-    const now = Date.now();
-    if (lastQrEventRef.current.key === dedupeKey && now - lastQrEventRef.current.at < QR_EVENT_DEDUPE_MS) {
-      return false;
-    }
-    lastQrEventRef.current = { key: dedupeKey, at: now };
-
-    setQrSignal(signal);
-    setQrFeed((prev) => [signal, ...prev].slice(0, 6));
-
-    const machineKey = selectedMachineIdRef.current;
-    if (machineKey) {
-      try {
-        const current = JSON.parse(localStorage.getItem(OPERATOR_QR_STATE_STORAGE_KEY) || "{}");
-        current[machineKey] = signal;
-        localStorage.setItem(OPERATOR_QR_STATE_STORAGE_KEY, JSON.stringify(current));
-      } catch {
-        // Ignore localStorage failures.
-      }
-    }
-
+  const processQrSignal = useCallback((payload={})=>{
+    if (!hasQrDecision(payload)) return false;
+    const pm=String(payload.machineId||payload.machine_id||"");
+    const ps=String(payload.stationNo||payload.station_no||"").trim().toUpperCase();
+    const am=selectedMachineIdRef.current, as_=selectedStationRef.current;
+    if (!(pm&&pm===am)&&!(ps&&ps===as_)) return false;
+    const sig=toQrSignal(payload);
+    const dedupeR=["BLOCK","FAIL","NG","REJECT","INVALID"].includes(sig.decision)?sig.reason:"";
+    const key=[sig.partId,sig.stationNo,sig.decision,dedupeR].join("|");
+    const now=Date.now();
+    if (lastQrEventRef.current.key===key&&now-lastQrEventRef.current.at<QR_EVENT_DEDUPE_MS) return false;
+    lastQrEventRef.current={key,at:now};
+    setQrSignal(sig); setQrFeed(prev=>[sig,...prev].slice(0,6));
+    const mk=selectedMachineIdRef.current;
+    if (mk){ try{ const c=JSON.parse(localStorage.getItem(QR_STORAGE_KEY)||"{}"); c[mk]=sig; localStorage.setItem(QR_STORAGE_KEY,JSON.stringify(c)); }catch{} }
     return true;
-  }, []);
+  },[]);
 
-  const mergePopupPayload = useCallback((payload = {}) => {
-    setPopup((prev) => {
-      const incomingQrRaw = payload.qrResult || payload.qr_result || "";
-      const incomingQrState = normalizeDecisionState(incomingQrRaw);
-      const previousQrState = normalizeDecisionState(prev?.qrResult || prev?.qr_result || "");
-
-      const incomingPlcRaw = payload.plcStatus || payload.plc_status || "";
-      const incomingPlcState = String(incomingPlcRaw || "").trim().toUpperCase();
-      const previousPlcState = String(prev?.plcStatus || prev?.plc_status || "").trim().toUpperCase();
-      const resetLike = isResetLikePayload(payload);
-
-      // Prevent noisy WAIT payloads from wiping a valid PASS/FAIL unless this is a reset flow.
-      const shouldApplyQr =
-        Boolean(incomingQrRaw) &&
-        (incomingQrState !== "WAIT" || !previousQrState || previousQrState === "WAIT" || resetLike);
-      const shouldApplyPlc =
-        Boolean(incomingPlcRaw) &&
-        (incomingPlcState !== "WAIT" || !previousPlcState || previousPlcState === "WAIT" || resetLike);
-
+  const mergePopupPayload = useCallback((payload={})=>{
+    setPopup(prev=>{
+      const iqr=payload.qrResult||payload.qr_result||"", iqrS=normalizeDecisionState(iqr), pqrS=normalizeDecisionState(prev?.qrResult||prev?.qr_result||"");
+      const iplc=payload.plcStatus||payload.plc_status||"", iplcS=String(iplc||"").trim().toUpperCase(), pplcS=String(prev?.plcStatus||prev?.plc_status||"").trim().toUpperCase();
+      const rl=isResetLikePayload(payload);
+      const applyQr=Boolean(iqr)&&(iqrS!=="WAIT"||!pqrS||pqrS==="WAIT"||rl);
+      const applyPlc=Boolean(iplc)&&(iplcS!=="WAIT"||!pplcS||pplcS==="WAIT"||rl);
       return {
-        ...prev,
-        ...(payload.type && { type: payload.type }),
-        ...(payload.title && { title: payload.title }),
-        ...(shouldApplyQr && { qrResult: incomingQrRaw }),
-        ...(shouldApplyPlc && { plcStatus: incomingPlcRaw }),
-        ...(payload.message && { message: payload.message }),
-        ...(payload.reason && { reason: payload.reason }),
-        ...(payload.expectedStation && { expectedStation: payload.expectedStation }),
-        ...((payload.partId || payload.part_id) && { partId: payload.partId || payload.part_id }),
-        ...((payload.stationNo || payload.station_no) && { stationNo: payload.stationNo || payload.station_no }),
-        ...((payload.machineId || payload.machine_id) && { machineId: payload.machineId || payload.machine_id }),
-        ...(payload.machineName && { machineName: payload.machineName }),
-        ...(payload.timestamp && { timestamp: payload.timestamp }),
+        ...prev,...(payload.type&&{type:payload.type}),...(payload.title&&{title:payload.title}),
+        ...(applyQr&&{qrResult:iqr}),...(applyPlc&&{plcStatus:iplc}),
+        ...(payload.message&&{message:payload.message}),...(payload.reason&&{reason:payload.reason}),
+        ...(payload.expectedStation&&{expectedStation:payload.expectedStation}),
+        ...((payload.partId||payload.part_id)&&{partId:payload.partId||payload.part_id}),
+        ...((payload.stationNo||payload.station_no)&&{stationNo:payload.stationNo||payload.station_no}),
+        ...((payload.machineId||payload.machine_id)&&{machineId:payload.machineId||payload.machine_id}),
+        ...(payload.machineName&&{machineName:payload.machineName}),
+        ...(payload.timestamp&&{timestamp:payload.timestamp}),
       };
     });
-  }, []);
+  },[]);
 
-  const handleResetOperation = useCallback(async (partId, stationNo, options = {}) => {
-    const normalizedPartId = normalizePartId(partId);
-    const normalizedStation = String(stationNo || "").trim().toUpperCase();
-    if (!normalizedPartId || !normalizedStation) {
-      return false;
-    }
+  const handleResetOperation = useCallback(async(partId,stationNo,options={})=>{
+    const pid=normalizePartId(partId), sno=String(stationNo||"").trim().toUpperCase();
+    if (!pid||!sno) return false;
+    if (!options.confirmed){ const ok=window.confirm(`Reset operation for part ${pid} at ${sno}?`); if (!ok) return false; }
+    const res=await traceabilityApi.resetOperation({partId:pid,stationNo:sno});
+    const mk=selectedMachineIdRef.current;
+    if (mk){ try{ const c=JSON.parse(localStorage.getItem(QR_STORAGE_KEY)||"{}"); delete c[mk]; localStorage.setItem(QR_STORAGE_KEY,JSON.stringify(c)); }catch{} }
+    setQrSignal(null); setQrFeed([]);
+    mergePopupPayload({type:"INFO",partId:pid,stationNo:sno,qrResult:"WAIT",plcStatus:"WAIT",message:res?.message||"Operation reset successful"});
+    scheduleLiveRefresh(); return true;
+  },[mergePopupPayload,scheduleLiveRefresh]);
 
-    if (!options.confirmed) {
-      const confirmed = window.confirm(`Reset operation for part ${normalizedPartId} at ${normalizedStation}?`);
-      if (!confirmed) {
-        return false;
-      }
-    }
+  useEffect(()=>{ loadMachines(); },[loadMachines]);
+  useEffect(()=>{ if (!selectedMachineId) return; loadMachineTelemetry(selectedMachineId,true); },[selectedMachineId,loadMachineTelemetry]);
+  useEffect(()=>{ const t=setInterval(()=>{ if (selectedMachineIdRef.current) loadMachineTelemetry(selectedMachineIdRef.current,false); },15000); return()=>clearInterval(t); },[loadMachineTelemetry]);
+  useEffect(()=>{ const t=setInterval(()=>setClockTick(Date.now()),1000); return()=>clearInterval(t); },[]);
 
-    const response = await traceabilityApi.resetOperation({ partId: normalizedPartId, stationNo: normalizedStation });
-
-    const machineKey = selectedMachineIdRef.current;
-    if (machineKey) {
-      try {
-        const current = JSON.parse(localStorage.getItem(OPERATOR_QR_STATE_STORAGE_KEY) || "{}");
-        delete current[machineKey];
-        localStorage.setItem(OPERATOR_QR_STATE_STORAGE_KEY, JSON.stringify(current));
-      } catch {
-        // Ignore localStorage failures.
-      }
-    }
-
-    setQrSignal(null);
-    setQrFeed([]);
-    mergePopupPayload({
-      type: "INFO",
-      partId: normalizedPartId,
-      stationNo: normalizedStation,
-      qrResult: "WAIT",
-      plcStatus: "WAIT",
-      message: response?.message || "Operation reset successful",
-    });
-    scheduleLiveRefresh();
-    return true;
-  }, [mergePopupPayload, scheduleLiveRefresh]);
-
-  useEffect(() => {
-    loadMachines();
-  }, [loadMachines]);
-
-  useEffect(() => {
-    if (!selectedMachineId) {
-      return;
-    }
-    loadMachineTelemetry(selectedMachineId, true);
-  }, [selectedMachineId, loadMachineTelemetry]);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (!selectedMachineIdRef.current) {
-        return;
-      }
-      loadMachineTelemetry(selectedMachineIdRef.current, false);
-    }, 15000);
-    return () => clearInterval(interval);
-  }, [loadMachineTelemetry]);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setClockTick(Date.now());
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
-
-  useEffect(() => {
-    const syncSettings = async () => {
-      try {
-        const remote = await stationSettingsApi.list();
-        if (remote && Object.keys(remote).length > 0) {
-          setStationSettings(remote);
-          saveStationFeatureSettings(remote);
-          return;
-        }
-      } catch {
-        // Fallback to local cached settings.
-      }
+  useEffect(()=>{
+    const sync=async()=>{
+      try{ const r=await stationSettingsApi.list(); if (r&&Object.keys(r).length>0){setStationSettings(r);saveStationFeatureSettings(r);return;} }catch{}
       setStationSettings(getStationFeatureSettings());
     };
+    sync();
+    const onFocus=()=>sync(), onStorage=()=>setStationSettings(getStationFeatureSettings());
+    window.addEventListener("focus",onFocus); window.addEventListener("storage",onStorage);
+    return()=>{ window.removeEventListener("focus",onFocus); window.removeEventListener("storage",onStorage); };
+  },[]);
 
-    syncSettings();
-    const onFocus = () => {
-      syncSettings();
-    };
-    const onStorage = () => {
-      setStationSettings(getStationFeatureSettings());
-    };
-
-    window.addEventListener("focus", onFocus);
-    window.addEventListener("storage", onStorage);
-    return () => {
-      window.removeEventListener("focus", onFocus);
-      window.removeEventListener("storage", onStorage);
-    };
-  }, []);
-
-  useEffect(() => {
-    const socket = io(SOCKET_URL, {
-      path: "/socket.io/",
-      transports: ["websocket", "polling"],
+  useEffect(()=>{
+    const socket=io(SOCKET_URL,{path:"/socket.io/",transports:["websocket","polling"]});
+    socket.on("scan_event",(p={})=>{
+      const rel=processQrSignal(p);
+      if (rel){ const d=extractQrDecision(p); if (d==="BLOCK"){ if (isDuplicatePopupEvent({...p,type:"ERROR"})){scheduleLiveRefresh();return;} if (shouldSuppressPopupPayload(p)){scheduleLiveRefresh();return;} mergePopupPayload({type:"ERROR",title:"Scan Blocked",message:formatScanErrorMessage(p),reason:p.reason||"",partId:p.partId||p.part_id,stationNo:p.stationNo||p.station_no,machineId:p.machineId||p.machine_id,qrResult:"FAIL",plcStatus:"WAIT",timestamp:p.timestamp}); } scheduleLiveRefresh(); }
     });
-
-    socket.on("scan_event", (payload = {}) => {
-      const isRelevantSignal = processQrSignal(payload);
-      if (isRelevantSignal) {
-        const decision = extractQrDecision(payload);
-        if (decision === "BLOCK") {
-          if (isDuplicatePopupEvent({ ...payload, type: "ERROR" })) {
-            scheduleLiveRefresh();
-            return;
-          }
-          if (shouldSuppressPopupPayload(payload)) {
-            scheduleLiveRefresh();
-            return;
-          }
-          mergePopupPayload({
-            type: "ERROR",
-            title: "Scan Blocked",
-            message: formatScanErrorMessage(payload),
-            reason: payload.reason || "",
-            partId: payload.partId || payload.part_id,
-            stationNo: payload.stationNo || payload.station_no,
-            machineId: payload.machineId || payload.machine_id,
-            qrResult: "FAIL",
-            plcStatus: "WAIT",
-            timestamp: payload.timestamp,
-          });
-        }
-        scheduleLiveRefresh();
-      }
-    });
-
-    socket.on("journey_update", (payload = {}) => {
-      if (String(payload.sourceEvent || "").toLowerCase() === "scan_event") {
-        return;
-      }
-      if (hasQrDecision(payload) && processQrSignal(payload)) {
-        scheduleLiveRefresh();
-      }
-    });
-
-    socket.on("operator_popup", (payload = {}) => {
-      if (shouldSuppressPopupPayload(payload)) {
-        return;
-      }
-      if (isDuplicatePopupEvent(payload)) {
-        return;
-      }
-
-      const payloadStation = String(payload.stationNo || payload.station_no || "").trim().toUpperCase();
-      const payloadMachine = String(payload.machineId || payload.machine_id || "");
-      const activeMachine = selectedMachineIdRef.current;
-      const activeStation = selectedStationRef.current;
-      const isRelevant = payloadMachine === activeMachine || (payloadStation && payloadStation === activeStation);
-
-      if (!isRelevant) {
-        return;
-      }
-      const normalizedMessage =
-        String(payload.type || "").toUpperCase() === "ERROR" && String(payload.reason || payload.qrReason || "").trim()
-          ? formatScanErrorMessage({ ...payload, reason: payload.reason || payload.qrReason })
-          : payload.message;
-      mergePopupPayload({
-        ...payload,
-        ...(normalizedMessage ? { message: normalizedMessage } : {}),
-      });
-      if (hasQrDecision(payload) || String(payload.sourceEvent || "").toLowerCase() === "scan_event") {
-        processQrSignal(payload);
-      }
+    socket.on("journey_update",(p={})=>{ if (String(p.sourceEvent||"").toLowerCase()==="scan_event") return; if (hasQrDecision(p)&&processQrSignal(p)) scheduleLiveRefresh(); });
+    socket.on("operator_popup",(p={})=>{
+      if (shouldSuppressPopupPayload(p)||isDuplicatePopupEvent(p)) return;
+      const ps=String(p.stationNo||p.station_no||"").trim().toUpperCase(), pm=String(p.machineId||p.machine_id||"");
+      if (!(pm===selectedMachineIdRef.current||(ps&&ps===selectedStationRef.current))) return;
+      const nm=String(p.type||"").toUpperCase()==="ERROR"&&String(p.reason||p.qrReason||"").trim()?formatScanErrorMessage({...p,reason:p.reason||p.qrReason}):p.message;
+      mergePopupPayload({...p,...(nm?{message:nm}:{})});
+      if (hasQrDecision(p)||String(p.sourceEvent||"").toLowerCase()==="scan_event") processQrSignal(p);
       scheduleLiveRefresh();
     });
+    socket.on("dashboard_refresh",()=>scheduleLiveRefresh());
+    socket.on("plc_health",(p={})=>{ if (String(p.machineId||p.machine_id||"")===selectedMachineIdRef.current) scheduleLiveRefresh(); });
+    socket.on("scanner_health",(p={})=>{ if (String(p.machineId||p.machine_id||"")===selectedMachineIdRef.current) scheduleLiveRefresh(); });
+    return()=>{ if (liveRefreshTimerRef.current){clearTimeout(liveRefreshTimerRef.current);liveRefreshTimerRef.current=null;} socket.disconnect(); };
+  },[scheduleLiveRefresh,processQrSignal,mergePopupPayload,isDuplicatePopupEvent]);
 
-    socket.on("dashboard_refresh", () => {
-      scheduleLiveRefresh();
-    });
+  useEffect(()=>{
+    const mk=String(selectedMachineId||"");
+    if (!mk){setQrSignal(null);setQrFeed([]);return;}
+    try{ const saved=JSON.parse(localStorage.getItem(QR_STORAGE_KEY)||"{}"); const r=saved[mk]||null; if (r){setQrSignal(r);setQrFeed([r]);return;} }catch{}
+    setQrSignal(null); setQrFeed([]);
+  },[selectedMachineId]);
 
-    socket.on("plc_health", (payload = {}) => {
-      const payloadMachine = String(payload.machineId || payload.machine_id || "");
-      if (payloadMachine && payloadMachine === selectedMachineIdRef.current) {
-        scheduleLiveRefresh();
-      }
-    });
+  useEffect(()=>{
+    if (qrSignal||!currentContext?.partId) return;
+    const s=String(currentContext?.plcStatus||"").trim().toUpperCase();
+    if (!["PENDING","STARTED","ENDED_OK","ENDED_NG","PLC_COMM_ERROR"].includes(s)) return;
+    const inferred={id:`${Date.now()}-inferred`,label:"QR PASS",variant:"ok",partId:normalizePartId(currentContext.partId),stationNo:String(selectedStation||"").trim().toUpperCase(),decision:"ALLOW",reason:"QR_VALIDATED",message:"Restored from station state",timestamp:currentContext.createdAt||new Date().toISOString()};
+    setQrSignal(inferred); setQrFeed(prev=>prev.length?prev:[inferred]);
+    const mk=String(selectedMachineIdRef.current||"");
+    if (mk){ try{ const c=JSON.parse(localStorage.getItem(QR_STORAGE_KEY)||"{}"); c[mk]=inferred; localStorage.setItem(QR_STORAGE_KEY,JSON.stringify(c)); }catch{} }
+  },[currentContext?.partId,currentContext?.plcStatus,currentContext?.createdAt,selectedStation,qrSignal]);
 
-    socket.on("scanner_health", (payload = {}) => {
-      const payloadMachine = String(payload.machineId || payload.machine_id || "");
-      if (payloadMachine && payloadMachine === selectedMachineIdRef.current) {
-        scheduleLiveRefresh();
-      }
-    });
-
-    return () => {
-      if (liveRefreshTimerRef.current) {
-        clearTimeout(liveRefreshTimerRef.current);
-        liveRefreshTimerRef.current = null;
-      }
-      socket.disconnect();
-    };
-  }, [scheduleLiveRefresh, processQrSignal, mergePopupPayload, isDuplicatePopupEvent]);
-
-  useEffect(() => {
-    const machineKey = String(selectedMachineId || "");
-    if (!machineKey) {
-      setQrSignal(null);
-      setQrFeed([]);
-      return;
-    }
-
-    try {
-      const saved = JSON.parse(localStorage.getItem(OPERATOR_QR_STATE_STORAGE_KEY) || "{}");
-      const restored = saved[machineKey] || null;
-      if (restored) {
-        setQrSignal(restored);
-        setQrFeed([restored]);
-        return;
-      }
-    } catch {
-      // Ignore localStorage failures.
-    }
-
-    setQrSignal(null);
-    setQrFeed([]);
-  }, [selectedMachineId]);
-
-  useEffect(() => {
-    if (qrSignal || !currentContext?.partId) {
-      return;
-    }
-
-    const state = String(currentContext?.plcStatus || "")
-      .trim()
-      .toUpperCase();
-    if (!["PENDING", "STARTED", "ENDED_OK", "ENDED_NG", "PLC_COMM_ERROR"].includes(state)) {
-      return;
-    }
-
-    const inferred = {
-      id: `${Date.now()}-inferred`,
-      label: "QR PASS",
-      tone: "border-emerald-500/75 bg-emerald-500/14",
-      textTone: "text-emerald-200",
-      partId: normalizePartId(currentContext.partId),
-      stationNo: String(selectedStation || "").trim().toUpperCase(),
-      decision: "ALLOW",
-      reason: "QR_VALIDATED",
-      message: "Restored from latest station state",
-      timestamp: currentContext.createdAt || new Date().toISOString(),
-    };
-
-    setQrSignal(inferred);
-    setQrFeed((prev) => (prev.length ? prev : [inferred]));
-
-    const machineKey = String(selectedMachineIdRef.current || "");
-    if (machineKey) {
-      try {
-        const current = JSON.parse(localStorage.getItem(OPERATOR_QR_STATE_STORAGE_KEY) || "{}");
-        current[machineKey] = inferred;
-        localStorage.setItem(OPERATOR_QR_STATE_STORAGE_KEY, JSON.stringify(current));
-      } catch {
-        // Ignore localStorage failures.
-      }
-    }
-  }, [currentContext?.partId, currentContext?.plcStatus, currentContext?.createdAt, selectedStation, qrSignal]);
-
-  const gaugeStyle = useMemo(
-    () => ({
-      background: `conic-gradient(var(--app-primary) ${progressPercent * 3.6}deg, color-mix(in srgb, var(--app-bg-dark), #ffffff 6%) 0deg)`,
-    }),
-    [progressPercent]
-  );
-
-  const handleRefresh = () => {
-    if (selectedMachineId) {
-      loadMachineTelemetry(selectedMachineId, false);
-    }
-  };
-
+  // ─────────────────────────────────────────────────────────────────────
+  //  RENDER
+  // ─────────────────────────────────────────────────────────────────────
   return (
-    <div className="space-y-6">
-      <GlobalPopup
-        popup={popup}
-        onClose={() => setPopup(null)}
+    <div style={{display:"flex",flexDirection:"column",gap:20,paddingBottom:32,animation:"ovFadeIn .3s ease"}}>
+      <GlobalPopup popup={popup} onClose={()=>setPopup(null)}
         onResetOperation={handleResetOperation}
-        autoCloseMs={3500}
-        criticalAutoCloseMs={9000}
-        showAcknowledge={false}
-      />
+        autoCloseMs={3500} criticalAutoCloseMs={9000} showAcknowledge={false}/>
 
-      <section className="industrial-card p-6 overflow-hidden relative">
-        <div className="absolute inset-0 pointer-events-none opacity-60 bg-[radial-gradient(circle_at_15%_20%,rgba(25,179,199,0.2),transparent_40%),radial-gradient(circle_at_80%_10%,rgba(215,91,91,0.18),transparent_40%)]" />
-        <div className="relative flex flex-wrap items-center justify-between gap-4">
-          <div>
-            {/* <p className="text-xs uppercase tracking-[0.2em] text-primary font-semibold">Live Station Monitor</p> */}
-            <h1 className="text-3xl font-bold text-text-main mt-1">
-              {selectedMachine?.machineName || "Station Not Selected"}
-            </h1>
-            <p className="text-sm text-text-muted mt-1">
-              Job: {selectedMachine?.lineName || "LINE"} | Station: {selectedStation || "-"}
-            </p>
+      {/* ── Page Header ───────────────────────────────────────────── */}
+      <div style={{background:C.bg("card"),border:`1px solid ${C.bdr()}`,
+        borderRadius:16,padding:"16px 20px",boxShadow:SH,overflow:"hidden"}}>
+        <div style={{height:3,background:`linear-gradient(90deg,${C.navy()},${C.steel()},${C.amber()})`,
+          margin:"-16px -20px 14px"}}/>
+
+        <div style={{display:"flex",alignItems:"flex-start",
+          justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
+          {/* Machine info */}
+          <div style={{display:"flex",alignItems:"center",gap:14}}>
+            <div style={{width:48,height:48,borderRadius:13,flexShrink:0,
+              background:`linear-gradient(135deg,${C.navy()},${C.steel(0.8)})`,
+              display:"flex",alignItems:"center",justifyContent:"center",
+              boxShadow:`0 4px 12px ${C.navy(0.35)}`}}>
+              <Factory size={22} color={C.linen()}/>
+            </div>
+            <div>
+              <h1 style={{fontSize:18,fontWeight:800,color:C.txt("pri"),
+                letterSpacing:"-0.02em",lineHeight:1.2}}>
+                {selectedMachine?.machineName||"Select a Machine"}
+              </h1>
+              <p style={{fontSize:12,color:C.txt("muted"),marginTop:3}}>
+                {selectedMachine?.lineName||"—"}
+                {selectedStation&&<> · Station <span style={{color:C.amber(),fontWeight:700}}>{selectedStation}</span></>}
+                {" · "}
+                <span style={{color:machineMode==="Running"?C.ok():machineMode==="Idle"?C.amber():C.idle()}}>
+                  {machineMode}
+                </span>
+                {" · "}{machineClock}
+              </p>
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="min-w-[240px]">
-              <label className="text-xs uppercase tracking-wide text-text-muted">Select Machine</label>
-              <select
-                value={selectedMachineId}
-                onChange={(event) => setSelectedMachineId(event.target.value)}
+          {/* Controls */}
+          <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+            {/* Machine selector */}
+            <div style={{minWidth:220}}>
+              <select value={selectedMachineId}
+                onChange={e=>setSelectedMachineId(e.target.value)}
                 disabled={loadingMachines}
-                className="mt-1.5 w-full rounded-xl border border-border bg-bg-dark px-3 py-2.5 text-sm text-text-main focus:border-primary focus:outline-none"
-              >
-                {machines.map((machine) => (
-                  <option key={machine.id} value={machine.id}>
-                    {machine.machineName} | {machine.operationNo}
+                style={{
+                  height:38,padding:"0 12px",width:"100%",
+                  background:C.bg("input"),border:`1px solid ${C.bdr()}`,
+                  borderRadius:9,fontSize:13,color:C.txt("pri"),
+                  outline:"none",fontFamily:"'DM Sans',sans-serif",
+                }}>
+                {machines.map(m=>(
+                  <option key={m.id} value={m.id}>
+                    {m.machineName} — {m.operationNo}
                   </option>
                 ))}
-                {machines.length === 0 && <option value="">No machine available</option>}
+                {machines.length===0&&<option value="">No machine available</option>}
               </select>
             </div>
 
-            <button
-              onClick={handleRefresh}
-              disabled={loadingStats || refreshing || !selectedMachineId}
-              className="inline-flex items-center gap-2 rounded-xl border border-border bg-bg-card px-3 py-2.5 text-sm text-text-main hover:border-primary disabled:opacity-60"
-            >
-              <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
-              Refresh
+            {/* Refresh */}
+            <button onClick={()=>selectedMachineId&&loadMachineTelemetry(selectedMachineId,false)}
+              disabled={loadingStats||refreshing||!selectedMachineId}
+              style={{
+                display:"inline-flex",alignItems:"center",gap:6,
+                height:38,padding:"0 14px",borderRadius:9,
+                fontSize:12,fontWeight:700,cursor:"pointer",
+                background:"transparent",border:`1px solid ${C.bdr()}`,
+                color:C.txt("sec"),transition:"all .15s",
+                opacity:loadingStats||!selectedMachineId?0.5:1,
+              }}>
+              <RefreshCw size={13} style={{animation:refreshing?"ovSpin .9s linear infinite":"none"}}/>
+              {refreshing?"Updating…":"Refresh"}
             </button>
           </div>
         </div>
-      </section>
+      </div>
 
-      {(loadingStats || loadingMachines) && (
-        <section className="industrial-card p-6 text-sm text-text-muted">Loading operator telemetry...</section>
+      {/* Loading */}
+      {(loadingStats||loadingMachines)&&(
+        <div style={{padding:"32px 24px",textAlign:"center",
+          background:C.bg("card"),border:`1px solid ${C.bdr()}`,borderRadius:14,
+          color:C.txt("muted"),fontSize:13}}>
+          <RefreshCw size={20} color={C.txt("muted")}
+            style={{margin:"0 auto 12px",animation:"ovSpin .9s linear infinite"}}/>
+          Loading station data…
+        </div>
       )}
 
-      {!loadingStats && (
+      {!loadingStats&&!loadingMachines&&(
         <>
-          <section className="grid grid-cols-1 xl:grid-cols-12 gap-6">
-            <div className="xl:col-span-3 industrial-card p-5">
-              <h2 className="text-sm font-semibold text-text-main flex items-center gap-2">
-                <Factory size={16} className="text-primary" />
-                Station Context
-              </h2>
-              <div className="mt-4 space-y-2 text-sm text-text-main">
-                <p>
-                  <span className="text-text-muted">Mode:</span> {machineMode}
-                </p>
-                <p>
-                  <span className="text-text-muted">Elapsed:</span> {machineClock}
-                </p>
-                <p>
-                  <span className="text-text-muted">Operator:</span> {user.username || "Operator 1"}
-                </p>
-                <p>
-                  <span className="text-text-muted">Status:</span> {currentContext?.plcStatus || "WAITING"}
-                </p>
-                <p className="flex items-center gap-2">
-                  <span className="text-text-muted">PLC:</span>
-                  <span className={`text-xs font-semibold ${plcConnected ? "text-emerald-300" : "text-rose-300"}`}>
-                    {plcConnected ? "CONNECTED" : "DISCONNECTED"}
-                  </span>
-                </p>
-                <p className="flex items-center gap-2">
-                  <span className="text-text-muted">Scanner:</span>
-                  <span
-                    className={`text-xs font-semibold ${
-                      !scannerConfigured ? "text-amber-300" : scannerConnected ? "text-emerald-300" : "text-rose-300"
-                    }`}
-                  >
-                    {!scannerConfigured ? "NOT CONFIGURED" : scannerConnected ? "CONNECTED" : "DISCONNECTED"}
-                  </span>
-                </p>
-                {scannerConfigured && (
-                  <>
-                    <p className="text-[11px] text-text-muted">
-                      Scanner: {scannerInfo?.scannerName || "-"} | {scannerInfo?.scannerIp || scannerHealth?.scannerIp || "-"}
-                    </p>
-                    <p className="text-[11px] text-text-muted">
-                      Connected at: {formatDateTime(scannerHealth?.connectedAt)}
-                    </p>
-                    <p className="text-[11px] text-text-muted">
-                      Last data: {formatDateTime(scannerHealth?.lastDataAt || scannerHealth?.lastSeenAt)}
-                    </p>
-                  </>
-                )}
-              </div>
+          {/* ── Row 1: Status + Gauge + Station Rules ─────────────── */}
+          <div style={{display:"grid",gridTemplateColumns:"280px 1fr 260px",gap:16,alignItems:"start"}}>
 
-              <div className="mt-4 rounded-xl border border-border bg-bg-dark/70 p-3">
-                <p className="text-[11px] uppercase text-text-muted">Last Scanned QR</p>
-                <p className="text-xs font-mono text-text-main mt-2 break-all">
-                  {currentContext?.partId || "--- WAITING FOR SCAN ---"}
-                </p>
-                <p className="text-[11px] text-text-muted mt-2">
-                  Updated: {formatDateTime(currentContext?.createdAt)}
-                </p>
-              </div>
+            {/* ── Left: Station Status ─────────────────────────────── */}
+            <div style={{display:"flex",flexDirection:"column",gap:12}}>
 
-              <div className={`mt-3 rounded-xl border p-3 ${qrSignal?.tone || "border-border bg-bg-dark/70"}`}>
-                <p className="text-[11px] uppercase text-text-muted">QR Decision</p>
-                <p className={`text-xl font-bold mt-1 ${qrSignal?.textTone || "text-text-main"}`}>
-                  {qrSignal?.label || "WAITING"}
-                </p>
-                <p className="text-[11px] text-text-muted mt-1">
-                  {qrSignal?.partId || "-"} {qrSignal?.stationNo ? `| ${qrSignal.stationNo}` : ""}
-                </p>
-                <p className="text-[11px] text-text-muted">
-                  {qrSignal?.reason || qrSignal?.message || "-"} {qrSignal?.timestamp ? `| ${formatDateTime(qrSignal.timestamp)}` : ""}
-                </p>
-              </div>
-
-              <div className={`mt-3 rounded-xl border p-3 ${operationSignal.tone}`}>
-                <p className="text-[11px] uppercase text-text-muted">Operation Decision</p>
-                <p className={`text-xl font-bold mt-1 ${operationSignal.textTone}`}>{operationSignal.label}</p>
-                <p className="text-[11px] text-text-muted mt-1">
-                  {currentContext?.partId || "-"} {selectedStation ? `| ${selectedStation}` : ""}
-                </p>
-                <p className="text-[11px] text-text-muted">
-                  {currentContext?.interlockReason || currentContext?.result || "-"}{" "}
-                  {currentContext?.createdAt ? `| ${formatDateTime(currentContext.createdAt)}` : ""}
-                </p>
-                {canQuickReset ? (
-                  <button
-                    onClick={() => {
-                      handleResetOperation(currentContext.partId, selectedStation).catch((error) => {
-                        mergePopupPayload({
-                          type: "ERROR",
-                          title: "Reset Failed",
-                          message: error.response?.data?.error || "Unable to reset operation",
-                          partId: currentContext.partId,
-                          stationNo: selectedStation,
-                        });
-                      });
-                    }}
-                    className="mt-3 w-full rounded-lg bg-red-600 py-2 text-xs font-bold uppercase tracking-wider text-white hover:bg-red-700"
-                  >
-                    Reset Operation
-                  </button>
-                ) : null}
-              </div>
-
-              <div className="mt-3 rounded-xl border border-border bg-bg-dark/70 p-3">
-                <p className="text-[11px] uppercase text-text-muted mb-2">Live QR Feed</p>
-                <div className="space-y-1 max-h-[84px] overflow-y-auto">
-                  {qrFeed.map((entry) => (
-                    <div key={entry.id} className="text-[11px] flex items-center justify-between gap-2">
-                      <span className={`${entry.textTone} font-bold`}>{entry.label}</span>
-                      <span className="font-mono text-text-main truncate">{entry.partId || "-"}</span>
-                      <span className="text-text-muted">{formatDateTime(entry.timestamp)}</span>
+              {/* Connection status */}
+              <Card title="Connections" icon={Wifi} accent={C.steel()}>
+                <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                  {/* PLC */}
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+                    padding:"9px 11px",borderRadius:9,
+                    background:plcConnected?C.ok(0.07):C.ng(0.07),
+                    border:`1px solid ${plcConnected?C.ok(0.22):C.ng(0.22)}`}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <ConnDot connected={plcConnected}/>
+                      <div>
+                        <p style={{fontSize:12,fontWeight:700,color:C.txt("pri")}}>PLC Controller</p>
+                        <p style={{fontSize:10,color:C.txt("muted"),fontFamily:"'DM Mono',monospace"}}>
+                          {plcHealth?.ip||"—"}
+                        </p>
+                      </div>
                     </div>
-                  ))}
-                  {qrFeed.length === 0 && <p className="text-[11px] text-text-muted">Waiting scanner response...</p>}
+                    <Badge variant={plcConnected?"ok":"ng"} label={plcConnected?"Online":"Offline"} pulse={plcConnected}/>
+                  </div>
+
+                  {/* Scanner */}
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+                    padding:"9px 11px",borderRadius:9,
+                    background:!scannerConfigured?C.idle(0.07):scannerConnected?C.ok(0.07):C.ng(0.07),
+                    border:`1px solid ${!scannerConfigured?C.bdr():scannerConnected?C.ok(0.22):C.ng(0.22)}`}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <ConnDot connected={scannerConnected}/>
+                      <div>
+                        <p style={{fontSize:12,fontWeight:700,color:C.txt("pri")}}>
+                          {scannerInfo?.scannerName||"Scanner"}
+                        </p>
+                        <p style={{fontSize:10,color:C.txt("muted"),fontFamily:"'DM Mono',monospace"}}>
+                          {scannerInfo?.scannerIp||scannerHealth?.scannerIp||"—"}
+                        </p>
+                      </div>
+                    </div>
+                    <Badge
+                      variant={!scannerConfigured?"idle":scannerConnected?"ok":"ng"}
+                      label={!scannerConfigured?"Not Set":scannerConnected?"Online":"Offline"}
+                      pulse={scannerConnected}
+                    />
+                  </div>
+
+                  {scannerConfigured&&(
+                    <div style={{fontSize:10,color:C.txt("muted"),padding:"0 2px"}}>
+                      <p>Connected: {fmtTime(scannerHealth?.connectedAt)}</p>
+                      <p>Last data: {fmtTime(scannerHealth?.lastDataAt||scannerHealth?.lastSeenAt)}</p>
+                    </div>
+                  )}
                 </div>
-              </div>
+              </Card>
+
+              {/* QR Decision */}
+              <Card title="QR Result" icon={Radio} accent={STATUS_MAP[qrSignal?.variant||"idle"]?.fg}>
+                <DecisionDisplay
+                  label="Last QR Scan"
+                  variant={qrSignal?.variant||"idle"}
+                  sub1={qrSignal?.partId||currentContext?.partId||"Waiting for scan…"}
+                  sub2={(qrSignal?.reason||qrSignal?.message||"")+(qrSignal?.timestamp?` · ${fmtTime(qrSignal.timestamp)}`:"") || fmtDT(currentContext?.createdAt)}
+                  accent
+                />
+              </Card>
+
+              {/* Operation Decision */}
+              <Card title="Operation Result" icon={Activity} accent={STATUS_MAP[opVariant]?.fg}>
+                <DecisionDisplay
+                  label="PLC Operation Status"
+                  variant={opVariant}
+                  sub1={currentContext?.partId||"—"}
+                  sub2={(currentContext?.interlockReason||currentContext?.result||"")+(currentContext?.createdAt?` · ${fmtTime(currentContext.createdAt)}`:"")}
+                  accent
+                />
+                {canQuickReset&&(
+                  <button onClick={()=>handleResetOperation(currentContext.partId,selectedStation).catch(e=>mergePopupPayload({type:"ERROR",title:"Reset Failed",message:e.response?.data?.error||"Unable to reset",partId:currentContext.partId,stationNo:selectedStation}))}
+                    style={{
+                      width:"100%",marginTop:12,height:38,
+                      background:C.ng(),color:"white",
+                      border:"none",borderRadius:9,
+                      fontSize:12,fontWeight:800,cursor:"pointer",
+                      display:"flex",alignItems:"center",justifyContent:"center",gap:6,
+                      boxShadow:`0 3px 10px ${C.ng(0.3)}`,transition:"filter .15s",
+                    }}
+                    onMouseEnter={e=>e.currentTarget.style.filter="brightness(1.08)"}
+                    onMouseLeave={e=>e.currentTarget.style.filter="none"}>
+                    <RefreshCw size={13}/> Reset Operation
+                  </button>
+                )}
+              </Card>
             </div>
 
-            <div className="xl:col-span-6 industrial-card p-5">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h2 className="text-sm font-semibold text-text-main flex items-center gap-2">
-                  <Gauge size={16} className="text-primary" />
-                  Production Gauge
-                </h2>
-                <span className="rounded-full border border-border px-2.5 py-1 text-xs text-text-muted">
-                  {producedCount}/{expectedCount} processed
-                </span>
-              </div>
-
-              <div className="mt-4 flex flex-col items-center">
-                <div className="h-52 w-52 rounded-full p-4" style={gaugeStyle}>
-                  <div className="h-full w-full rounded-full bg-bg-card border border-border flex flex-col items-center justify-center text-center">
-                    <p className="text-4xl font-bold text-text-main">{progressPercent}%</p>
-                    <p className="text-xs uppercase tracking-wide text-text-muted mt-1">Shift Progress</p>
-                    <p className="text-[11px] text-text-muted mt-2">
-                      Quality: <span className="text-accent font-semibold">{qualityPercent}%</span>
+            {/* ── Center: Production Gauge ──────────────────────────── */}
+            <Card title="Production Overview" icon={Gauge} accent={C.amber()}>
+              {/* Radial gauge */}
+              <div style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"8px 0 16px"}}>
+                <div style={{position:"relative",width:180,height:180}}>
+                  {/* SVG radial gauge */}
+                  <svg width={180} height={180} viewBox="0 0 180 180">
+                    <circle cx={90} cy={90} r={72} fill="none"
+                      stroke={C.bdr(0.3)} strokeWidth={14}/>
+                    <circle cx={90} cy={90} r={72} fill="none"
+                      stroke={qualityPct>=85?C.ok():qualityPct>=60?C.amber():C.ng()}
+                      strokeWidth={14} strokeLinecap="round"
+                      strokeDasharray={`${2*Math.PI*72}`}
+                      strokeDashoffset={`${2*Math.PI*72*(1-progressPct/100)}`}
+                      transform="rotate(-90 90 90)"
+                      style={{transition:"stroke-dashoffset .8s ease"}}/>
+                  </svg>
+                  <div style={{position:"absolute",inset:0,display:"flex",
+                    flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
+                    <p style={{fontSize:36,fontWeight:900,color:C.txt("pri"),
+                      fontFamily:"'DM Mono',monospace",lineHeight:1}}>{progressPct}%</p>
+                    <p style={{fontSize:10,color:C.txt("muted"),marginTop:4,
+                      textTransform:"uppercase",letterSpacing:"0.08em"}}>Shift Progress</p>
+                    <p style={{fontSize:12,fontWeight:700,color:C.steel(),marginTop:4}}>
+                      Quality {qualityPct}%
                     </p>
                   </div>
                 </div>
 
-                <div className="mt-5 grid grid-cols-2 gap-3 w-full max-w-md">
-                  <button className="rounded-xl border border-border bg-bg-dark py-2 text-sm font-semibold text-text-main hover:border-accent">
-                    OK ({qualitySummary.okCount || 0})
-                  </button>
-                  <button className="rounded-xl border border-border bg-bg-dark py-2 text-sm font-semibold text-text-main hover:border-danger">
-                    NG ({qualitySummary.ngCount || 0})
-                  </button>
+                {/* Progress bar */}
+                <div style={{width:"100%",maxWidth:360,marginTop:12}}>
+                  <div style={{display:"flex",justifyContent:"space-between",
+                    fontSize:11,color:C.txt("muted"),marginBottom:5}}>
+                    <span>Produced: {producedCount}</span>
+                    <span>Expected: {expectedCount}</span>
+                  </div>
+                  <div style={{height:8,borderRadius:99,
+                    background:C.bdr(0.2),overflow:"hidden"}}>
+                    <div style={{height:"100%",borderRadius:99,
+                      background:`linear-gradient(90deg,${C.ok()},${C.steel()})`,
+                      width:`${progressPct}%`,transition:"width .5s ease"}}/>
+                  </div>
                 </div>
               </div>
 
-              <div className="mt-5">
-                <div className="mb-2 flex items-center justify-between text-xs text-text-muted">
-                  <span>Produced: {producedCount}</span>
-                  <span>Expected: {expectedCount}</span>
-                </div>
-                <div className="h-2.5 w-full rounded-full border border-border bg-bg-dark">
-                  <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${progressPercent}%` }} />
-                </div>
-              </div>
-            </div>
-
-            <div className="xl:col-span-3 industrial-card p-5">
-              <div className="flex items-center justify-between gap-2">
-                <h2 className="text-sm font-semibold text-text-main flex items-center gap-2">
-                  <ShieldCheck size={16} className="text-primary" />
-                  Station Rules
-                </h2>
-              </div>
-
-              <div className="mt-4 space-y-2 text-sm">
-                <div className="rounded-lg border border-border bg-bg-dark/70 px-3 py-2 flex items-center justify-between">
-                  <span className="text-text-main">QR Validation</span>
-                  <span className={stationFeatureConfig.qr ? "text-accent" : "text-text-muted"}>
-                    {stationFeatureConfig.qr ? "Enabled" : "Disabled"}
-                  </span>
-                </div>
-                <div className="rounded-lg border border-border bg-bg-dark/70 px-3 py-2 flex items-center justify-between">
-                  <span className="text-text-main">Operation Rule</span>
-                  <span className={stationFeatureConfig.operation ? "text-accent" : "text-text-muted"}>
-                    {stationFeatureConfig.operation ? "Enabled" : "Disabled"}
-                  </span>
-                </div>
-                <div className="rounded-lg border border-border bg-bg-dark/70 px-3 py-2 flex items-center justify-between">
-                  <span className="text-text-main">Rejection Bin</span>
-                  <span className={stationFeatureConfig.rejectionBin ? "text-accent" : "text-text-muted"}>
-                    {stationFeatureConfig.rejectionBin ? "Enabled" : "Disabled"}
-                  </span>
-                </div>
-                <div className="rounded-lg border border-border bg-bg-dark/70 px-3 py-2 flex items-center justify-between">
-                  <span className="text-text-main">PLC Confirmation</span>
-                  <span className={stationFeatureConfig.plcConfirmation ? "text-accent" : "text-text-muted"}>
-                    {stationFeatureConfig.plcConfirmation ? "Enabled" : "Disabled"}
-                  </span>
-                </div>
-                <div className="rounded-lg border border-border bg-bg-dark/70 px-3 py-2 flex items-center justify-between">
-                  <span className="text-text-main">Manual OK/NG</span>
-                  <span className={stationFeatureConfig.manualResult ? "text-warning" : "text-text-muted"}>
-                    {stationFeatureConfig.manualResult ? "Enabled" : "Disabled"}
-                  </span>
-                </div>
-                <div className="rounded-lg border border-border bg-bg-dark/70 px-3 py-2 flex items-center justify-between">
-                  <span className="text-text-main">Final Packing Station</span>
-                  <span className={stationFeatureConfig.finalPacking ? "text-accent" : "text-text-muted"}>
-                    {stationFeatureConfig.finalPacking ? "Yes" : "No"}
-                  </span>
-                </div>
+              {/* OK / NG counters */}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:16}}>
+                {[
+                  {label:"Pass (OK)",    value:qualitySummary.okCount||0,          color:C.ok(),   bg:C.ok(0.08),   bd:C.ok(0.2)  },
+                  {label:"Fail (NG)",    value:qualitySummary.ngCount||0,           color:C.ng(),   bg:C.ng(0.08),   bd:C.ng(0.2)  },
+                  {label:"Interlocked",  value:qualitySummary.interlockedCount||0,  color:C.amber(),bg:C.amber(0.08),bd:C.amber(0.2)},
+                  {label:"In Progress",  value:qualitySummary.inProgressCount||0,  color:C.steel(),bg:C.steel(0.08),bd:C.steel(0.2)},
+                ].map((s,i)=>(
+                  <div key={i} style={{borderRadius:10,padding:"10px 8px",textAlign:"center",
+                    background:s.bg,border:`1px solid ${s.bd}`}}>
+                    <p style={{fontSize:20,fontWeight:800,color:s.color,
+                      fontFamily:"'DM Mono',monospace",lineHeight:1,marginBottom:4}}>
+                      {s.value}
+                    </p>
+                    <p style={{fontSize:9,fontWeight:700,color:C.txt("muted"),
+                      textTransform:"uppercase",letterSpacing:"0.07em"}}>{s.label}</p>
+                  </div>
+                ))}
               </div>
 
-              <div className="mt-4 rounded-xl border border-border bg-bg-dark/70 overflow-hidden">
-                <div className="px-3 py-2 border-b border-border text-xs uppercase text-text-muted font-semibold flex items-center gap-2">
-                  <AlertTriangle size={12} className="text-danger" />
-                  Rejection Summary
+              {/* Operator + station info */}
+              <div style={{background:C.bg("surf"),borderRadius:10,
+                border:`1px solid ${C.bdr()}`,padding:"10px 14px"}}>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:0}}>
+                  <InfoRow label="Operator" value={user.username||"Operator"}/>
+                  <InfoRow label="Status" value={currentContext?.plcStatus||"WAITING"}/>
+                  <InfoRow label="Last Part" value={currentContext?.partId} mono/>
+                  <InfoRow label="Updated" value={fmtTime(currentContext?.createdAt)}/>
                 </div>
-                <div className="max-h-[160px] overflow-y-auto">
-                  {stationFeatureConfig.rejectionBin && rejectionSummary.length === 0 && (
-                    <p className="px-3 py-3 text-xs text-text-muted">No rejections in latest events.</p>
-                  )}
-                  {stationFeatureConfig.rejectionBin &&
-                    rejectionSummary.map((entry) => (
-                      <div
-                        key={entry.reason}
-                        className="px-3 py-2 text-xs border-b last:border-b-0 border-border/60 flex items-center justify-between gap-2"
-                      >
-                        <span className="text-text-main truncate">{entry.reason}</span>
-                        <span className="text-danger font-semibold">{entry.count}</span>
+              </div>
+            </Card>
+
+            {/* ── Right: Station Rules ──────────────────────────────── */}
+            <div style={{display:"flex",flexDirection:"column",gap:12}}>
+              <Card title="Station Configuration" icon={ShieldCheck} accent={C.steel()}>
+                <div style={{display:"flex",flexDirection:"column",gap:0}}>
+                  <FeatureRow label="QR Validation"      enabled={stationFeatureConfig.qr}/>
+                  <FeatureRow label="Operation Rule"     enabled={stationFeatureConfig.operation}/>
+                  <FeatureRow label="Rejection Bin"      enabled={stationFeatureConfig.rejectionBin}/>
+                  <FeatureRow label="PLC Confirmation"   enabled={stationFeatureConfig.plcConfirmation}/>
+                  <FeatureRow label="Manual OK / NG"     enabled={stationFeatureConfig.manualResult}/>
+                  <FeatureRow label="Final Pack Station" enabled={stationFeatureConfig.finalPacking}/>
+                </div>
+              </Card>
+
+              {/* Rejection summary */}
+              <Card title="Rejection Summary" icon={AlertTriangle} accent={C.ng()}>
+                {!stationFeatureConfig.rejectionBin ? (
+                  <p style={{fontSize:12,color:C.txt("muted"),fontStyle:"italic"}}>
+                    Rejection Bin is disabled for this station.
+                  </p>
+                ) : rejectionSummary.length===0 ? (
+                  <div style={{display:"flex",alignItems:"center",gap:8,
+                    padding:"8px 10px",borderRadius:8,
+                    background:C.ok(0.07),border:`1px solid ${C.ok(0.2)}`}}>
+                    <CheckCircle2 size={14} color={C.ok()}/>
+                    <p style={{fontSize:12,color:C.ok(),fontWeight:600}}>
+                      No rejections in recent events
+                    </p>
+                  </div>
+                ) : (
+                  <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                    {rejectionSummary.map(e=>(
+                      <div key={e.reason} style={{
+                        display:"flex",alignItems:"center",justifyContent:"space-between",
+                        padding:"7px 10px",borderRadius:8,
+                        background:C.ng(0.07),border:`1px solid ${C.ng(0.18)}`}}>
+                        <span style={{fontSize:11,color:C.txt("pri"),
+                          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
+                          flex:1}}>{e.reason}</span>
+                        <span style={{
+                          fontSize:12,fontWeight:800,color:C.ng(),
+                          fontFamily:"'DM Mono',monospace",
+                          background:C.ng(0.12),padding:"2px 8px",
+                          borderRadius:5,border:`1px solid ${C.ng(0.25)}`,
+                          flexShrink:0,marginLeft:8,
+                        }}>{e.count}</span>
                       </div>
                     ))}
-                  {!stationFeatureConfig.rejectionBin && (
-                    <p className="px-3 py-3 text-xs text-text-muted">
-                      Rejection Bin is disabled for this station in Master Settings.
-                    </p>
-                  )}
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <div className="industrial-card p-5">
-              <h2 className="font-semibold text-text-main mb-3 flex items-center gap-2">
-                <Clock3 size={16} className="text-primary" />
-                Hourly Trend
-              </h2>
-              <div className="space-y-2">
-                {trendRows.length === 0 && <p className="text-sm text-text-muted">No trend data for this station.</p>}
-                {trendRows.map((row) => (
-                  <div
-                    key={row.hour}
-                    className="rounded-lg border border-border bg-bg-dark/70 px-3 py-2.5 flex items-center justify-between gap-3"
-                  >
-                    <div>
-                      <p className="text-sm font-semibold text-text-main">{row.hour}</p>
-                      <p className="text-xs text-text-muted">Total: {row.total}</p>
-                    </div>
-                    <div className="flex gap-2 text-xs font-semibold">
-                      <span className="rounded-md bg-accent/20 px-2 py-1 text-accent">OK {row.ok}</span>
-                      <span className="rounded-md bg-danger/20 px-2 py-1 text-danger">NG {row.ng}</span>
-                    </div>
                   </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="industrial-card p-5">
-              <h2 className="font-semibold text-text-main mb-3 flex items-center gap-2">
-                <Wrench size={16} className="text-primary" />
-                Recent Events
-              </h2>
-              <div className="space-y-2 max-h-[260px] overflow-y-auto">
-                {(stationStats?.recentParts || []).map((row) => (
-                  <div key={row.id} className="rounded-lg border border-border bg-bg-dark/70 px-3 py-2.5">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-sm font-mono text-text-main">{row.partId}</p>
-                      <span className="text-xs text-text-muted">{row.plcStatus || "-"}</span>
-                    </div>
-                    <p className="text-xs text-text-muted mt-1">
-                      Result: {row.result || "-"} | {formatDateTime(row.createdAt)}
-                    </p>
-                    {row.interlockReason && <p className="text-xs text-danger mt-1">Reason: {row.interlockReason}</p>}
-                  </div>
-                ))}
-                {(stationStats?.recentParts || []).length === 0 && (
-                  <p className="text-sm text-text-muted">No recent station events.</p>
                 )}
-              </div>
+              </Card>
             </div>
-          </section>
+          </div>
 
-          <section className="industrial-card p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-5 text-xs text-text-muted">
-                <button className="inline-flex items-center gap-1 hover:text-primary transition-colors">
-                  <CheckCircle2 size={14} />
-                  Change Job
-                </button>
-                <button className="inline-flex items-center gap-1 hover:text-danger transition-colors">
-                  <AlertTriangle size={14} />
-                  Reject Part
-                </button>
+          {/* ── Row 2: Hourly Trend + Recent Events ───────────────── */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+
+            {/* Hourly trend */}
+            <Card title="Hourly Production Trend" icon={BarChart2} accent={C.steel()}>
+              {trendRows.length===0 ? (
+                <p style={{fontSize:12,color:C.txt("muted")}}>No trend data for this station.</p>
+              ) : (
+                <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                  {trendRows.map(row=>{
+                    const okPct = row.total>0?Math.round((row.ok/row.total)*100):0;
+                    return (
+                      <div key={row.hour} style={{
+                        display:"flex",alignItems:"center",gap:12,
+                        padding:"9px 12px",borderRadius:9,
+                        background:C.bg("surf"),border:`1px solid ${C.bdr()}`,
+                      }}>
+                        <p style={{fontSize:12,fontWeight:700,color:C.txt("pri"),
+                          fontFamily:"'DM Mono',monospace",flexShrink:0,minWidth:48}}>
+                          {row.hour}
+                        </p>
+                        {/* Mini bar */}
+                        <div style={{flex:1,height:6,borderRadius:99,
+                          background:C.bdr(0.2),overflow:"hidden"}}>
+                          <div style={{height:"100%",borderRadius:99,
+                            background:C.ok(),width:`${okPct}%`,transition:"width .4s"}}/>
+                        </div>
+                        <div style={{display:"flex",gap:8,flexShrink:0}}>
+                          <span style={{fontSize:11,fontWeight:700,color:C.ok(),
+                            padding:"2px 7px",borderRadius:5,
+                            background:C.ok(0.1),border:`1px solid ${C.ok(0.25)}`}}>
+                            ✓ {row.ok}
+                          </span>
+                          <span style={{fontSize:11,fontWeight:700,color:C.ng(),
+                            padding:"2px 7px",borderRadius:5,
+                            background:C.ng(0.1),border:`1px solid ${C.ng(0.25)}`}}>
+                            ✗ {row.ng}
+                          </span>
+                          <span style={{fontSize:11,color:C.txt("muted")}}>
+                            / {row.total}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </Card>
+
+            {/* Recent events */}
+            <Card title="Recent Scan Events" icon={Wrench} accent={C.navy()}>
+              {(stationStats?.recentParts||[]).length===0 ? (
+                <p style={{fontSize:12,color:C.txt("muted")}}>No recent station events.</p>
+              ) : (
+                <div style={{display:"flex",flexDirection:"column",gap:7,
+                  maxHeight:320,overflowY:"auto"}}>
+                  {(stationStats?.recentParts||[]).map((row,i)=>{
+                    const res=String(row.result||"").toUpperCase();
+                    const variant=res==="OK"?"ok":res==="NG"?"ng":"idle";
+                    return (
+                      <div key={row.id||i} style={{
+                        padding:"10px 13px",borderRadius:9,
+                        background:C.bg("surf"),border:`1px solid ${C.bdr()}`,
+                        borderLeft:`3px solid ${STATUS_MAP[variant]?.fg||C.bdr()}`,
+                      }}>
+                        <div style={{display:"flex",alignItems:"center",
+                          justifyContent:"space-between",gap:8,marginBottom:4}}>
+                          <span style={{fontFamily:"'DM Mono',monospace",fontSize:11,
+                            fontWeight:700,color:C.txt("pri"),
+                            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                            {row.partId||"—"}
+                          </span>
+                          <Badge variant={variant} label={variant==="ok"?"Pass":variant==="ng"?"Fail":"—"}/>
+                        </div>
+                        <div style={{display:"flex",alignItems:"center",
+                          gap:12,fontSize:10,color:C.txt("muted")}}>
+                          <span>{row.plcStatus||"—"}</span>
+                          <span>{fmtTime(row.createdAt)}</span>
+                        </div>
+                        {row.interlockReason&&(
+                          <p style={{fontSize:10,color:C.ng(),marginTop:4,lineHeight:1.4}}>
+                            ⚠ {row.interlockReason}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </Card>
+          </div>
+
+          {/* ── Row 3: Live QR Feed ────────────────────────────────── */}
+          {qrFeed.length>0&&(
+            <Card title="Live QR Feed" icon={Radio} accent={C.steel()}>
+              <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                {qrFeed.map(entry=>(
+                  <div key={entry.id} style={{
+                    display:"flex",alignItems:"center",gap:12,
+                    padding:"9px 13px",borderRadius:9,
+                    background:STATUS_MAP[entry.variant]?.bg||C.bg("surf"),
+                    border:`1px solid ${STATUS_MAP[entry.variant]?.bd||C.bdr()}`,
+                  }}>
+                    <Badge variant={entry.variant} label={entry.label} pulse={entry.variant==="wip"}/>
+                    <span style={{fontFamily:"'DM Mono',monospace",fontSize:11,
+                      fontWeight:700,color:C.txt("pri"),flex:1,
+                      overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                      {entry.partId||"—"}
+                    </span>
+                    {entry.stationNo&&(
+                      <span style={{fontSize:10,color:C.txt("muted"),flexShrink:0}}>
+                        {entry.stationNo}
+                      </span>
+                    )}
+                    <span style={{fontSize:10,color:C.txt("muted"),
+                      fontFamily:"'DM Mono',monospace",flexShrink:0}}>
+                      {fmtTime(entry.timestamp)}
+                    </span>
+                  </div>
+                ))}
               </div>
-              <div className="flex gap-4 text-xs">
-                <span className="rounded-md bg-bg-dark border border-border px-2 py-1 text-text-main">
-                  Availability: {Math.max(0, 100 - (qualitySummary.interlockedCount || 0))}%
-                </span>
-                <span className="rounded-md bg-bg-dark border border-border px-2 py-1 text-text-main">
-                  Quality: {qualityPercent}%
-                </span>
-                <span className="rounded-md bg-bg-dark border border-border px-2 py-1 text-text-main">
-                  In Progress: {qualitySummary.inProgressCount || 0}
-                </span>
-              </div>
+            </Card>
+          )}
+
+          {/* ── Row 4: Bottom action bar ────────────────────────────── */}
+          <div style={{
+            display:"flex",alignItems:"center",justifyContent:"space-between",
+            flexWrap:"wrap",gap:12,
+            padding:"12px 16px",borderRadius:12,
+            background:C.bg("card"),border:`1px solid ${C.bdr()}`,
+            boxShadow:SH,
+          }}>
+            <div style={{display:"flex",alignItems:"center",gap:20,flexWrap:"wrap"}}>
+              <button style={{display:"inline-flex",alignItems:"center",gap:6,
+                fontSize:12,fontWeight:600,color:C.txt("sec"),
+                background:"none",border:"none",cursor:"pointer"}}>
+                <CheckCircle2 size={14} color={C.ok()}/> Change Job
+              </button>
+              <button style={{display:"inline-flex",alignItems:"center",gap:6,
+                fontSize:12,fontWeight:600,color:C.txt("sec"),
+                background:"none",border:"none",cursor:"pointer"}}>
+                <AlertTriangle size={14} color={C.ng()}/> Reject Part
+              </button>
             </div>
-          </section>
+            <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+              {[
+                {label:"Availability", value:`${Math.max(0,100-(qualitySummary.interlockedCount||0))}%`},
+                {label:"Quality",      value:`${qualityPct}%`},
+                {label:"In Progress",  value:qualitySummary.inProgressCount||0},
+              ].map((s,i)=>(
+                <div key={i} style={{
+                  padding:"5px 14px",borderRadius:8,
+                  background:C.bg("surf"),border:`1px solid ${C.bdr()}`,
+                  fontSize:11,color:C.txt("pri"),
+                  display:"flex",alignItems:"center",gap:6,
+                }}>
+                  <span style={{color:C.txt("muted")}}>{s.label}:</span>
+                  <span style={{fontWeight:700,fontFamily:"'DM Mono',monospace"}}>{s.value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
         </>
       )}
     </div>

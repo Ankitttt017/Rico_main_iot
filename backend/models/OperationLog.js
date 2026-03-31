@@ -10,7 +10,7 @@ const OperationLog = sequelize.define("OperationLog", {
   user_id: DataTypes.INTEGER,
   machine_id: DataTypes.INTEGER,
   plc_status: {
-    type: DataTypes.ENUM("PENDING", "STARTED", "ENDED_OK", "ENDED_NG", "INTERLOCKED", "PLC_COMM_ERROR", "RESET"),
+    type: DataTypes.ENUM("PENDING", "STARTED", "ENDED_OK", "ENDED_NG", "INTERLOCKED", "PLC_COMM_ERROR", "RESET", "RETRY"),
     defaultValue: "PENDING",
   },
   plc_start_time: DataTypes.DATE,

@@ -10,28 +10,31 @@ import {
   Search,
   ShieldAlert,
   XCircle,
+  ArrowDownCircle,
+  Activity,
+  Cpu,
+  Fingerprint,
+  ChevronRight,
+  Zap,
+  ShieldCheck,
+  Dna,
+  Workflow,
+  RefreshCw
 } from "lucide-react";
+import toast from "react-hot-toast";
 import { traceabilityApi } from "../api/services";
 
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:4000";
 
 function eventTypeClass(type) {
-  if (type === "SUCCESS") {
-    return "text-accent";
-  }
-  if (type === "ERROR") {
-    return "text-danger";
-  }
-  if (type === "WARNING") {
-    return "text-warning";
-  }
+  if (type === "SUCCESS") return "text-emerald-400";
+  if (type === "ERROR") return "text-red-400";
+  if (type === "WARNING") return "text-amber-400";
   return "text-primary";
 }
 
 function normalizeEventType(type, decision) {
-  if (type) {
-    return String(type).toUpperCase();
-  }
+  if (type) return String(type).toUpperCase();
   return decision === "ALLOW" ? "SUCCESS" : "WARNING";
 }
 
@@ -44,261 +47,270 @@ const Traceability = () => {
   const [feed, setFeed] = useState([]);
 
   useEffect(() => {
-    traceabilityApi
-      .operations()
-      .then((rows) => setOperations(rows))
-      .catch(() => {
-        setOperations([]);
-      });
+    traceabilityApi.operations().then((rows) => setOperations(rows)).catch(() => setOperations([]));
   }, []);
 
   useEffect(() => {
-    const socket = io(SOCKET_URL, {
-      path: "/socket.io/",
-      transports: ["websocket", "polling"],
-    });
-
+    const socket = io(SOCKET_URL, { path: "/socket.io/", transports: ["websocket", "polling"] });
     const pushFeed = (entry) => {
-      setFeed((prev) =>
-        [
-          {
-            id: `${Date.now()}-${Math.random()}`,
-            timestamp: new Date().toISOString(),
-            ...entry,
-          },
-          ...prev,
-        ].slice(0, 25)
-      );
+      setFeed((prev) => [{ id: `${Date.now()}-${Math.random()}`, timestamp: new Date().toISOString(), ...entry }, ...prev].slice(0, 25));
     };
-
     socket.on("scan_event", (payload = {}) => {
-      pushFeed({
-        type: normalizeEventType(payload.type, payload.decision),
-        message: payload.message || payload.reason || "Scan event",
-        partId: payload.partId || null,
-        stationNo: payload.stationNo || null,
-      });
+      pushFeed({ type: normalizeEventType(payload.type, payload.decision), message: payload.message || payload.reason || "Scan event", partId: payload.partId || null, stationNo: payload.stationNo || null });
     });
-
     socket.on("operator_popup", (payload = {}) => {
-      pushFeed({
-        type: normalizeEventType(payload.type),
-        message: payload.message || "Operation event",
-        partId: payload.partId || null,
-        stationNo: payload.stationNo || null,
-        machineName: payload.machineName || null,
-      });
+      pushFeed({ type: normalizeEventType(payload.type), message: payload.message || "Operation event", partId: payload.partId || null, stationNo: payload.stationNo || null, machineName: payload.machineName || null });
     });
-
-    return () => {
-      socket.disconnect();
-    };
+    return () => socket.disconnect();
   }, []);
 
   const partSummary = useMemo(() => traceData?.part || null, [traceData]);
-  const historyRows = useMemo(() => traceData?.history || [], [traceData]);
+  const historyRows = useMemo(() => (traceData?.history || []).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)), [traceData]);
   const reworkRows = useMemo(() => traceData?.reworkHistory || [], [traceData]);
 
   const handleSearch = async (event) => {
-    event.preventDefault();
+    if (event) event.preventDefault();
     const value = partId.trim();
-    if (!value) {
-      return;
-    }
+    if (!value) return;
     setLoading(true);
     setStatus({ type: "", message: "" });
     try {
       const response = await traceabilityApi.historyByPart(value);
       setTraceData(response);
-      setStatus({ type: "success", message: "Traceability loaded" });
+      toast.success("Part DNA Provenance Decrypted.");
     } catch (error) {
       setTraceData(null);
-      setStatus({ type: "error", message: error.response?.data?.error || "Part not found" });
-    } finally {
-      setLoading(false);
-    }
+      setStatus({ type: "error", message: error.response?.data?.error || "Trace failed: Identity not found in master ledger" });
+      toast.error("Trace Failure");
+    } finally { setLoading(false); }
   };
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6 rise-in">
-      <div className="industrial-card p-6 md:p-8">
-        <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Traceability Control</h1>
-        <p className="text-sm text-text-muted mt-1">
-          Search any part to view full station history, interlock reason, and rework record.
-        </p>
+    <div className="space-y-6 rise-in">
+      {/* Search Hero */}
+      <div className="industrial-card p-10 bg-[radial-gradient(ellipse_at_top_right,_var(--app-primary)_0%,_transparent_40%)] relative overflow-hidden ring-1 ring-primary/20 shadow-2xl shadow-primary/10">
+        <div className="absolute top-0 right-0 p-10 opacity-5 -translate-y-4 translate-x-4"><Dna size={120} /></div>
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-8 relative z-10">
+          <div className="flex items-center gap-6">
+            <div className="w-16 h-16 rounded-3xl bg-primary/10 border-2 border-primary/30 flex items-center justify-center text-primary shadow-lg shadow-primary/10">
+              <Fingerprint size={40} />
+            </div>
+            <div>
+              <h1 className="text-3xl font-black text-text-main tracking-tighter uppercase mb-1">Production Authenticator</h1>
+              <p className="text-text-muted text-sm font-medium tracking-tight">Decrypting part genealogy & station conformance matrices</p>
+            </div>
+          </div>
 
-        <form onSubmit={handleSearch} className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-6">
-          <div className="md:col-span-3 relative">
-            <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+          <form onSubmit={handleSearch} className="flex-1 max-w-2xl relative group">
+            <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none text-text-muted group-focus-within:text-primary transition-colors">
+              <Search size={22} />
+            </div>
             <input
               required
               value={partId}
               onChange={(e) => setPartId(e.target.value)}
-              className="w-full bg-bg-dark border border-border rounded-lg py-3 pl-10 pr-3 focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all font-mono"
-              placeholder="Enter Part ID"
+              className="w-full h-16 bg-bg-dark border-2 border-border rounded-2xl pl-14 pr-44 text-xl font-black font-mono text-primary placeholder:text-text-muted/20 outline-none focus:border-primary focus:ring-4 focus:ring-primary/10 transition-all shadow-inner"
+              placeholder="SCAN PART ID / SERIAL..."
             />
-          </div>
-          <button
-            disabled={loading}
-            className="bg-primary hover:brightness-110 disabled:opacity-60 text-bg-dark font-semibold rounded-lg py-3 px-4 flex items-center justify-center gap-2"
-            type="submit"
-          >
-            <ScanLine size={17} />
-            {loading ? "Loading..." : "Search"}
-          </button>
-        </form>
-
-        <p className="text-xs text-text-muted mt-3">
-          Manual scan/operation trigger is disabled here. Scan comes from scanner Ethernet IP mapping only.
-        </p>
+            <button disabled={loading} type="submit" className="absolute right-2 top-2 bottom-2 px-8 bg-primary text-on-strong font-black uppercase tracking-widest text-xs rounded-xl hover:brightness-110 active:scale-95 transition-all flex items-center gap-2 shadow-xl shadow-primary/20">
+              {loading ? <RefreshCw size={16} className="animate-spin" /> : <ScanLine size={16} />}
+              {loading ? "SEARCHING" : "AUTHENTICATE"}
+            </button>
+          </form>
+        </div>
       </div>
 
       {status.message && (
-        <div
-          className={`industrial-card p-4 border ${
-            status.type === "success" ? "border-accent/30 bg-accent/5" : "border-danger/30 bg-danger/5"
-          }`}
-        >
-          <p className={status.type === "success" ? "text-accent" : "text-danger"}>{status.message}</p>
+        <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-2xl flex items-center gap-4 animate-shake">
+          <ShieldAlert className="text-red-400" />
+          <p className="text-xs font-black text-red-400 uppercase tracking-widest">{status.message}</p>
         </div>
       )}
 
-      {partSummary && (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="industrial-card p-4">
-            <p className="text-xs text-text-muted uppercase">Part ID</p>
-            <p className="text-sm font-mono text-primary break-all">{partSummary.part_id}</p>
-          </div>
-          <div className="industrial-card p-4">
-            <p className="text-xs text-text-muted uppercase">Status</p>
-            <p className="text-sm font-semibold text-text-main">{partSummary.status || "-"}</p>
-          </div>
-          <div className="industrial-card p-4">
-            <p className="text-xs text-text-muted uppercase">Current Station</p>
-            <p className="text-sm font-semibold text-text-main">{partSummary.current_station || "-"}</p>
-          </div>
-          <div className="industrial-card p-4">
-            <p className="text-xs text-text-muted uppercase">Interlock</p>
-            <p className="text-sm font-semibold text-warning">{partSummary.interlock_reason || "NO"}</p>
-          </div>
-        </div>
-      )}
+      {/* Main Results Grid */}
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+        {/* Results Area */}
+        <div className="xl:col-span-8 space-y-6">
+          {partSummary ? (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {[
+                { label: "Identity Hash", val: partSummary.part_id, icon: Fingerprint, color: "text-primary" },
+                { label: "Ledger State", val: partSummary.status || "IDLE", icon: ShieldCheck, color: partSummary.status === 'OK' ? 'text-emerald-400' : 'text-red-400' },
+                { label: "Node Position", val: partSummary.current_station || "NOT STARTED", icon: Workflow, color: "text-text-main" },
+                { label: "Signal Bypass", val: partSummary.interlock_reason || "NOMINAL", icon: Zap, color: partSummary.interlock_reason ? 'text-amber-400' : 'text-emerald-400 opacity-40' }
+              ].map((k, i) => (
+                <div key={i} className="industrial-card p-5 group hover:border-primary/40 transition-all relative overflow-hidden">
+                  <div className="absolute right-0 top-0 p-3 opacity-5 group-hover:opacity-10 transition-opacity"><k.icon size={24} /></div>
+                  <p className="text-[9px] font-black text-text-muted uppercase tracking-widest mb-2">{k.label}</p>
+                  <p className={`text-sm font-black font-mono truncate ${k.color}`}>{k.val}</p>
+                </div>
+              ))}
+            </div>
+          ) : null}
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <div className="xl:col-span-2 industrial-card p-6">
-          <h3 className="text-sm uppercase tracking-[0.2em] text-text-muted flex items-center gap-2">
-            <History size={15} />
-            Part Operation History
-          </h3>
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-text-muted border-b border-border">
-                  <th className="py-2">Time</th>
-                  <th>Station</th>
-                  <th>PLC Status</th>
-                  <th>Result</th>
-                  <th>Interlock</th>
-                </tr>
-              </thead>
-              <tbody>
-                {historyRows.map((row) => (
-                  <tr key={row.id} className="border-b border-border/60">
-                    <td className="py-2">{new Date(row.createdAt).toLocaleString()}</td>
-                    <td>{row.station_no || row.operation_no || "-"}</td>
-                    <td>{row.plc_status || "-"}</td>
-                    <td className={row.result === "OK" ? "text-accent" : row.result === "NG" ? "text-danger" : "text-text-muted"}>
-                      {row.result || "-"}
-                    </td>
-                    <td className="text-warning">{row.interlock_reason || "-"}</td>
-                  </tr>
-                ))}
-                {historyRows.length === 0 && (
-                  <tr>
-                    <td colSpan={5} className="py-6 text-center text-text-muted">
-                      Search a part ID to view its trace history.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+          {/* Journey Timeline */}
+          <div className="industrial-card p-0 overflow-hidden min-h-[500px]">
+            <div className="px-6 py-5 border-b border-border bg-bg-dark/40 flex items-center justify-between">
+              <h2 className="text-xs font-black text-text-main uppercase tracking-[0.2em] flex items-center gap-3">
+                <History size={16} className="text-primary" /> Multi-Station Lifecycle
+              </h2>
+              {historyRows.length > 0 && (
+                <span className="text-[10px] font-black text-primary bg-primary/10 border border-primary/20 px-3 py-1 rounded-full uppercase tracking-widest">
+                  {historyRows.length} Nodes Recorded
+                </span>
+              )}
+            </div>
+
+            <div className="p-10">
+              {historyRows.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-20 text-text-muted/20">
+                  <ArrowDownCircle size={80} className="mb-6 opacity-5" />
+                  <p className="text-sm font-black uppercase tracking-[0.4em]">Awaiting Identity Decryption</p>
+                </div>
+              ) : (
+                <div className="relative border-l-4 border-border/40 ml-4 pl-12 space-y-12">
+                  {historyRows.map((row, index) => (
+                    <div key={row.id} className="relative rise-in" style={{ animationDelay: `${index * 80}ms` }}>
+                      {/* Connector Marker */}
+                      <div className={`absolute -left-[58px] top-0 w-8 h-8 rounded-full border-4 border-bg-dark flex items-center justify-center ${row.result === 'OK' ? 'bg-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.4)]' : 'bg-red-500 shadow-[0_0_15px_rgba(239,68,68,0.4)]'}`}>
+                        {row.result === 'OK' ? <CheckCircle size={14} className="text-on-strong" /> : <XCircle size={14} className="text-on-strong" />}
+                      </div>
+
+                      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 bg-bg-dark/20 p-6 rounded-3xl border border-border/40 hover:border-primary/20 transition-all group">
+                        <div className="lg:col-span-4">
+                          <div className="flex items-center gap-2 mb-2">
+                            <p className="text-[10px] font-black font-mono text-text-muted group-hover:text-primary transition-colors">{new Date(row.createdAt).toLocaleTimeString()} - {new Date(row.createdAt).toLocaleDateString()}</p>
+                          </div>
+                          <h4 className="text-xl font-black text-text-main uppercase tracking-tight">{row.station_no || row.operation_no}</h4>
+                          <p className="text-[10px] font-bold text-text-muted mt-1 opacity-60 uppercase">{row.machine_name || "Industrial Logic Machine"}</p>
+                        </div>
+
+                        <div className="lg:col-span-8 flex flex-col md:flex-row gap-4 items-center">
+                          <div className="flex-1 bg-bg-dark border border-border rounded-2xl p-4 w-full">
+                            <div className="flex justify-between items-center mb-2">
+                              <p className="text-[9px] font-black text-text-muted uppercase tracking-widest">PLC Context</p>
+                              <div className="flex items-center gap-1.5"><div className="w-1.5 h-1.5 rounded-full bg-primary" /><span className="text-[9px] font-black text-primary">COMM ACTIVE</span></div>
+                            </div>
+                            <p className="text-xs font-black text-text-main font-mono">STATUS REGISTER: <span className="text-emerald-400">{row.plc_status || "0x001"}</span></p>
+                          </div>
+
+                          <div className={`flex-1 rounded-2xl p-4 w-full border ${row.interlock_reason ? 'bg-amber-500/10 border-amber-500/20' : 'bg-emerald-500/10 border-emerald-500/20'}`}>
+                            <p className="text-[9px] font-black uppercase tracking-widest mb-2 opacity-60">Interlock Status</p>
+                            <div className="flex items-center gap-2">
+                              {row.interlock_reason ? (
+                                <p className="text-xs font-black text-amber-400 truncate uppercase">{row.interlock_reason}</p>
+                              ) : (
+                                <div className="flex items-center gap-2 text-emerald-400">
+                                  <ShieldCheck size={14} />
+                                  <span className="text-[10px] font-black uppercase tracking-widest">PROVANCE ACCREDITED</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* End of Path Decoration */}
+                  <div className="absolute -left-[54px] -bottom-1 w-6 h-6 rounded-full bg-border/20 border-2 border-border/40 flex items-center justify-center">
+                    <ChevronRight size={12} className="rotate-90 text-text-muted" />
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
           {reworkRows.length > 0 && (
-            <div className="mt-5 p-4 rounded-lg border border-warning/20 bg-warning/5">
-              <p className="text-sm text-warning font-semibold flex items-center gap-2">
-                <ShieldAlert size={16} />
-                Rework Records
-              </p>
-              <div className="mt-2 space-y-1">
+            <div className="industrial-card p-6 border-l-8 border-l-amber-500 bg-amber-500/5 ring-1 ring-amber-500/20 animate-pulse-slow">
+              <div className="flex items-center gap-4 mb-6">
+                <div className="w-12 h-12 rounded-xl bg-amber-500/20 flex items-center justify-center text-amber-400 shadow-lg shadow-amber-500/10">
+                  <History size={24} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-text-main uppercase tracking-tight">Divergent Path (Rework Chain)</h3>
+                  <p className="text-xs text-amber-500 font-bold uppercase tracking-widest">Non-standard Lifecycle Event Detected</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {reworkRows.map((row) => (
-                  <p key={row.id} className="text-xs text-text-main">
-                    {row.from_station || "-"} to {row.to_station || "-"} | {row.reason || "Manual rework"} |{" "}
-                    {new Date(row.createdAt).toLocaleString()}
-                  </p>
+                  <div key={row.id} className="bg-bg-dark border border-amber-500/20 p-4 rounded-2xl group hover:border-amber-500/40 transition-all">
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="text-[9px] font-black bg-amber-500/10 text-amber-400 px-2 py-1 rounded uppercase">{row.from_station}</span>
+                      <ChevronRight size={12} className="text-amber-500/40" />
+                      <span className="text-[9px] font-black bg-emerald-500/10 text-emerald-400 px-2 py-1 rounded uppercase">{row.to_station}</span>
+                    </div>
+                    <p className="text-sm font-black text-text-main group-hover:text-amber-400 transition-colors uppercase leading-tight mb-2">{row.reason || "Manual Intervention Override"}</p>
+                    <p className="text-[9px] font-black text-text-muted opacity-60 uppercase">{new Date(row.createdAt).toLocaleString()}</p>
+                  </div>
                 ))}
               </div>
             </div>
           )}
         </div>
 
-        <div className="space-y-6">
-          <div className="industrial-card p-5">
-            <h2 className="font-bold text-text-main mb-3 flex items-center gap-2">
-              <Route size={16} className="text-primary" />
-              Configured Sequence
-            </h2>
-            <div className="space-y-2 max-h-[260px] overflow-y-auto">
+        {/* Right Sidebar */}
+        <div className="xl:col-span-4 space-y-6">
+          {/* Standard Logic Bridge */}
+          <div className="industrial-card p-0 overflow-hidden shadow-xl">
+            <div className="px-6 py-4 border-b border-border bg-bg-dark/40 flex items-center gap-3">
+              <Workflow size={16} className="text-primary" />
+              <p className="text-xs font-black text-text-main uppercase tracking-[0.2em]">Logic Sequence Map</p>
+            </div>
+            <div className="p-4 space-y-2 max-h-[400px] overflow-y-auto scrollbar-thin">
               {operations.map((row) => (
-                <div key={row.machineId} className="p-3 rounded-lg bg-bg-dark border border-border">
-                  <p className="text-xs text-text-muted">SEQ {row.sequenceNo}</p>
-                  <p className="text-sm text-text-main font-semibold">{row.machineName}</p>
-                  <p className="text-xs font-mono text-primary mt-1">
-                    {row.operationNo || row.stationNo || "-"} | {row.lineName || "-"}
-                  </p>
-                  <p className="text-xs font-mono text-text-muted mt-1">
-                    {row.plcIp || "-"}
-                    {row.plcPort ? `:${row.plcPort}` : ""} | {row.plcProtocol || "TCP_TEXT"}
-                  </p>
+                <div key={row.id || row.machineId} className="group p-4 rounded-2xl bg-bg-dark border border-border hover:border-primary/40 hover:bg-primary/5 transition-all flex items-center gap-4">
+                  <div className="w-10 h-10 rounded-xl bg-bg-card border-2 border-border flex items-center justify-center text-xs font-black text-text-muted group-hover:text-primary group-hover:border-primary/20 transition-all shadow-inner">
+                    {String(row.sequenceNo).padStart(2, '0')}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-black text-text-main leading-none truncate mb-1 uppercase tracking-tight group-hover:text-primary transition-colors">{row.machineName}</p>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[9px] font-bold text-text-muted/60 uppercase group-hover:text-text-muted transition-colors">{row.operationNo}</span>
+                      <div className="w-1 h-1 rounded-full bg-border" />
+                      <span className="text-[9px] font-bold text-primary/40 uppercase group-hover:text-primary transition-colors">{row.lineName || "L-MAIN"}</span>
+                    </div>
+                  </div>
+                  <ChevronRight size={14} className="text-text-muted opacity-0 group-hover:opacity-100 transition-all -translate-x-2 group-hover:translate-x-0" />
                 </div>
               ))}
-              {operations.length === 0 && <p className="text-sm text-text-muted">No station sequence configured.</p>}
             </div>
           </div>
 
-          <div className="industrial-card p-5">
-            <h2 className="font-bold text-text-main mb-3 flex items-center gap-2">
-              <Clock3 size={16} className="text-primary" />
-              Live Scan Feed
-            </h2>
-            <div className="space-y-2 max-h-[320px] overflow-y-auto">
+          {/* Neural Event Ticker */}
+          <div className="industrial-card p-0 overflow-hidden shadow-2xl border-t-4 border-t-emerald-500/40">
+            <div className="px-6 py-4 border-b border-border bg-bg-dark/40 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Activity size={16} className="text-emerald-400" />
+                <p className="text-xs font-black text-text-main uppercase tracking-[0.2em]">Neural Interlock Ticker</p>
+              </div>
+              <div className="flex items-center gap-1.5"><div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /><span className="text-[8px] font-black text-emerald-400 uppercase tracking-widest">LINK ACTIVE</span></div>
+            </div>
+            <div className="p-4 space-y-3 max-h-[400px] overflow-y-auto scrollbar-thin">
               {feed.map((event) => (
-                <div key={event.id} className="p-3 rounded-lg bg-bg-dark border border-border">
-                  <div className="flex items-center gap-2">
-                    {event.type === "SUCCESS" ? (
-                      <CheckCircle size={14} className="text-accent" />
-                    ) : event.type === "ERROR" ? (
-                      <XCircle size={14} className="text-danger" />
-                    ) : event.type === "WARNING" ? (
-                      <AlertTriangle size={14} className="text-warning" />
-                    ) : (
-                      <Clock3 size={14} className="text-primary" />
-                    )}
-                    <span className={`text-xs font-bold ${eventTypeClass(event.type)}`}>{event.type}</span>
+                <div key={event.id} className="p-4 rounded-2xl bg-bg-card/40 border-l-4 border-border hover:bg-bg-dark/40 transition-all">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <div className={`w-2 h-2 rounded-full ${event.type === 'SUCCESS' ? 'bg-emerald-400 shadow-[0_0_8px_#10b981]' : (event.type === 'ERROR' ? 'bg-red-400 shadow-[0_0_8px_#ef4444]' : 'bg-amber-400 shadow-[0_0_8px_#f59e0b]')}`} />
+                      <span className={`text-[10px] font-black uppercase tracking-widest ${eventTypeClass(event.type)}`}>{event.type}</span>
+                    </div>
+                    <span className="text-[8px] text-text-muted font-mono bg-bg-dark px-1.5 py-0.5 rounded border border-border">{new Date(event.timestamp).toLocaleTimeString()}</span>
                   </div>
-                  <p className="text-sm text-text-main mt-1">{event.message}</p>
-                  <p className="text-xs text-text-muted mt-1">
-                    {event.partId ? `Part: ${event.partId}` : ""}
-                    {event.stationNo ? ` | Station: ${event.stationNo}` : ""}
-                    {event.machineName ? ` | ${event.machineName}` : ""}
-                  </p>
+                  <p className="text-xs font-bold text-text-main leading-relaxed mb-2 uppercase tracking-tight">{event.message}</p>
+                  <p className="text-[9px] font-black text-primary font-mono bg-primary/5 px-2 py-1 rounded inline-block">{event.partId || "Industrial Proxy"}</p>
                 </div>
               ))}
-              {feed.length === 0 && <p className="text-sm text-text-muted">Waiting for live scan events.</p>}
+              {feed.length === 0 && (
+                <div className="text-center py-20 opacity-20 flex flex-col items-center">
+                  <Clock3 size={40} className="mb-4" />
+                  <p className="text-[10px] font-black uppercase tracking-[0.3em]">Awaiting Stream Hydration...</p>
+                </div>
+              )}
             </div>
           </div>
         </div>
       </div>
+
     </div>
   );
 };

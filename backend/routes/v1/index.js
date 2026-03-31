@@ -10,6 +10,7 @@ const shiftRoutes = require("./shiftRoutes");
 const stationSettingsRoutes = require("./stationSettingsRoutes");
 const plcConfigRoutes = require("./plcConfigRoutes");
 const roleAccessSettingsRoutes = require("./roleAccessSettingsRoutes");
+const partRoutes = require("./partRoutes"); // UPGRADE COMPLETE — Part Journey
 
 const router = express.Router();
 
@@ -22,6 +23,7 @@ router.use("/shifts", shiftRoutes);
 router.use("/station-settings", stationSettingsRoutes);
 router.use("/role-access-settings", roleAccessSettingsRoutes);
 router.use("/plc-config", plcConfigRoutes);
+router.use("/parts", partRoutes); // GET /api/parts/:partId/journey
 router.use(traceabilityRoutes);
 router.use(dashboardRoutes);
 

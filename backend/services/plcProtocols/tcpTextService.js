@@ -9,10 +9,26 @@ function normalizeMessage(raw) {
   return String(raw || "").trim().replace(/\r/g, "");
 }
 
+const ACK_SUCCESS_LIST = ["ACK", "OK", "READY", "0", "ACK_START", "ACK_END_OK"];
+
 function parseAck(message) {
-  const normalized = normalizeMessage(message);
-  const [type, partId] = normalized.split("|");
-  return { type, partId };
+  const normalized = String(message || "").trim().toUpperCase();
+  if (!normalized) return { type: "NACK", partId: null };
+
+  // Support both "TYPE|PART_ID" and simple "TYPE"
+  const tokens = normalized.split(/[|,:;]/);
+  const typeToken = tokens[0].trim();
+  const partIdToken = tokens.length > 1 ? tokens[1].trim() : null;
+
+  // Map simple successes to standard types if needed, or return as is
+  let type = typeToken;
+  if (ACK_SUCCESS_LIST.includes(typeToken)) {
+    // If it's a generic success but we need a specific type, we'll handle it in the caller
+  } else if (typeToken.includes("ERR") || typeToken.includes("FAIL")) {
+    type = "NACK";
+  }
+
+  return { type, partId: partIdToken, raw: normalized };
 }
 
 function waitForMatchingAck(socket, partId, acceptedTypes, timeoutMs) {
@@ -32,15 +48,19 @@ function waitForMatchingAck(socket, partId, acceptedTypes, timeoutMs) {
 
       const onData = (data) => {
         buffer += data.toString();
-        const lines = buffer.split("\n");
+        const lines = buffer.split(/\r?\n/);
         buffer = lines.pop() || "";
 
         for (const line of lines) {
           const ack = parseAck(line);
-          if (ack.partId !== partId) {
-            continue;
-          }
-          if (acceptedTypes.includes(ack.type)) {
+          const typeMatch = acceptedTypes.includes(ack.type) || 
+                            (acceptedTypes.includes("ACK_START") && ACK_SUCCESS_LIST.includes(ack.type));
+          
+          // Flexible Matching: If PLC echoes PartID, it must match. 
+          // If PLC sends simple ACK (no PartID), we accept it.
+          const partIdMatch = !ack.partId || ack.partId === partId;
+
+          if (typeMatch && partIdMatch) {
             cleanup();
             resolve(ack);
             return;

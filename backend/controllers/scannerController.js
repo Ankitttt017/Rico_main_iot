@@ -2,7 +2,7 @@ const { Sequelize } = require("sequelize");
 const Scanner = require("../models/Scanner");
 const Machine = require("../models/Machine");
 const { normalizeIp } = require("../utils/networkAddress");
-const { listScannerConnectionSnapshots, probeScannerEndpoint } = require("../services/scannerConnectionService");
+const scannerService = require("../services/scannerConnectionService");
 
 function toInt(value) {
   if (value === undefined || value === null || value === "") {
@@ -100,7 +100,7 @@ exports.listScannerConnections = async (_req, res) => {
   try {
     const [scanners, connectionRows] = await Promise.all([
       Scanner.findAll({ order: [["id", "ASC"]] }),
-      listScannerConnectionSnapshots(),
+      scannerService.listScannerConnectionSnapshots(),
     ]);
 
     const connectionMap = new Map(
@@ -149,7 +149,7 @@ exports.testScannerConnection = async (req, res) => {
       return res.status(404).json({ error: "Scanner not found" });
     }
 
-    const result = await probeScannerEndpoint({
+    const result = await scannerService.probeScannerEndpoint({
       ip: scanner.scanner_ip,
       port: scanner.scanner_port,
     });

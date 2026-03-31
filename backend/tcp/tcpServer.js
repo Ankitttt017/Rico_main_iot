@@ -8,11 +8,7 @@ const { saveScan } = require("../services/scanService");
 const { executePlcHandshake } = require("../services/plcCommunicationService");
 const { emitRealtime } = require("../services/realtimeService");
 const { markScannerHeartbeat } = require("../services/scannerHealthService");
-const {
-  markScannerConnected,
-  markScannerData,
-  markScannerDisconnected,
-} = require("../services/scannerConnectionService");
+const scannerService = require("../services/scannerConnectionService");
 const { packPart, createSessionIfMissing } = require("../services/packingService");
 const { tryAcquireMachineLock, clearMachineLock } = require("../services/machineLockService");
 const {
@@ -781,34 +777,63 @@ const server = net.createServer((socket) => {
   };
 
   console.log("Scanner Connected:", scannerIp);
-  markScannerConnected({ scannerIp });
+  scannerService.markScannerConnected({ scannerIp });
   resolveScannerContext().catch((error) => {
     console.error("Scanner context resolve failed:", error.message);
   });
   markHeartbeat();
 
   socket.on("data", (buffer) => {
-    markHeartbeat();
-    markScannerData({ scannerIp });
+    try {
+      markHeartbeat();
+      scannerService.markScannerData({ scannerIp });
 
-    inboundBuffer += String(buffer.toString() || "");
-    if (inboundBuffer.length > SOCKET_BUFFER_MAX_CHARS) {
-      inboundBuffer = inboundBuffer.slice(-SOCKET_BUFFER_MAX_CHARS);
-    }
+      inboundBuffer += String(buffer.toString() || "");
+      
+      // Production Rule: PAYLOAD_OVERFLOW protection
+      if (inboundBuffer.length > SOCKET_BUFFER_MAX_CHARS) {
+        console.warn(`[TCP] Payload overflow from ${scannerIp}. Flushing buffer.`);
+        inboundBuffer = "";
+        safeSocketWrite("BLOCK\n");
+        return;
+      }
 
-    const segments = inboundBuffer.split(/\r\n|\n|\r/);
-    inboundBuffer = segments.pop() || "";
-    for (const segment of segments) {
-      queueMessage(segment);
+      const segments = inboundBuffer.split(/\r\n|\n|\r/);
+      // Keep the last segment in buffer if it doesn't end with a delimiter
+      inboundBuffer = segments.pop() || "";
+      
+      for (const segment of segments) {
+        const trimmed = segment.trim();
+        if (trimmed) {
+          queueMessage(trimmed);
+        }
+      }
+      
+      if (inboundBuffer) {
+        scheduleFlush();
+      }
+    } catch (error) {
+      console.error(`[TCP] Critical error in data handler for ${scannerIp}:`, error.message);
+      safeSocketWrite("BLOCK\n");
     }
-    scheduleFlush();
+  });
+
+  socket.on("error", (error) => {
+    if (error.code !== "ECONNRESET") {
+      console.error(`[TCP] Socket error for ${scannerIp}:`, error.message);
+    }
+    disconnectedHandled = true;
+  });
+
+  socket.on("end", () => {
+    disconnectedHandled = true;
   });
 
   socket.on("close", () => {
     clearFlushTimer();
     if (!disconnectedHandled) {
       disconnectedHandled = true;
-      markScannerDisconnected({ scannerIp });
+      scannerService.markScannerDisconnected({ scannerIp });
     }
   });
 
@@ -817,7 +842,7 @@ const server = net.createServer((socket) => {
     clearFlushTimer();
     if (!disconnectedHandled) {
       disconnectedHandled = true;
-      markScannerDisconnected({ scannerIp });
+      scannerService.markScannerDisconnected({ scannerIp });
     }
   });
 });

@@ -1,271 +1,89 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Database, Download, Edit, Plus, RefreshCw, Save, Search, Settings, Trash2, X } from "lucide-react";
+import {
+  Cpu, Plus, Save, Trash2, Edit, RefreshCw, Search,
+  X, Network, Terminal, Activity, Layers, Settings,
+  Layout, Database, ChevronRight, Info, AlertTriangle, Eye
+} from "lucide-react";
+import toast from "react-hot-toast";
+import ConfirmModal from "../components/ConfirmModal";
 import { machineApi, plcConfigApi } from "../api/services";
 import {
-  MACHINE_FORM_FIELD_CONFIG,
   MACHINE_MODBUS_TUNING_FIELD_CONFIG,
   MACHINE_REGISTER_ROLE_FIELDS,
-  MACHINE_TABLE_COLUMNS,
+  formatMachineLabel,
 } from "../utils/machineFields";
 
-const SLMP_DEVICE_OPTIONS = ["D", "M", "X", "Y", "W", "L", "F", "V", "B", "R"];
-const SLMP_SIGNAL_KEY_BY_ROLE = {
-  startRegister: "TRIGGER",
-  statusRegister: "STATUS",
-  stationRegister: "STATION_HASH",
-  resetRegister: "RESET",
-  partRegister: "PART_ID_HASH",
-};
-const REGISTER_LABEL_BY_ROLE = {
-  startRegister: "Trigger Register",
-  statusRegister: "Interlock Register",
-  stationRegister: "Complete Register",
-  resetRegister: "Reset Register",
-  partRegister: "Part Register",
-};
-const MACHINE_REGISTER_FALLBACKS = {
-  startRegister: "plcStartRegister",
-  statusRegister: "plcStatusRegister",
-  stationRegister: "plcStationRegister",
-  resetRegister: "plcResetRegister",
-  partRegister: "plcPartRegister",
-};
-
+/* ─── helpers ─────────────────────────────────────────────── */
+function toFormValue(v, fallback = "") {
+  if (v === null || v === undefined) return fallback;
+  return String(v);
+}
+function toNullableNumber(v) {
+  if (v === "" || v === null || v === undefined) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+function toNumberWithDefault(v, fallback) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
 function normalizeProtocol(value, fallback = "TCP_TEXT") {
-  const normalized = String(value || "").trim().toUpperCase();
-  if (!normalized) {
-    return fallback;
-  }
-  if (normalized === "MODBUS") {
-    return "MODBUS_TCP";
-  }
-  if (["TCP", "TEXT"].includes(normalized)) {
-    return "TCP_TEXT";
-  }
-  return normalized;
+  const n = String(value || "").trim().toUpperCase();
+  if (!n) return fallback;
+  if (n === "MODBUS") return "MODBUS_TCP";
+  if (["TCP", "TEXT"].includes(n)) return "TCP_TEXT";
+  return n;
 }
-
-function normalizeRangeProtocol(value) {
-  return normalizeProtocol(value, "MODBUS_TCP");
-}
-
 function createEmptyForm() {
   return {
-    machineName: "",
-    lineName: "",
-    sequenceNo: "",
-    operationNo: "",
-    dailyTargetQty: "0",
-    plcIp: "",
-    plcPort: "",
-    plcProtocol: "TCP_TEXT",
-    plcRangeId: "",
-    plcSlmpDevice: "D",
+    machineName: "", lineName: "", sequenceNo: "", operationNo: "",
+    dailyTargetQty: "0", plcIp: "", plcPort: "", plcProtocol: "TCP_TEXT",
+    plcRangeId: "", plcSlmpDevice: "D", status: "ACTIVE",
     plcConfig: {
-      rangeId: "",
-      startRegister: "",
-      statusRegister: "",
-      partRegister: "",
-      stationRegister: "",
-      resetRegister: "",
-      startValue: "1",
-      startedValue: "2",
-      endOkValue: "3",
-      endNgValue: "4",
-      blockValue: "2",
+      rangeId: "", startRegister: "", statusRegister: "", partRegister: "",
+      stationRegister: "", resetRegister: "",
+      startValue: "1", startedValue: "2", endOkValue: "3", endNgValue: "4", blockValue: "2",
     },
-    plcSignalMap: "",
-    status: "ACTIVE",
+    // New: registers to read live values
+    readRegisters: {
+      temperature: "",   // user-defined register for temperature
+    },
   };
 }
-
-function toFormValue(value, fallback = "") {
-  if (value === null || value === undefined) {
-    return fallback;
-  }
-  return String(value);
-}
-
-function toNullableNumber(value) {
-  if (value === "" || value === null || value === undefined) {
-    return null;
-  }
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : null;
-}
-
-function toNumberWithDefault(value, fallback) {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : fallback;
-}
-
-function parseSignalMapInput(value) {
-  const text = String(value || "").trim();
-  if (!text) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(text);
-    if (Array.isArray(parsed) || (parsed && typeof parsed === "object")) {
-      return parsed;
-    }
-    return null;
-  } catch (_error) {
-    return null;
-  }
-}
-
-function normalizeUpper(value) {
-  return String(value || "").trim().toUpperCase();
-}
-
-function resolveSignalMapEntry(signalMap, signalKey) {
-  if (!signalMap || !signalKey) {
-    return null;
-  }
-  const target = normalizeUpper(signalKey);
-  if (Array.isArray(signalMap)) {
-    return (
-      signalMap.find((entry) => normalizeUpper(entry?.key || entry?.signalKey) === target) || null
-    );
-  }
-  if (typeof signalMap === "object") {
-    const direct = signalMap[signalKey] ?? signalMap[target];
-    if (direct && typeof direct === "object") {
-      return direct;
-    }
-    const matchedKey = Object.keys(signalMap).find((key) => normalizeUpper(key) === target);
-    if (matchedKey) {
-      const candidate = signalMap[matchedKey];
-      if (candidate && typeof candidate === "object") {
-        return candidate;
-      }
-    }
-  }
-  return null;
-}
-
-function resolveSlmpDeviceForSignal(signalMap, signalKey, fallbackDevice) {
-  const entry = resolveSignalMapEntry(signalMap, signalKey);
-  const candidate = entry?.device ?? entry?.deviceCode;
-  return normalizeUpper(candidate) || fallbackDevice;
-}
-
-function formatSlmpAddress(device, register) {
-  return `${device}${register}`;
-}
-
-function getMachineRegisterValue(machine, roleKey) {
-  if (!machine) {
-    return null;
-  }
-  const config = machine.plcConfig || {};
-  if (config[roleKey] !== undefined && config[roleKey] !== null && config[roleKey] !== "") {
-    return toNullableNumber(config[roleKey]);
-  }
-  const fallbackKey = MACHINE_REGISTER_FALLBACKS[roleKey];
-  return fallbackKey ? toNullableNumber(machine[fallbackKey]) : null;
-}
-
-function buildDefaultSlmpSignalMap(deviceCode, config = {}) {
-  const device = String(deviceCode || "D").trim().toUpperCase() || "D";
-  const entries = [
-    {
-      key: "TRIGGER",
-      label: "START_CMD",
-      register: toNullableNumber(config.startRegister),
-      direction: "PC -> PLC",
-      writable: true,
-      device,
-    },
-    {
-      key: "STATUS",
-      label: "STATUS",
-      register: toNullableNumber(config.statusRegister),
-      direction: "PLC -> PC",
-      writable: false,
-      device,
-    },
-    {
-      key: "PART_ID_HASH",
-      label: "PART_ID_HASH",
-      register: toNullableNumber(config.partRegister),
-      direction: "PC -> PLC",
-      writable: true,
-      device,
-    },
-    {
-      key: "RESET",
-      label: "RESET_CMD",
-      register: toNullableNumber(config.resetRegister),
-      direction: "PC -> PLC",
-      writable: true,
-      device,
-    },
-    {
-      key: "STATION_HASH",
-      label: "STATION_HASH",
-      register: toNullableNumber(config.stationRegister),
-      direction: "PC -> PLC",
-      writable: true,
-      device,
-    },
-  ];
-
-  return JSON.stringify(entries, null, 2);
-}
-
-function clearRangeAssignments(config = {}) {
+function buildFormFromMachine(m) {
+  const cfg = m.plcConfig || {};
+  const plcRangeId = cfg.rangeId ?? m.plcRangeId ?? "";
   return {
-    ...config,
-    rangeId: "",
-    startRegister: "",
-    statusRegister: "",
-    partRegister: "",
-    stationRegister: "",
-    resetRegister: "",
-  };
-}
-
-function buildFormFromMachine(machine) {
-  const config = machine.plcConfig || {};
-  const plcRangeId = config.rangeId ?? machine.plcRangeId ?? "";
-
-  return {
-    machineName: machine.machineName || "",
-    lineName: machine.lineName || "",
-    sequenceNo: toFormValue(machine.sequenceNo, ""),
-    operationNo: machine.operationNo || "",
-    dailyTargetQty: toFormValue(machine.dailyTargetQty, "0"),
-    plcIp: machine.plcIp || "",
-    plcPort: toFormValue(machine.plcPort, ""),
-    plcProtocol: machine.plcProtocol || "TCP_TEXT",
+    machineName: m.machineName || "", lineName: m.lineName || "",
+    sequenceNo: toFormValue(m.sequenceNo, ""), operationNo: m.operationNo || "",
+    dailyTargetQty: toFormValue(m.dailyTargetQty, "0"),
+    plcIp: m.plcIp || "", plcPort: toFormValue(m.plcPort, ""),
+    plcProtocol: m.plcProtocol || "TCP_TEXT",
     plcRangeId: toFormValue(plcRangeId, ""),
-    plcSlmpDevice: machine.plcSlmpDevice || "D",
+    plcSlmpDevice: m.plcSlmpDevice || "D", status: m.status || "ACTIVE",
     plcConfig: {
       rangeId: toFormValue(plcRangeId, ""),
-      startRegister: toFormValue(config.startRegister ?? machine.plcStartRegister, ""),
-      statusRegister: toFormValue(config.statusRegister ?? machine.plcStatusRegister, ""),
-      partRegister: toFormValue(config.partRegister ?? machine.plcPartRegister, ""),
-      stationRegister: toFormValue(config.stationRegister ?? machine.plcStationRegister, ""),
-      resetRegister: toFormValue(config.resetRegister ?? machine.plcResetRegister, ""),
-      startValue: toFormValue(config.startValue ?? machine.plcStartValue, "1"),
-      startedValue: toFormValue(config.startedValue ?? machine.plcStartedValue, "2"),
-      endOkValue: toFormValue(config.endOkValue ?? machine.plcEndOkValue, "3"),
-      endNgValue: toFormValue(config.endNgValue ?? machine.plcEndNgValue, "4"),
-      blockValue: toFormValue(config.blockValue ?? machine.plcBlockValue, "2"),
+      startRegister: toFormValue(cfg.startRegister ?? m.plcStartRegister, ""),
+      statusRegister: toFormValue(cfg.statusRegister ?? m.plcStatusRegister, ""),
+      partRegister: toFormValue(cfg.partRegister ?? m.plcPartRegister, ""),
+      stationRegister: toFormValue(cfg.stationRegister ?? m.plcStationRegister, ""),
+      resetRegister: toFormValue(cfg.resetRegister ?? m.plcResetRegister, ""),
+      startValue: toFormValue(cfg.startValue ?? m.plcStartValue, "1"),
+      startedValue: toFormValue(cfg.startedValue ?? m.plcStartedValue, "2"),
+      endOkValue: toFormValue(cfg.endOkValue ?? m.plcEndOkValue, "3"),
+      endNgValue: toFormValue(cfg.endNgValue ?? m.plcEndNgValue, "4"),
+      blockValue: toFormValue(cfg.blockValue ?? m.plcBlockValue, "2"),
     },
-    plcSignalMap: machine.plcSignalMap ? JSON.stringify(machine.plcSignalMap, null, 2) : "",
-    status: machine.status || "ACTIVE",
+    readRegisters: {
+      temperature: toFormValue(m.readRegisters?.temperature ?? "", ""),
+    },
   };
 }
-
-function toSubmitPayload(formData) {
-  const plcIp = String(formData.plcIp || "").trim();
-  const plcPort = toNullableNumber(formData.plcPort);
-  const plcRangeId = toNullableNumber(formData.plcRangeId);
-  const cfg = formData.plcConfig || {};
-
+function toSubmitPayload(f) {
+  const plcIp = String(f.plcIp || "").trim();
+  const plcPort = toNullableNumber(f.plcPort);
+  const plcRangeId = toNullableNumber(f.plcRangeId);
+  const cfg = f.plcConfig || {};
   const plcConfig = {
     rangeId: plcRangeId,
     startRegister: toNullableNumber(cfg.startRegister),
@@ -279,1429 +97,594 @@ function toSubmitPayload(formData) {
     endNgValue: toNumberWithDefault(cfg.endNgValue, 4),
     blockValue: toNumberWithDefault(cfg.blockValue, 2),
   };
-
   return {
-    machineName: String(formData.machineName || "").trim(),
-    lineName: String(formData.lineName || "").trim(),
-    sequenceNo: toNullableNumber(formData.sequenceNo),
-    operationNo: String(formData.operationNo || "").trim().toUpperCase(),
-    dailyTargetQty: Math.max(toNullableNumber(formData.dailyTargetQty) ?? 0, 0),
-    plcIp,
-    plcPort,
-    plcProtocol: formData.plcProtocol,
-    plcRangeId,
-    plcConfig,
+    machineName: String(f.machineName || "").trim(),
+    lineName: String(f.lineName || "").trim(),
+    sequenceNo: toNullableNumber(f.sequenceNo),
+    operationNo: String(f.operationNo || "").trim().toUpperCase(),
+    dailyTargetQty: Math.max(toNullableNumber(f.dailyTargetQty) ?? 0, 0),
+    plcIp, plcPort, plcProtocol: f.plcProtocol, plcRangeId, plcConfig,
     plcBlockValue: plcConfig.blockValue,
-    plcSlmpDevice: String(formData.plcSlmpDevice || "").trim().toUpperCase() || null,
-    plcSignalMap: parseSignalMapInput(formData.plcSignalMap),
-    status: formData.status || "ACTIVE",
-    machineIp: plcIp,
-    machinePort: plcPort,
+    plcSlmpDevice: String(f.plcSlmpDevice || "").trim().toUpperCase() || null,
+    status: f.status || "ACTIVE",
+    machineIp: plcIp, machinePort: plcPort,
+    readRegisters: {
+      temperature: toNullableNumber(f.readRegisters?.temperature) ?? null,
+    },
   };
 }
 
-function sortValue(value) {
-  if (value === null || value === undefined) {
-    return "";
-  }
-  return value;
+const FORM_TABS = [
+  { id: "general", label: "Identity", icon: Layout },
+  { id: "network", label: "Network", icon: Network },
+  { id: "registers", label: "Registers", icon: Terminal },
+  { id: "tuning", label: "Tuning", icon: Settings },
+  { id: "live", label: "Live Data", icon: Eye }, // new tab
+];
+
+/* ─── sub-components ───────────────────────────────────────── */
+function FieldLabel({ children, hint }) {
+  return (
+    <div className="flex items-center gap-1 mb-1.5">
+      <label className="text-[10px] font-semibold text-text-muted uppercase tracking-widest">{children}</label>
+      {hint && <span className="text-[10px] text-text-muted/50 normal-case tracking-normal font-normal">— {hint}</span>}
+    </div>
+  );
 }
 
+function InputField({ label, hint, children }) {
+  return (
+    <div>
+      <FieldLabel hint={hint}>{label}</FieldLabel>
+      {children}
+    </div>
+  );
+}
+
+const inputCls = "w-full bg-bg-dark border border-border rounded-lg px-3 py-2 text-sm text-text-main outline-none focus:border-primary/60 transition-colors placeholder:text-text-muted/40";
+const selectCls = "w-full bg-bg-dark border border-border rounded-lg px-3 py-2 text-sm text-text-main outline-none focus:border-primary/60 transition-colors";
+
+/* ─── main component ───────────────────────────────────────── */
 const MachinePage = () => {
   const [machines, setMachines] = useState([]);
   const [plcRanges, setPlcRanges] = useState([]);
   const [showModal, setShowModal] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState(null);
   const [editingMachine, setEditingMachine] = useState(null);
   const [formData, setFormData] = useState(() => createEmptyForm());
   const [searchTerm, setSearchTerm] = useState("");
   const [lineFilter, setLineFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [sortConfig, setSortConfig] = useState({ key: "sequenceNo", direction: "asc" });
-  const [pageError, setPageError] = useState("");
-  const [rangeRegisters, setRangeRegisters] = useState(null);
-  const [rangeRegistersLoading, setRangeRegistersLoading] = useState(false);
-  const [rangeRegistersError, setRangeRegistersError] = useState("");
+  const [activeTab, setActiveTab] = useState("general");
+  const [saving, setSaving] = useState(false);
 
-  const loadMachineContext = useCallback(async () => {
-    const [machineRows, rangeRows] = await Promise.all([machineApi.list(), plcConfigApi.listRanges().catch(() => [])]);
-    setMachines(machineRows || []);
-    setPlcRanges(rangeRows || []);
-    setPageError("");
+  // Live data read states
+  const [reading, setReading] = useState(false);
+  const [liveValues, setLiveValues] = useState({ temperature: null });
+
+  const loadData = useCallback(async () => {
+    try {
+      const [machineRows, rangeRows] = await Promise.all([
+        machineApi.list(),
+        plcConfigApi.listRanges().catch(() => []),
+      ]);
+      setMachines(machineRows || []);
+      setPlcRanges(rangeRows || []);
+    } catch {
+      toast.error("Failed to load machine data");
+    }
   }, []);
 
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      loadMachineContext().catch((error) => {
-        setPageError(error.response?.data?.error || "Error loading machine configuration");
-      });
-    }, 0);
-    return () => clearTimeout(timer);
-  }, [loadMachineContext]);
+  useEffect(() => { loadData(); }, [loadData]);
 
-  const rangeById = useMemo(
-    () =>
-      plcRanges.reduce((acc, row) => {
-        acc[row.id] = row;
-        return acc;
-      }, {}),
-    [plcRanges]
-  );
-
-  const activeRanges = useMemo(
-    () => plcRanges.filter((row) => String(row.status || "").toUpperCase() === "ACTIVE"),
+  const rangeById = useMemo(() =>
+    plcRanges.reduce((acc, r) => { acc[r.id] = r; return acc; }, {}),
     [plcRanges]
   );
 
   const normalizedProtocol = normalizeProtocol(formData.plcProtocol, "TCP_TEXT");
-  const isModbusProtocol = normalizedProtocol === "MODBUS_TCP";
-  const isSlmpProtocol = normalizedProtocol === "SLMP";
-  const usesRange = isModbusProtocol || isSlmpProtocol;
-
-  const activeRangesByProtocol = useMemo(() => {
-    if (!usesRange) {
-      return activeRanges;
-    }
-    return activeRanges.filter(
-      (row) => normalizeRangeProtocol(row.plcProtocol) === normalizedProtocol
-    );
-  }, [activeRanges, normalizedProtocol, usesRange]);
-
-  const plcIpOptions = useMemo(() => {
-    const options = [];
-    const seen = new Set();
-    const rangePool = usesRange ? activeRangesByProtocol : activeRanges;
-    for (const row of rangePool) {
-      const ip = String(row.plcIp || "").trim();
-      if (!ip || seen.has(ip)) {
-        continue;
-      }
-      seen.add(ip);
-      options.push(ip);
-    }
-    const currentIp = String(formData.plcIp || "").trim();
-    if (currentIp && !seen.has(currentIp)) {
-      options.push(currentIp);
-    }
-    return options.sort((a, b) => a.localeCompare(b));
-  }, [activeRanges, activeRangesByProtocol, formData.plcIp, usesRange]);
+  const isModbus = normalizedProtocol === "MODBUS_TCP";
+  const isSlmp = normalizedProtocol === "SLMP";
+  const usesRange = isModbus || isSlmp;
 
   const selectableRanges = useMemo(() => {
     const selectedIp = String(formData.plcIp || "").trim();
-    const map = new Map();
-    const rangePool = usesRange ? activeRangesByProtocol : activeRanges;
-    for (const row of rangePool.filter((entry) => !selectedIp || String(entry.plcIp || "").trim() === selectedIp)) {
-      map.set(String(row.id), row);
-    }
-
-    const editingRangeId = toNullableNumber(editingMachine?.plcRangeId || editingMachine?.plcConfig?.rangeId);
-    if (editingRangeId && rangeById[editingRangeId]) {
-      map.set(String(editingRangeId), rangeById[editingRangeId]);
-    }
-
+    const pool = plcRanges.filter(r =>
+      String(r.status || "").toUpperCase() === "ACTIVE" &&
+      (!usesRange || normalizeProtocol(r.plcProtocol, "MODBUS_TCP") === normalizedProtocol) &&
+      (!selectedIp || String(r.plcIp || "").trim() === selectedIp)
+    );
+    const map = new Map(pool.map(r => [String(r.id), r]));
+    const editRangeId = toNullableNumber(editingMachine?.plcRangeId || editingMachine?.plcConfig?.rangeId);
+    if (editRangeId && rangeById[editRangeId]) map.set(String(editRangeId), rangeById[editRangeId]);
     return Array.from(map.values());
-  }, [activeRanges, activeRangesByProtocol, editingMachine, formData.plcIp, rangeById, usesRange]);
-
-  const resetForm = () => {
-    setFormData(createEmptyForm());
-    setEditingMachine(null);
-    setRangeRegisters(null);
-    setRangeRegistersError("");
-  };
-
-  const closeModal = () => {
-    setShowModal(false);
-    resetForm();
-  };
-
-  const openCreateModal = () => {
-    resetForm();
-    setShowModal(true);
-  };
-
-  const loadRangeRegisters = useCallback(async (rangeId, excludeMachineId = null) => {
-    if (!rangeId) {
-      setRangeRegisters(null);
-      setRangeRegistersError("");
-      return;
-    }
-
-    try {
-      setRangeRegistersLoading(true);
-      setRangeRegistersError("");
-
-      const payload = await plcConfigApi.rangeRegisters(rangeId, excludeMachineId ? { excludeMachineId } : {});
-      setRangeRegisters(payload || null);
-
-      const defaults = payload?.range?.defaultRegisters || {};
-      const available = new Set(
-        (payload?.availableRegisters || [])
-          .map((entry) => Number(entry))
-          .filter((entry) => Number.isFinite(entry))
-      );
-      const currentMachine = new Set(
-        (payload?.currentMachineRegisters || [])
-          .map((entry) => Number(entry))
-          .filter((entry) => Number.isFinite(entry))
-      );
-
-      setFormData((prev) => {
-        if (String(prev.plcRangeId || "") !== String(rangeId)) {
-          return prev;
-        }
-
-        let changed = false;
-        const nextConfig = { ...(prev.plcConfig || {}), rangeId: String(rangeId) };
-
-        for (const role of MACHINE_REGISTER_ROLE_FIELDS) {
-          const existing = toNullableNumber(nextConfig[role.key]);
-          if (existing !== null) {
-            continue;
-          }
-
-          const defaultRegister = toNullableNumber(defaults[role.key]);
-          if (defaultRegister === null) {
-            continue;
-          }
-          if (!available.has(defaultRegister) && !currentMachine.has(defaultRegister)) {
-            continue;
-          }
-
-          nextConfig[role.key] = String(defaultRegister);
-          changed = true;
-        }
-
-        if (!changed) {
-          return prev;
-        }
-
-        return {
-          ...prev,
-          plcConfig: nextConfig,
-        };
-      });
-    } catch (error) {
-      setRangeRegisters(null);
-      setRangeRegistersError(error.response?.data?.error || "Unable to load range register usage");
-    } finally {
-      setRangeRegistersLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!showModal || !usesRange) {
-      setRangeRegisters(null);
-      setRangeRegistersError("");
-      return;
-    }
-
-    if (!formData.plcRangeId) {
-      setRangeRegisters(null);
-      setRangeRegistersError("");
-      return;
-    }
-
-    loadRangeRegisters(formData.plcRangeId, editingMachine?.id || null);
-  }, [showModal, usesRange, formData.plcRangeId, editingMachine?.id, loadRangeRegisters]);
-
-  useEffect(() => {
-    if (!showModal) {
-      return;
-    }
-    if (editingMachine) {
-      return;
-    }
-    if (!usesRange) {
-      return;
-    }
-    if (formData.plcRangeId) {
-      return;
-    }
-    if (activeRangesByProtocol.length === 0) {
-      return;
-    }
-
-    const firstRange = activeRangesByProtocol[0];
-    const nextRangeId = String(firstRange.id);
-    setFormData((prev) => ({
-      ...prev,
-      plcIp: firstRange.plcIp || "",
-      plcPort: toFormValue(firstRange.plcPort, ""),
-      plcRangeId: nextRangeId,
-      plcConfig: {
-        ...(prev.plcConfig || {}),
-        rangeId: nextRangeId,
-      },
-    }));
-  }, [showModal, editingMachine, usesRange, formData.plcRangeId, activeRangesByProtocol]);
-
-  const handleSubmit = async (event) => {
-    event.preventDefault();
-
-    try {
-      if (String(formData.plcSignalMap || "").trim() && !parseSignalMapInput(formData.plcSignalMap)) {
-        alert("Invalid PLC Signal Map JSON. Provide valid object/array or leave blank.");
-        return;
-      }
-      const payload = toSubmitPayload(formData);
-      if (String(payload.plcProtocol || "").toUpperCase() === "MODBUS_TCP" && !payload.plcRangeId) {
-        alert("Select PLC register range for MODBUS_TCP machine");
-        return;
-      }
-      if (["TCP_TEXT", "SLMP"].includes(String(payload.plcProtocol || "").toUpperCase())) {
-        if (!payload.plcIp || !Number.isFinite(Number(payload.plcPort))) {
-          alert("For TCP_TEXT/SLMP, PLC IP and PLC Port are required.");
-          return;
-        }
-      }
-      if (String(payload.plcProtocol || "").toUpperCase() === "SLMP") {
-        const cfg = payload.plcConfig || {};
-        if (!Number.isFinite(Number(cfg.startRegister)) || !Number.isFinite(Number(cfg.statusRegister))) {
-          alert("For SLMP, Start Register and Status Register are required.");
-          return;
-        }
-      }
-
-      if (editingMachine) {
-        await machineApi.update(editingMachine.id, payload);
-      } else {
-        await machineApi.create(payload);
-      }
-
-      closeModal();
-      await loadMachineContext();
-    } catch (error) {
-      alert(error.response?.data?.error || "Failed to save machine");
-    }
-  };
-
-  const handleDelete = async (id) => {
-    if (!window.confirm("Delete this machine?")) {
-      return;
-    }
-
-    try {
-      await machineApi.remove(id);
-      await loadMachineContext();
-    } catch (error) {
-      alert(error.response?.data?.error || "Failed to delete machine");
-    }
-  };
-
-  const handleSort = (key) => {
-    if (sortConfig.key === key) {
-      setSortConfig((prev) => ({
-        key,
-        direction: prev.direction === "asc" ? "desc" : "asc",
-      }));
-      return;
-    }
-
-    setSortConfig({ key, direction: "asc" });
-  };
-
-  const downloadMachineSheet = () => {
-    const rows = [
-      [
-        "Machine Name",
-        "Line Name",
-        "Sequence No",
-        "Operation No",
-        "Protocol",
-        "PLC IP",
-        "PLC Port",
-        "Daily Target Qty",
-        "PLC Range",
-        "Trigger Register",
-        "Interlock Register",
-        "Complete Register",
-        "Reset Register",
-        "Start Value",
-        "Started Value",
-        "End OK Value",
-        "End NG Value",
-        "Block Value",
-        "SLMP Device",
-        "Status",
-      ],
-    ];
-
-    for (const machine of filteredMachines) {
-      const cfg = machine.plcConfig || {};
-      const rangeId = toNullableNumber(machine.plcRangeId || cfg.rangeId);
-      const range = rangeId ? rangeById[rangeId] : null;
-      rows.push([
-        machine.machineName || "",
-        machine.lineName || "",
-        machine.sequenceNo ?? "",
-        machine.operationNo || "",
-        machine.plcProtocol || "",
-        machine.plcIp || "",
-        machine.plcPort ?? "",
-        machine.dailyTargetQty ?? "",
-        range ? `${range.rangeName} (${range.rangeStart}-${range.rangeEnd})` : rangeId || "",
-        cfg.startRegister ?? "",
-        cfg.statusRegister ?? "",
-        cfg.stationRegister ?? "",
-        cfg.resetRegister ?? "",
-        cfg.startValue ?? "",
-        cfg.startedValue ?? "",
-        cfg.endOkValue ?? "",
-        cfg.endNgValue ?? "",
-        cfg.blockValue ?? "",
-        machine.plcSlmpDevice || "",
-        machine.status || "",
-      ]);
-    }
-
-    const csv = rows
-      .map((row) =>
-        row
-          .map((entry) => {
-            const text = String(entry ?? "");
-            if (!text.includes(",") && !text.includes('"') && !text.includes("\n")) {
-              return text;
-            }
-            return `"${text.replace(/"/g, '""')}"`;
-          })
-          .join(",")
-      )
-      .join("\n");
-
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "machine_handshake_sheet.csv";
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.URL.revokeObjectURL(url);
-  };
-
-  const uniqueLines = useMemo(() => {
-    const lines = machines.map((machine) => machine.lineName).filter(Boolean);
-    return ["all", ...new Set(lines)];
-  }, [machines]);
+  }, [plcRanges, editingMachine, formData.plcIp, normalizedProtocol, usesRange, rangeById]);
 
   const filteredMachines = useMemo(() => {
-    const normalizedSearch = searchTerm.trim().toLowerCase();
+    const s = searchTerm.trim().toLowerCase();
+    return machines.filter(m => {
+      const ms = !s || [m.machineName, m.lineName, m.operationNo, m.plcIp].some(v => String(v || "").toLowerCase().includes(s));
+      const ml = lineFilter === "all" || m.lineName === lineFilter;
+      const mst = statusFilter === "all" || m.status === statusFilter;
+      return ms && ml && mst;
+    }).sort((a, b) => (Number(a.sequenceNo) || 0) - (Number(b.sequenceNo) || 0));
+  }, [machines, searchTerm, lineFilter, statusFilter]);
 
-    const filtered = machines.filter((machine) => {
-      const rangeId = toNullableNumber(machine.plcRangeId || machine.plcConfig?.rangeId);
-      const rangeName = rangeId ? rangeById[rangeId]?.rangeName || "" : "";
+  const lines = useMemo(() => [...new Set(machines.map(m => m.lineName).filter(Boolean))].sort(), [machines]);
 
-      const searchFields = [
-        machine.machineName,
-        machine.lineName,
-        machine.operationNo,
-        String(machine.sequenceNo ?? ""),
-        String(machine.dailyTargetQty ?? ""),
-        machine.plcIp,
-        machine.plcProtocol,
-        machine.plcRangeId,
-        rangeName,
-      ]
-        .join(" ")
-        .toLowerCase();
-
-      const matchesSearch = !normalizedSearch || searchFields.includes(normalizedSearch);
-      const matchesLine = lineFilter === "all" || machine.lineName === lineFilter;
-      const matchesStatus = statusFilter === "all" || machine.status === statusFilter;
-      return matchesSearch && matchesLine && matchesStatus;
-    });
-
-    return filtered.sort((a, b) => {
-      const aValue = sortValue(a[sortConfig.key]);
-      const bValue = sortValue(b[sortConfig.key]);
-      if (aValue < bValue) {
-        return sortConfig.direction === "asc" ? -1 : 1;
-      }
-      if (aValue > bValue) {
-        return sortConfig.direction === "asc" ? 1 : -1;
-      }
-      return 0;
-    });
-  }, [lineFilter, machines, rangeById, searchTerm, sortConfig.direction, sortConfig.key, statusFilter]);
-
-  const handleEdit = (machine) => {
-    setEditingMachine(machine);
-    setFormData(buildFormFromMachine(machine));
-    setRangeRegisters(null);
-    setRangeRegistersError("");
-    setShowModal(true);
-  };
+  const stats = useMemo(() => ({
+    total: machines.length,
+    active: machines.filter(m => m.status === "ACTIVE").length,
+    configured: machines.filter(m => m.plcIp).length,
+    inactive: machines.filter(m => m.status === "INACTIVE").length,
+  }), [machines]);
 
   const updateField = (key, value) => {
-    if (key === "operationNo") {
-      setFormData((prev) => ({ ...prev, [key]: String(value).toUpperCase() }));
-      return;
-    }
-
     if (key === "plcProtocol") {
-      const normalized = String(value || "").toUpperCase();
-      const rangesByProtocol = activeRanges.filter(
-        (row) => normalizeRangeProtocol(row.plcProtocol) === normalized
-      );
-      setFormData((prev) => {
-        if (normalized === "MODBUS_TCP") {
-          const candidateRanges = rangesByProtocol.filter(
-            (row) => String(row.plcIp || "").trim() === String(prev.plcIp || "").trim()
-          );
-          const range =
-            rangeById[toNullableNumber(prev.plcRangeId)] ||
-            candidateRanges[0] ||
-            rangesByProtocol[0] ||
-            null;
-          return {
-            ...prev,
-            plcProtocol: normalized,
-            plcIp: range?.plcIp || "",
-            plcPort: toFormValue(range?.plcPort, ""),
-            plcRangeId: range ? String(range.id) : "",
-            plcConfig: {
-              ...(prev.plcConfig || {}),
-              rangeId: range ? String(range.id) : "",
-            },
-          };
-        }
-
-        if (normalized === "SLMP") {
-          const nextConfig = clearRangeAssignments(prev.plcConfig);
-          const hasSignalMap = String(prev.plcSignalMap || "").trim().length > 0;
-          const candidateRanges = rangesByProtocol.filter(
-            (row) => String(row.plcIp || "").trim() === String(prev.plcIp || "").trim()
-          );
-          const range = candidateRanges[0] || rangesByProtocol[0] || null;
-          const nextRangeId = range ? String(range.id) : "";
-          return {
-            ...prev,
-            plcProtocol: normalized,
-            plcIp: range?.plcIp || prev.plcIp || "",
-            plcPort: toFormValue(range?.plcPort, prev.plcPort || ""),
-            plcRangeId: nextRangeId,
-            plcConfig: {
-              ...nextConfig,
-              rangeId: nextRangeId,
-            },
-            plcSignalMap: hasSignalMap
-              ? prev.plcSignalMap
-              : buildDefaultSlmpSignalMap(prev.plcSlmpDevice, prev.plcConfig || {}),
-          };
-        }
-
-        return {
-          ...prev,
-          plcProtocol: normalized,
-          plcRangeId: "",
-          plcConfig: clearRangeAssignments(prev.plcConfig),
-        };
-      });
-      return;
-    }
-
-    setFormData((prev) => ({ ...prev, [key]: value }));
-  };
-
-  const updatePlcConfigField = (key, value) => {
-    setFormData((prev) => ({
-      ...prev,
-      plcConfig: {
-        ...(prev.plcConfig || {}),
-        [key]: value,
-      },
-    }));
-  };
-
-  const updateSelectedPlcIp = (ipValue) => {
-    const normalizedIp = String(ipValue || "").trim();
-    const rangePool = usesRange ? activeRangesByProtocol : activeRanges;
-    const candidateRanges = rangePool.filter((row) => String(row.plcIp || "").trim() === normalizedIp);
-    const currentRangeId = toNullableNumber(formData.plcRangeId);
-    const currentRange =
-      currentRangeId && candidateRanges.some((entry) => Number(entry.id) === currentRangeId)
-        ? candidateRanges.find((entry) => Number(entry.id) === currentRangeId)
-        : null;
-    const nextRange = currentRange || candidateRanges[0] || null;
-
-    setFormData((prev) => ({
-      ...prev,
-      plcIp: normalizedIp,
-      plcPort: toFormValue(nextRange?.plcPort, ""),
-      plcRangeId: nextRange ? String(nextRange.id) : "",
-      plcConfig: {
-        ...clearRangeAssignments(prev.plcConfig),
-        rangeId: nextRange ? String(nextRange.id) : "",
-      },
-    }));
-
-    setRangeRegisters(null);
-    setRangeRegistersError("");
-  };
-
-  const updateSelectedRange = (rangeId) => {
-    if (!rangeId) {
-      setFormData((prev) => ({
-        ...prev,
-        plcRangeId: "",
-        plcConfig: {
-          ...clearRangeAssignments(prev.plcConfig),
-          rangeId: "",
-        },
+      setFormData(prev => ({
+        ...prev, plcProtocol: String(value).toUpperCase(), plcRangeId: "",
+        plcConfig: { ...prev.plcConfig, rangeId: "", startRegister: "", statusRegister: "", partRegister: "", stationRegister: "", resetRegister: "" },
       }));
-      setRangeRegisters(null);
-      setRangeRegistersError("");
       return;
     }
-    const range = rangeById[toNullableNumber(rangeId)] || null;
-    setFormData((prev) => ({
-      ...prev,
-      plcRangeId: rangeId,
-      plcProtocol: String(range?.plcProtocol || "MODBUS_TCP").toUpperCase(),
-      plcIp: range?.plcIp || "",
-      plcPort: toFormValue(range?.plcPort, ""),
-      plcConfig: {
-        ...clearRangeAssignments(prev.plcConfig),
-        rangeId,
-      },
-    }));
+    setFormData(prev => ({ ...prev, [key]: value }));
+  };
+  const updateCfg = (k, v) => setFormData(p => ({ ...p, plcConfig: { ...(p.plcConfig || {}), [k]: v } }));
+  const updateReadReg = (k, v) => setFormData(p => ({ ...p, readRegisters: { ...p.readRegisters, [k]: v } }));
 
-    setRangeRegisters(null);
-    setRangeRegistersError("");
+  const openCreate = () => { setFormData(createEmptyForm()); setEditingMachine(null); setActiveTab("general"); setShowModal(true); };
+  const openEdit = (m) => { setFormData(buildFormFromMachine(m)); setEditingMachine(m); setActiveTab("general"); setShowModal(true); };
+  const closeModal = () => { setShowModal(false); setEditingMachine(null); };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const payload = toSubmitPayload(formData);
+      if (editingMachine) await machineApi.update(editingMachine.id, payload);
+      else await machineApi.create(payload);
+      toast.success(editingMachine ? "Machine updated successfully" : "Machine deployed successfully");
+      closeModal();
+      await loadData();
+    } catch (err) {
+      toast.error(err.response?.data?.error || "Failed to save machine");
+    } finally { setSaving(false); }
   };
 
-  const getRoleRegisterOptions = useCallback(
-    (roleKey) => {
-      const selectedRangeId = toNullableNumber(formData.plcRangeId);
-      if (!selectedRangeId) {
-        return [];
-      }
-
-      const rangeRow = rangeById[selectedRangeId] || null;
-      const fallbackRegisters = [];
-      if (rangeRow) {
-        for (let registerNo = rangeRow.rangeStart; registerNo <= rangeRow.rangeEnd; registerNo += 1) {
-          fallbackRegisters.push(registerNo);
-        }
-      }
-
-      const baseSet = new Set(
-        ((rangeRegisters?.availableRegisters || []).length > 0 ? rangeRegisters.availableRegisters : fallbackRegisters)
-          .map((entry) => Number(entry))
-          .filter((entry) => Number.isFinite(entry))
-      );
-
-      const current = toNullableNumber(formData.plcConfig?.[roleKey]);
-      if (current !== null) {
-        baseSet.add(current);
-      }
-
-      const usedByOtherRoles = new Set(
-        MACHINE_REGISTER_ROLE_FIELDS.filter((entry) => entry.key !== roleKey)
-          .map((entry) => toNullableNumber(formData.plcConfig?.[entry.key]))
-          .filter((entry) => entry !== null)
-      );
-
-      return Array.from(baseSet)
-        .filter((registerNo) => registerNo === current || !usedByOtherRoles.has(registerNo))
-        .sort((a, b) => a - b);
-    },
-    [formData.plcConfig, formData.plcRangeId, rangeById, rangeRegisters]
-  );
-
-  const slmpRegisterConflicts = useMemo(() => {
-    if (!showModal || !isSlmpProtocol) {
-      return null;
-    }
-    const plcIp = String(formData.plcIp || "").trim();
-    const plcPort = toNullableNumber(formData.plcPort);
-    if (!plcIp || plcPort === null) {
-      return null;
-    }
-
-    const signalMap = parseSignalMapInput(formData.plcSignalMap);
-    const defaultDevice = normalizeUpper(formData.plcSlmpDevice || "D") || "D";
-    const currentAssignments = [
-      {
-        role: "startRegister",
-        signalKey: SLMP_SIGNAL_KEY_BY_ROLE.startRegister,
-        register: toNullableNumber(formData.plcConfig?.startRegister),
-      },
-      {
-        role: "statusRegister",
-        signalKey: SLMP_SIGNAL_KEY_BY_ROLE.statusRegister,
-        register: toNullableNumber(formData.plcConfig?.statusRegister),
-      },
-      {
-        role: "stationRegister",
-        signalKey: SLMP_SIGNAL_KEY_BY_ROLE.stationRegister,
-        register: toNullableNumber(formData.plcConfig?.stationRegister),
-      },
-      {
-        role: "resetRegister",
-        signalKey: SLMP_SIGNAL_KEY_BY_ROLE.resetRegister,
-        register: toNullableNumber(formData.plcConfig?.resetRegister),
-      },
-    ]
-      .filter((entry) => entry.register !== null)
-      .map((entry) => ({
-        ...entry,
-        label: REGISTER_LABEL_BY_ROLE[entry.role] || entry.role,
-        device: resolveSlmpDeviceForSignal(signalMap, entry.signalKey, defaultDevice),
-      }));
-
-    const localMessages = [];
-    const localMap = new Map();
-    for (const entry of currentAssignments) {
-      const key = `${entry.device}:${entry.register}`;
-      const labels = localMap.get(key) || [];
-      labels.push(entry.label);
-      localMap.set(key, labels);
-    }
-    for (const [key, labels] of localMap.entries()) {
-      if (labels.length > 1) {
-        const [device, register] = key.split(":");
-        localMessages.push(`${formatSlmpAddress(device, register)} used by ${labels.join(" + ")}.`);
-      }
-    }
-
-    const peerMap = new Map();
-    for (const machine of machines) {
-      if (editingMachine && String(machine.id) === String(editingMachine.id)) {
-        continue;
-      }
-      if (normalizeProtocol(machine.plcProtocol, "TCP_TEXT") !== "SLMP") {
-        continue;
-      }
-      const peerIp = String(machine.plcIp || "").trim();
-      const peerPort = toNullableNumber(machine.plcPort);
-      if (!peerIp || peerPort === null) {
-        continue;
-      }
-      if (peerIp !== plcIp || peerPort !== plcPort) {
-        continue;
-      }
-      const peerSignalMap = machine.plcSignalMap || null;
-      const peerDefaultDevice = normalizeUpper(machine.plcSlmpDevice || "D") || "D";
-      const peerRoles = ["startRegister", "statusRegister", "stationRegister", "resetRegister", "partRegister"];
-      for (const role of peerRoles) {
-        const register = getMachineRegisterValue(machine, role);
-        if (register === null) {
-          continue;
-        }
-        const signalKey = SLMP_SIGNAL_KEY_BY_ROLE[role] || role;
-        const device = resolveSlmpDeviceForSignal(peerSignalMap, signalKey, peerDefaultDevice);
-        const key = `${device}:${register}`;
-        if (!peerMap.has(key)) {
-          peerMap.set(key, []);
-        }
-        peerMap.get(key).push({
-          machineName: machine.machineName || "Machine",
-          operationNo: machine.operationNo || "",
-          roleLabel: REGISTER_LABEL_BY_ROLE[role] || role,
-        });
-      }
-    }
-
-    const peerMessages = [];
-    const seenKeys = new Set();
-    for (const entry of currentAssignments) {
-      const key = `${entry.device}:${entry.register}`;
-      if (seenKeys.has(key)) {
-        continue;
-      }
-      const matches = peerMap.get(key);
-      if (!matches || matches.length === 0) {
-        continue;
-      }
-      seenKeys.add(key);
-      const target = matches
-        .map((match) => {
-          const op = match.operationNo ? ` (${match.operationNo})` : "";
-          return `${match.machineName}${op} - ${match.roleLabel}`;
-        })
-        .join(", ");
-      peerMessages.push(`${formatSlmpAddress(entry.device, entry.register)} already used by ${target}.`);
-    }
-
-    if (localMessages.length === 0 && peerMessages.length === 0) {
-      return null;
-    }
-    return { local: localMessages, peer: peerMessages };
-  }, [
-    editingMachine,
-    formData.plcConfig,
-    formData.plcIp,
-    formData.plcPort,
-    formData.plcSignalMap,
-    formData.plcSlmpDevice,
-    isSlmpProtocol,
-    machines,
-    showModal,
-  ]);
-
-  const handleRegenerateSlmpSignalMap = () => {
-    if (!isSlmpProtocol) {
-      return;
-    }
-    const hasExisting = String(formData.plcSignalMap || "").trim().length > 0;
-    if (hasExisting && !window.confirm("Regenerate SLMP signal map? This will overwrite the current mapping.")) {
-      return;
-    }
-    setFormData((prev) => ({
-      ...prev,
-      plcSignalMap: buildDefaultSlmpSignalMap(prev.plcSlmpDevice, prev.plcConfig || {}),
-    }));
+  const confirmDelete = async () => {
+    if (!deleteConfirmId) return;
+    try {
+      await machineApi.remove(deleteConfirmId);
+      toast.success("Machine removed from registry");
+      await loadData();
+    } catch { toast.error("Failed to remove machine"); }
+    finally { setDeleteConfirmId(null); }
   };
 
-  const renderCellValue = (machine, key) => {
-    if (key === "status") {
-      return (
-        <span
-          className={`px-2 py-1 rounded-full text-xs font-bold ${
-            machine.status === "ACTIVE"
-              ? "bg-accent/10 text-accent border border-accent/20"
-              : "bg-danger/10 text-danger border border-danger/20"
-          }`}
-        >
-          {machine.status || "ACTIVE"}
-        </span>
-      );
+  // Live read from PLC
+  const readTemperature = async () => {
+    if (!editingMachine && !formData.plcIp) {
+      toast.error("Configure the machine's PLC first");
+      return;
     }
-
-    if (key === "sequenceNo") {
-      return <span className="font-mono text-primary">#{String(machine.sequenceNo ?? "-").padStart(2, "0")}</span>;
+    const tempReg = formData.readRegisters.temperature;
+    if (!tempReg) {
+      toast.error("No temperature register configured");
+      return;
     }
-
-      if (key === "plcRangeId") {
-        const rangeId = toNullableNumber(machine.plcRangeId || machine.plcConfig?.rangeId);
-        const range = rangeId ? rangeById[rangeId] : null;
-
-        const protocol = String(machine.plcProtocol || "").toUpperCase();
-        if (!["MODBUS_TCP", "SLMP"].includes(protocol)) {
-          return <span className="text-text-muted text-xs">N/A</span>;
-        }
-
-      if (!rangeId) {
-        return <span className="text-danger text-xs">Not linked</span>;
-      }
-
-      return (
-        <span className="text-text-main text-xs font-mono">
-          {range?.rangeName || `Range #${rangeId}`}
-          {range ? ` (${range.rangeStart}-${range.rangeEnd})` : ""}
-        </span>
-      );
+    setReading(true);
+    try {
+      // Simulate API call: read register from PLC
+      // In real implementation, you'd call machineApi.readRegister(machineId, register)
+      const response = await machineApi.readRegister(editingMachine?.id, { register: tempReg });
+      setLiveValues({ temperature: response.value });
+      toast.success(`Temperature = ${response.value} °C`);
+    } catch {
+      toast.error("Failed to read temperature register");
+    } finally {
+      setReading(false);
     }
-
-      if (key === "plcConfig") {
-        const cfg = machine.plcConfig || null;
-        if (!cfg) {
-          return <span className="font-mono text-xs text-text-main">-</span>;
-        }
-
-        const protocol = String(machine.plcProtocol || "").toUpperCase();
-        if (protocol !== "MODBUS_TCP" && protocol !== "SLMP") {
-          return <span className="font-mono text-xs text-text-main">{machine.plcProtocol || "TCP_TEXT"}</span>;
-        }
-
-        return (
-          <span className="font-mono text-xs text-text-main">
-            TRG:{cfg.startRegister ?? "-"} | INT:{cfg.statusRegister ?? "-"} | CMP:{cfg.stationRegister ?? "-"} | RST:
-            {cfg.resetRegister ?? "-"}
-          </span>
-        );
-      }
-
-    return <span className="text-text-main">{machine[key] ?? "-"}</span>;
   };
 
   return (
-    <div className="space-y-6 text-text-main">
-      <header className="flex justify-between items-center mb-10">
-        <div className="flex items-center gap-4">
-          <div className="p-3 bg-primary/10 rounded-xl text-primary border border-primary/20">
-            <Settings size={28} />
+    <div className="space-y-6 rise-in">
+      {/* ── Page Header ── */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary">
+            <Layout size={22} />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-text-main uppercase">Machine Configuration</h1>
-            <p className="text-text-muted text-sm">Dynamic machine-to-PLC binding with register ownership control</p>
+            <h1 className="text-xl font-bold text-text-main tracking-tight">Machine Registry</h1>
+            <p className="text-text-muted text-xs mt-0.5">All production equipment, PLC endpoints &amp; register assignments</p>
           </div>
         </div>
-        <button
-          onClick={openCreateModal}
-          className="bg-primary hover:brightness-110 text-bg-dark px-5 py-2.5 rounded-xl flex items-center gap-2 font-bold transition-all shadow-lg shadow-primary/10"
-        >
-          <Plus size={20} /> Add Machine
-        </button>
-      </header>
+        <div className="flex items-center gap-2">
+          <button onClick={loadData} className="h-9 px-4 rounded-xl border border-border bg-bg-card text-text-muted hover:text-text-main hover:border-primary/40 transition-all flex items-center gap-2 text-sm font-semibold">
+            <RefreshCw size={14} /> Refresh
+          </button>
+          <button onClick={openCreate} className="h-9 px-5 rounded-xl bg-primary text-on-strong font-bold flex items-center gap-2 text-sm hover:brightness-110 transition-all shadow-lg shadow-primary/15">
+            <Plus size={16} /> Add Machine
+          </button>
+        </div>
+      </div>
 
-      {pageError ? (
-        <div className="rounded-xl border border-danger/40 bg-danger/10 text-danger px-4 py-3 text-sm">{pageError}</div>
-      ) : null}
+      {/* ── Stats ── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {[
+          { label: "Total machines", value: stats.total, color: "text-text-main" },
+          { label: "Active / live", value: stats.active, color: "text-accent" },
+          { label: "PLC configured", value: stats.configured, color: "text-primary" },
+          { label: "Offline", value: stats.inactive, color: "text-danger" },
+        ].map((s, i) => (
+          <div key={i} className="bg-bg-card border border-border rounded-xl p-4">
+            <p className="text-[10px] font-semibold text-text-muted uppercase tracking-widest mb-1">{s.label}</p>
+            <p className={`text-2xl font-bold tabular-nums ${s.color}`}>{s.value}</p>
+          </div>
+        ))}
+      </div>
 
-      <div className="mb-6 flex flex-col md:flex-row gap-4">
-        <div className="flex-1 relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" size={20} />
+      {/* ── Filters ── */}
+      <div className="flex flex-col sm:flex-row gap-3">
+        <div className="relative flex-1">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
           <input
-            type="text"
-            placeholder="Search by machine, line, sequence, operation, PLC IP, range..."
-            className="w-full bg-bg-card border border-border rounded-xl py-3 pl-10 pr-4 text-text-main focus:border-primary/50 focus:outline-none transition-all"
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
+            value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+            placeholder="Search by name, line, IP or operation…"
+            className="w-full h-9 bg-bg-card border border-border rounded-xl pl-9 pr-4 text-sm text-text-main outline-none focus:border-primary/50 placeholder:text-text-muted/50"
           />
         </div>
-
-        <div className="flex gap-2">
-          <select
-            value={lineFilter}
-            onChange={(event) => setLineFilter(event.target.value)}
-            className="bg-bg-card border border-border rounded-xl px-4 py-2 text-text-main focus:border-primary/50 focus:outline-none"
-          >
-            <option value="all">All Lines</option>
-            {uniqueLines
-              .filter((entry) => entry !== "all")
-              .map((line) => (
-                <option key={line} value={line}>
-                  {line}
-                </option>
-              ))}
-          </select>
-
-          <select
-            value={statusFilter}
-            onChange={(event) => setStatusFilter(event.target.value)}
-            className="bg-bg-card border border-border rounded-xl px-4 py-2 text-text-main focus:border-primary/50 focus:outline-none"
-          >
-            <option value="all">All Status</option>
-            <option value="ACTIVE">ACTIVE</option>
-            <option value="INACTIVE">INACTIVE</option>
-          </select>
-
-          <button
-            onClick={() => loadMachineContext().catch(() => {})}
-            className="p-2 bg-bg-card border border-border rounded-xl hover:border-primary/50 transition-colors"
-            title="Refresh"
-          >
-            <RefreshCw size={20} className="text-text-muted" />
-          </button>
-        </div>
+        <select value={lineFilter} onChange={e => setLineFilter(e.target.value)}
+          className="h-9 bg-bg-card border border-border rounded-xl px-3 text-sm text-text-main outline-none focus:border-primary/50">
+          <option value="all">All lines</option>
+          {lines.map(l => <option key={l} value={l}>{l}</option>)}
+        </select>
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+          className="h-9 bg-bg-card border border-border rounded-xl px-3 text-sm text-text-main outline-none focus:border-primary/50">
+          <option value="all">All status</option>
+          <option value="ACTIVE">Active</option>
+          <option value="INACTIVE">Inactive</option>
+        </select>
       </div>
 
-      <div className="industrial-card border border-border rounded-2xl overflow-hidden">
-        <div className="px-6 py-4 border-b border-border bg-bg-dark/30 flex items-center justify-between">
-          <p className="text-sm font-semibold text-text-main">Machine Handshake Table</p>
-          <button
-            onClick={downloadMachineSheet}
-            className="inline-flex items-center gap-2 rounded-lg border border-border bg-bg-card px-3 py-2 text-xs font-semibold text-text-main hover:border-primary"
-          >
-            <Download size={14} />
-            Download Sheet
-          </button>
+      {/* ── Machine Grid ── */}
+      {filteredMachines.length === 0 ? (
+        <div className="bg-bg-card border border-border rounded-2xl p-20 flex flex-col items-center text-center text-text-muted">
+          <Database size={40} className="opacity-20 mb-3" />
+          <p className="font-semibold">No machines found</p>
+          <p className="text-sm mt-1 text-text-muted/60">Try adjusting your search or filters</p>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-bg-dark/50 border-b border-border">
-              <tr>
-                {MACHINE_TABLE_COLUMNS.map((column) => (
-                  <th
-                    key={column.key}
-                    className={`px-6 py-4 text-left text-xs font-bold uppercase tracking-wider ${
-                      column.sortable ? "text-text-muted cursor-pointer hover:text-primary" : "text-text-muted"
-                    }`}
-                    onClick={() => {
-                      if (column.sortable) {
-                        handleSort(column.key);
-                      }
-                    }}
-                  >
-                    <div className="flex items-center gap-1">
-                      <span>{column.label}</span>
-                      {column.sortable && sortConfig.key === column.key && (
-                        <span>{sortConfig.direction === "asc" ? "^" : "v"}</span>
-                      )}
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {filteredMachines.map(m => {
+            const isActive = m.status === "ACTIVE";
+            const hasCfg = m.plcConfig && (m.plcProtocol === "MODBUS_TCP" || m.plcProtocol === "SLMP");
+            return (
+              <div key={m.id} className="bg-bg-card border border-border rounded-2xl overflow-hidden hover:border-primary/30 transition-all group">
+                {/* Card head */}
+                <div className="px-5 pt-5 pb-4 border-b border-border flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-3 min-w-0">
+                    <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${isActive ? "bg-primary/10 text-primary border border-primary/20" : "bg-bg-dark text-text-muted border border-border"}`}>
+                      <Cpu size={18} />
                     </div>
-                  </th>
-                ))}
-                <th className="px-6 py-4 text-right text-xs font-bold uppercase tracking-wider text-text-muted">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {filteredMachines.length > 0 ? (
-                filteredMachines.map((machine) => (
-                  <tr key={machine.id} className="hover:bg-bg-dark/30 transition-colors group">
-                    {MACHINE_TABLE_COLUMNS.map((column) => (
-                      <td key={`${machine.id}-${column.key}`} className="px-6 py-4 whitespace-nowrap">
-                        {renderCellValue(machine, column.key)}
-                      </td>
-                    ))}
-                    <td className="px-6 py-4 whitespace-nowrap text-right">
-                      <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button
-                          onClick={() => handleEdit(machine)}
-                          className="p-2 hover:bg-primary/10 text-primary rounded-lg transition-all hover:scale-110"
-                          title="Edit machine"
-                        >
-                          <Edit size={16} />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(machine.id)}
-                          className="p-2 hover:bg-danger/10 text-danger rounded-lg transition-all hover:scale-110"
-                          title="Delete machine"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={MACHINE_TABLE_COLUMNS.length + 1} className="px-6 py-12 text-center">
-                    <Database size={48} className="mx-auto text-text-muted mb-4 opacity-50" />
-                    <p className="text-text-muted">No machines found</p>
-                    <button
-                      onClick={() => {
-                        setSearchTerm("");
-                        setLineFilter("all");
-                        setStatusFilter("all");
-                      }}
-                      className="mt-4 text-primary hover:underline text-sm"
-                    >
-                      Clear filters
-                    </button>
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+                    <div className="min-w-0">
+                      <h3 className="font-bold text-text-main text-sm leading-tight truncate">{m.machineName}</h3>
+                      <p className="text-[11px] text-text-muted mt-0.5 flex items-center gap-1">
+                        <Layers size={9} /> {m.lineName || "Global"} · Seq {String(m.sequenceNo || 0).padStart(2, "0")}
+                      </p>
+                    </div>
+                  </div>
+                  <div className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-bold flex-shrink-0 ${isActive ? "bg-accent/10 border border-accent/20 text-accent" : "bg-bg-dark border border-border text-text-muted"}`}>
+                    {isActive && <div className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />}
+                    {isActive ? "Live" : "Offline"}
+                  </div>
+                </div>
 
-        <div className="px-6 py-4 bg-bg-dark/50 border-t border-border flex items-center justify-between">
-          <div className="text-sm text-text-muted">
-            Showing <span className="text-primary font-medium">{filteredMachines.length}</span> of{" "}
-            <span className="text-primary font-medium">{machines.length}</span> machines
-          </div>
-          {filteredMachines.length > 0 && (
-            <div className="text-sm text-text-muted">
-              <span className="text-accent font-medium">{machines.filter((row) => row.status === "ACTIVE").length}</span> Active,{" "}
-              <span className="text-danger font-medium">{machines.filter((row) => row.status === "INACTIVE").length}</span>{" "}
-              Inactive
-            </div>
-          )}
-        </div>
-      </div>
-
-      {showModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <form
-            onSubmit={handleSubmit}
-            className="bg-bg-card border border-border p-8 rounded-3xl w-full max-w-6xl max-h-[90vh] overflow-y-auto"
-          >
-            <div className="flex justify-between items-center mb-6 sticky top-0 bg-bg-card py-2">
-              <h2 className="text-xl font-bold text-text-main flex items-center gap-2">
-                {editingMachine ? (
-                  <>
-                    <Edit size={20} className="text-primary" />
-                    <span>Edit Machine</span>
-                  </>
-                ) : (
-                  <>
-                    <Plus size={20} className="text-primary" />
-                    <span>Add New Machine</span>
-                  </>
-                )}
-              </h2>
-              <button type="button" onClick={closeModal} className="p-2 hover:bg-bg-dark rounded-lg transition-colors">
-                <X size={20} />
-              </button>
-            </div>
-
-           
-
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-              {MACHINE_FORM_FIELD_CONFIG.map((field) => (
-                <div key={field.key} className="space-y-1">
-                  <label className="text-xs font-bold text-text-muted uppercase flex items-center gap-1">
-                    {field.label}
-                    {field.required && <span className="text-primary">*</span>}
-                  </label>
-                  {field.type === "select" ? (
-                    <select
-                      value={formData[field.key]}
-                      onChange={(event) => updateField(field.key, event.target.value)}
-                      required={field.required}
-                      className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none"
-                    >
-                      {field.options.map((option) => (
-                        <option key={option} value={option}>
-                          {option}
-                        </option>
+                {/* Card body */}
+                <div className="px-5 py-4 space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <p className="text-[10px] text-text-muted uppercase tracking-wider font-semibold mb-0.5">Operation</p>
+                      <p className="text-sm font-bold text-text-main font-mono">{m.operationNo || "—"}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-text-muted uppercase tracking-wider font-semibold mb-0.5">Daily target</p>
+                      <p className="text-sm font-bold text-text-main">{m.dailyTargetQty || 0} units</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between bg-bg-dark/60 border border-border rounded-lg px-3 py-2">
+                    <span className="text-xs font-mono text-primary">{m.plcIp || "Not configured"}</span>
+                    <span className="text-[10px] text-text-muted font-semibold uppercase">{m.plcProtocol || "—"}</span>
+                  </div>
+                  {hasCfg && (
+                    <div className="flex gap-1.5 flex-wrap">
+                      {[
+                        { label: "TRG", val: m.plcConfig.startRegister },
+                        { label: "STS", val: m.plcConfig.statusRegister },
+                        { label: "PRT", val: m.plcConfig.partRegister },
+                        { label: "RST", val: m.plcConfig.resetRegister },
+                      ].map(chip => (
+                        <span key={chip.label} className="px-2 py-0.5 bg-bg-dark border border-border rounded text-[10px] font-mono">
+                          <span className="text-primary font-bold">{chip.label}</span>
+                          <span className="text-text-muted ml-1">R{chip.val}</span>
+                        </span>
                       ))}
-                    </select>
-                  ) : (
-                    <input
-                      type={field.type || "text"}
-                      value={formData[field.key]}
-                      onChange={(event) => updateField(field.key, event.target.value)}
-                      required={field.required}
-                      placeholder={field.placeholder || ""}
-                      className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none"
-                    />
+                    </div>
                   )}
                 </div>
+
+                {/* Card footer */}
+                <div className="px-5 py-3 border-t border-border bg-bg-dark/20 flex items-center justify-end gap-2">
+                  <button onClick={() => setDeleteConfirmId(m.id)}
+                    className="p-2 text-text-muted hover:text-danger hover:bg-danger/10 rounded-lg transition-all">
+                    <Trash2 size={14} />
+                  </button>
+                  <button onClick={() => openEdit(m)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-primary/10 text-primary border border-primary/20 rounded-lg text-xs font-bold hover:bg-primary hover:text-on-strong transition-all">
+                    <Edit size={12} /> Configure
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── Edit / Create Modal ── */}
+      {showModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-bg-dark/90 backdrop-blur-sm" onClick={closeModal} />
+          <div className="relative w-full max-w-3xl bg-bg-card border border-border/60 rounded-2xl overflow-hidden flex flex-col max-h-[90vh] rise-in shadow-2xl">
+            {/* Modal header */}
+            <div className="px-6 py-5 border-b border-border flex items-center justify-between bg-bg-dark/30">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary">
+                  <Cpu size={18} />
+                </div>
+                <div>
+                  <h2 className="font-bold text-text-main">{editingMachine ? "Configure machine" : "Register new machine"}</h2>
+                  <p className="text-xs text-text-muted mt-0.5">{editingMachine ? `ID: ${editingMachine.id}` : "Add new equipment to the production line"}</p>
+                </div>
+              </div>
+              <button onClick={closeModal} className="p-2 text-text-muted hover:text-text-main hover:bg-bg-dark rounded-xl transition-all">
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Tabs */}
+            <div className="flex items-center border-b border-border bg-bg-dark/20 px-6 gap-1 overflow-x-auto">
+              {FORM_TABS.map(tab => (
+                <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+                  className={`flex items-center gap-1.5 px-4 py-3.5 text-xs font-semibold border-b-2 transition-all whitespace-nowrap ${activeTab === tab.id ? "border-primary text-primary" : "border-transparent text-text-muted hover:text-text-main"}`}>
+                  <tab.icon size={13} /> {tab.label}
+                </button>
               ))}
             </div>
 
-            {isModbusProtocol ? (
-              <div className="mt-6 border border-border rounded-2xl p-4 bg-bg-dark/40 space-y-5">
-                <div>
-                  <p className="text-sm font-bold text-text-main uppercase tracking-wide">PLC Binding</p>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-text-muted uppercase">
-                      Select PLC IP <span className="text-primary">*</span>
-                    </label>
-                    <select
-                      value={formData.plcIp}
-                      onChange={(event) => updateSelectedPlcIp(event.target.value)}
-                      required
-                      className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none"
-                    >
-                      <option value="">Select PLC IP</option>
-                      {plcIpOptions.map((ip) => (
-                        <option key={ip} value={ip}>
-                          {ip}
-                        </option>
-                      ))}
+            {/* Form body */}
+            <form id="machine-form" onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-6">
+              {/* ── GENERAL TAB ── */}
+              {activeTab === "general" && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  <div className="md:col-span-2">
+                    <InputField label="Machine name">
+                      <input required value={formData.machineName} onChange={e => updateField("machineName", e.target.value)}
+                        placeholder="e.g. OP-010 Press" className={inputCls} />
+                    </InputField>
+                  </div>
+                  <InputField label="Line / department">
+                    <input value={formData.lineName} onChange={e => updateField("lineName", e.target.value)}
+                      placeholder="Assembly Line A" className={inputCls} />
+                  </InputField>
+                  <InputField label="Status">
+                    <select value={formData.status} onChange={e => updateField("status", e.target.value)} className={selectCls}>
+                      <option value="ACTIVE">Active — live tracing</option>
+                      <option value="INACTIVE">Inactive — maintenance</option>
                     </select>
-                  </div>
+                  </InputField>
+                  <InputField label="Sequence number" hint="order on the line">
+                    <input type="number" value={formData.sequenceNo} onChange={e => updateField("sequenceNo", e.target.value)}
+                      placeholder="1" className={`${inputCls} font-mono`} />
+                  </InputField>
+                  <InputField label="Operation code">
+                    <input value={formData.operationNo} onChange={e => updateField("operationNo", e.target.value.toUpperCase())}
+                      placeholder="OP010" className={`${inputCls} font-mono uppercase`} />
+                  </InputField>
+                  <InputField label="Daily production target">
+                    <input type="number" value={formData.dailyTargetQty} onChange={e => updateField("dailyTargetQty", e.target.value)}
+                      placeholder="480" className={`${inputCls} font-mono font-bold`} />
+                  </InputField>
+                </div>
+              )}
 
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-text-muted uppercase">Auto Port</label>
-                    <input
-                      value={formData.plcPort}
-                      readOnly
-                      className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main outline-none opacity-80"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-text-muted uppercase">
-                      Select Register Range <span className="text-primary">*</span>
-                    </label>
-                    <select
-                      value={formData.plcRangeId}
-                      onChange={(event) => updateSelectedRange(event.target.value)}
-                      required
-                      className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none"
-                    >
-                      <option value="">Select range</option>
-                      {selectableRanges.map((range) => (
-                        <option key={range.id} value={range.id}>
-                          {range.rangeName} ({range.rangeStart}-{range.rangeEnd})
-                        </option>
-                      ))}
+              {/* ── NETWORK TAB ── */}
+              {activeTab === "network" && (
+                <div className="space-y-5">
+                  <InputField label="PLC protocol">
+                    <select value={formData.plcProtocol} onChange={e => updateField("plcProtocol", e.target.value)} className={`${selectCls} font-semibold`}>
+                      <option value="TCP_TEXT">Generic TCP text</option>
+                      <option value="MODBUS_TCP">Modbus TCP (standard industrial)</option>
+                      <option value="SLMP">SLMP — Mitsubishi Melsec</option>
                     </select>
+                  </InputField>
+                  <div className="grid grid-cols-2 gap-4">
+                    <InputField label="PLC IP address">
+                      <input required value={formData.plcIp} onChange={e => updateField("plcIp", e.target.value)}
+                        placeholder="192.168.1.10" className={`${inputCls} font-mono`} />
+                    </InputField>
+                    <InputField label="Port">
+                      <input type="number" value={formData.plcPort} onChange={e => updateField("plcPort", e.target.value)}
+                        placeholder="502" className={`${inputCls} font-mono`} />
+                    </InputField>
+                  </div>
+                  {usesRange && (
+                    <InputField label="Register block (range)" hint="assigned from PLC config page">
+                      <select value={formData.plcRangeId} onChange={e => updateField("plcRangeId", e.target.value)}
+                        className={`${selectCls} font-semibold`}>
+                        <option value="">— Select reserved memory block —</option>
+                        {selectableRanges.map(r => (
+                          <option key={r.id} value={r.id}>{r.rangeName} [R{r.rangeStart}–R{r.rangeEnd}]</option>
+                        ))}
+                      </select>
+                    </InputField>
+                  )}
+                  <div className="p-4 bg-bg-dark/50 border border-border rounded-xl flex items-start gap-3">
+                    <Info size={16} className="text-text-muted mt-0.5 flex-shrink-0" />
+                    <p className="text-xs text-text-muted leading-relaxed">
+                      Modbus TCP default port is <span className="font-mono font-bold text-primary">502</span>.
+                      SLMP (Mitsubishi) uses <span className="font-mono font-bold text-primary">5006</span>.
+                      Generic TCP scanners typically use <span className="font-mono font-bold text-primary">9001</span>.
+                      Ensure the PLC firewall allows inbound connections on the selected port.
+                    </p>
                   </div>
                 </div>
+              )}
 
-                {rangeRegistersError ? (
-                  <div className="rounded-xl border border-danger/40 bg-danger/10 text-danger px-3 py-2 text-xs">
-                    {rangeRegistersError}
+              {/* ── REGISTERS TAB ── */}
+              {activeTab === "registers" && (
+                <div className="space-y-5">
+                  {!formData.plcRangeId ? (
+                    <div className="p-16 border border-dashed border-border rounded-2xl flex flex-col items-center text-center text-text-muted">
+                      <Network size={32} className="opacity-20 mb-3" />
+                      <p className="font-semibold text-sm">Select a network block first</p>
+                      <p className="text-xs mt-1 text-text-muted/60">Go to the Network tab and assign a register block to enable register mapping</p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                        {MACHINE_REGISTER_ROLE_FIELDS.map(field => {
+                          const range = rangeById[formData.plcRangeId];
+                          const start = range?.rangeStart || 0;
+                          const end = range?.rangeEnd || 0;
+                          const usedRegisters = new Set();
+                          machines.forEach(m => {
+                            if (m.id === editingMachine?.id) return;
+                            if (Number(m.plcRangeId) !== Number(formData.plcRangeId)) return;
+                            const mc = m.plcConfig || {};
+                            MACHINE_REGISTER_ROLE_FIELDS.forEach(f => { if (mc[f.key]) usedRegisters.add(Number(mc[f.key])); });
+                          });
+                          MACHINE_REGISTER_ROLE_FIELDS.forEach(f => {
+                            if (f.key !== field.key && formData.plcConfig?.[f.key]) usedRegisters.add(Number(formData.plcConfig[f.key]));
+                          });
+                          const options = [];
+                          for (let r = start; r <= end; r++) {
+                            if (!usedRegisters.has(r) || Number(formData.plcConfig?.[field.key]) === r) options.push(r);
+                          }
+                          return (
+                            <div key={field.key} className="bg-bg-dark/60 border border-border rounded-xl p-4">
+                              <p className="text-[10px] font-semibold text-text-muted uppercase tracking-widest mb-2">{field.label}</p>
+                              <select required value={formData.plcConfig?.[field.key] ?? ""} onChange={e => updateCfg(field.key, e.target.value)}
+                                className="w-full bg-bg-dark border-0 border-b border-primary/30 pb-1 text-sm text-primary font-mono font-bold outline-none focus:border-primary">
+                                <option value="">— Select R —</option>
+                                {options.map(o => <option key={o} value={o}>R{o}</option>)}
+                              </select>
+                              {range && <p className="text-[9px] text-text-muted/50 mt-1.5">Block: {range.rangeName}</p>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="p-4 bg-accent/5 border border-accent/20 rounded-xl flex items-start gap-3">
+                        <Activity size={16} className="text-accent mt-0.5 flex-shrink-0" />
+                        <p className="text-xs text-text-muted leading-relaxed">
+                          Registers already used by other machines on this block are automatically filtered out to prevent data collision.
+                        </p>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* ── TUNING TAB ── */}
+              {activeTab === "tuning" && (
+                <div className="space-y-5">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                    {MACHINE_MODBUS_TUNING_FIELD_CONFIG.map(field => (
+                      <InputField key={field.key} label={field.label}>
+                        <input type="number" value={formData.plcConfig?.[field.key] ?? ""}
+                          onChange={e => updateCfg(field.key, e.target.value)}
+                          className={`${inputCls} font-mono`} />
+                      </InputField>
+                    ))}
                   </div>
-                ) : null}
+                  <div className="p-4 bg-danger/5 border border-danger/20 rounded-xl flex items-start gap-3">
+                    <AlertTriangle size={16} className="text-danger mt-0.5 flex-shrink-0" />
+                    <p className="text-xs text-text-muted leading-relaxed">
+                      Changing handshake signal values will immediately break the PLC communication unless the hardware program is updated to match. Coordinate with your PLC programmer before making changes.
+                    </p>
+                  </div>
+                </div>
+              )}
 
-                <div className="space-y-2">
-                  <p className="text-sm font-bold text-text-main uppercase tracking-wide">Handshake Mapping</p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                    {MACHINE_REGISTER_ROLE_FIELDS.map((field) => {
-                      const options = getRoleRegisterOptions(field.key);
-                      return (
-                        <div key={field.key} className="space-y-1">
-                          <label className="text-xs font-bold text-text-muted uppercase flex items-center gap-1">
-                            {field.label}
-                            {field.required && <span className="text-primary">*</span>}
-                          </label>
-                          <select
-                            value={formData.plcConfig?.[field.key] ?? ""}
-                            onChange={(event) => updatePlcConfigField(field.key, event.target.value)}
-                            required={field.required}
-                            disabled={!formData.plcRangeId || selectableRanges.length === 0 || rangeRegistersLoading}
-                            className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none disabled:opacity-60"
+              {/* ── LIVE DATA TAB ── */}
+              {activeTab === "live" && (
+                <div className="space-y-6">
+                  <div className="p-4 bg-primary/5 border border-primary/20 rounded-xl">
+                    <div className="flex items-center gap-3 mb-4">
+                      <Eye size={16} className="text-primary" />
+                      <h3 className="text-sm font-bold text-text-main">Read PLC Values</h3>
+                    </div>
+                    <div className="grid grid-cols-1 gap-4">
+                      <div>
+                        <FieldLabel label="Temperature register" hint="Modbus address (e.g., 40001)"/>
+                        <div className="flex gap-2">
+                          <input
+                            type="number"
+                            value={formData.readRegisters.temperature}
+                            onChange={e => updateReadReg("temperature", e.target.value)}
+                            placeholder="e.g., 40001"
+                            className={`${inputCls} flex-1`}
+                          />
+                          <button
+                            type="button"
+                            onClick={readTemperature}
+                            disabled={reading || !formData.readRegisters.temperature}
+                            className="px-4 py-2 bg-primary text-on-strong font-bold rounded-lg text-sm hover:brightness-110 transition-all disabled:opacity-50"
                           >
-                            <option value="">Select register</option>
-                            {options.map((registerNo) => (
-                              <option key={`${field.key}-${registerNo}`} value={registerNo}>
-                                {registerNo}
-                              </option>
-                            ))}
-                          </select>
+                            {reading ? "Reading..." : "Read"}
+                          </button>
                         </div>
-                      );
-                    })}
-                  </div>
-                  {rangeRegistersLoading ? <p className="text-xs text-text-muted">Loading register occupancy...</p> : null}
-                </div>
-
-                <div className="space-y-2">
-                  <p className="text-sm font-bold text-text-main uppercase tracking-wide">Value Mapping</p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                    {MACHINE_MODBUS_TUNING_FIELD_CONFIG.map((field) => (
-                      <div key={field.key} className="space-y-1">
-                        <label className="text-xs font-bold text-text-muted uppercase flex items-center gap-1">
-                          {field.label}
-                          {field.required && <span className="text-primary">*</span>}
-                        </label>
-                        <input
-                          type={field.type || "text"}
-                          value={formData.plcConfig?.[field.key] ?? ""}
-                          onChange={(event) => updatePlcConfigField(field.key, event.target.value)}
-                          required={field.required}
-                          placeholder={field.placeholder || ""}
-                          className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none"
-                        />
+                        {liveValues.temperature !== null && (
+                          <div className="mt-3 p-3 bg-accent/10 border border-accent/20 rounded-lg flex items-center justify-between">
+                            <span className="text-sm font-semibold text-text-main">Current temperature:</span>
+                            <span className="text-lg font-bold text-accent">{liveValues.temperature} °C</span>
+                          </div>
+                        )}
                       </div>
-                    ))}
+                      {/* You can add more registers here */}
+                    </div>
+                    <p className="text-xs text-text-muted mt-4">
+                      Note: The PLC must be accessible and the register must be configured to hold the desired value.
+                    </p>
                   </div>
                 </div>
+              )}
+            </form>
+
+            {/* Modal footer */}
+            <div className="px-6 py-4 border-t border-border flex items-center justify-between bg-bg-dark/20">
+              <div className="flex items-center gap-2 text-xs text-text-muted">
+                <ChevronRight size={12} />
+                <span>Fill in Identity → Network → Registers in order</span>
               </div>
-            ) : isSlmpProtocol ? (
-              <div className="mt-6 border border-border rounded-2xl p-4 bg-bg-dark/40 space-y-5">
-                <p className="text-sm font-bold text-text-main uppercase tracking-wide">PLC Binding</p>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-text-muted uppercase">
-                      PLC IP <span className="text-primary">*</span>
-                    </label>
-                    <input
-                      value={formData.plcIp}
-                      onChange={(event) => updateField("plcIp", event.target.value)}
-                      placeholder="192.168.0.10"
-                      required
-                      className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-text-muted uppercase">
-                      PLC Port <span className="text-primary">*</span>
-                    </label>
-                    <input
-                      type="number"
-                      value={formData.plcPort}
-                      onChange={(event) => updateField("plcPort", event.target.value)}
-                      placeholder="5010"
-                      required
-                      className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-text-muted uppercase">PLC Range (Optional)</label>
-                    <select
-                      value={formData.plcRangeId}
-                      onChange={(event) => updateSelectedRange(event.target.value)}
-                      className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none"
-                    >
-                      <option value="">No range</option>
-                      {selectableRanges.map((range) => (
-                        <option key={range.id} value={range.id}>
-                          {range.rangeName} ({range.rangeStart}-{range.rangeEnd})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-text-muted uppercase">SLMP Device Code</label>
-                    <select
-                      value={formData.plcSlmpDevice}
-                      onChange={(event) => updateField("plcSlmpDevice", event.target.value)}
-                      className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none"
-                    >
-                      {SLMP_DEVICE_OPTIONS.map((option) => (
-                        <option key={option} value={option}>
-                          {option}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="rounded-xl border border-border bg-bg-dark/70 px-3 py-2 text-xs text-text-muted">
-                    Use `plcSignalMap` to override device codes per signal when needed.
-                  </div>
-                </div>
-
-                {rangeRegistersError ? (
-                  <div className="rounded-xl border border-danger/40 bg-danger/10 text-danger px-3 py-2 text-xs">
-                    {rangeRegistersError}
-                  </div>
-                ) : null}
-
-                <div className="space-y-2">
-                  <p className="text-sm font-bold text-text-main uppercase tracking-wide">Handshake Mapping</p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                    {MACHINE_REGISTER_ROLE_FIELDS.map((field) => {
-                      const required = ["startRegister", "statusRegister"].includes(field.key);
-                      const useRangeRegisters = Boolean(formData.plcRangeId);
-                      const options = useRangeRegisters ? getRoleRegisterOptions(field.key) : [];
-                      return (
-                        <div key={field.key} className="space-y-1">
-                          <label className="text-xs font-bold text-text-muted uppercase flex items-center gap-1">
-                            {field.label}
-                            {required && <span className="text-primary">*</span>}
-                          </label>
-                          {useRangeRegisters ? (
-                            <select
-                              value={formData.plcConfig?.[field.key] ?? ""}
-                              onChange={(event) => updatePlcConfigField(field.key, event.target.value)}
-                              required={required}
-                              disabled={rangeRegistersLoading}
-                              className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none disabled:opacity-60"
-                            >
-                              <option value="">Select register</option>
-                              {options.map((registerNo) => (
-                                <option key={`${field.key}-${registerNo}`} value={registerNo}>
-                                  {registerNo}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <input
-                              type="number"
-                              value={formData.plcConfig?.[field.key] ?? ""}
-                              onChange={(event) => updatePlcConfigField(field.key, event.target.value)}
-                              required={required}
-                              placeholder="Register No"
-                              className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none"
-                            />
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  {rangeRegistersLoading ? <p className="text-xs text-text-muted">Loading register occupancy...</p> : null}
-                </div>
-
-                {slmpRegisterConflicts?.local?.length ? (
-                  <div className="rounded-xl border border-danger/40 bg-danger/10 text-danger px-3 py-2 text-xs space-y-1">
-                    <p className="font-semibold uppercase tracking-wide text-[10px]">Duplicate Registers In This Machine</p>
-                    {slmpRegisterConflicts.local.map((message, index) => (
-                      <p key={`slmp-local-${index}`}>{message}</p>
-                    ))}
-                  </div>
-                ) : null}
-
-                {slmpRegisterConflicts?.peer?.length ? (
-                  <div className="rounded-xl border border-warning/40 bg-warning/10 text-warning px-3 py-2 text-xs space-y-1">
-                    <p className="font-semibold uppercase tracking-wide text-[10px]">Registers Already Used On This PLC</p>
-                    {slmpRegisterConflicts.peer.map((message, index) => (
-                      <p key={`slmp-peer-${index}`}>{message}</p>
-                    ))}
-                  </div>
-                ) : null}
-
-                <div className="space-y-2">
-                  <p className="text-sm font-bold text-text-main uppercase tracking-wide">Value Mapping</p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                    {MACHINE_MODBUS_TUNING_FIELD_CONFIG.map((field) => (
-                      <div key={field.key} className="space-y-1">
-                        <label className="text-xs font-bold text-text-muted uppercase flex items-center gap-1">
-                          {field.label}
-                          {field.required && <span className="text-primary">*</span>}
-                        </label>
-                        <input
-                          type={field.type || "text"}
-                          value={formData.plcConfig?.[field.key] ?? ""}
-                          onChange={(event) => updatePlcConfigField(field.key, event.target.value)}
-                          required={field.required}
-                          placeholder={field.placeholder || ""}
-                          className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none"
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
+              <div className="flex items-center gap-3">
+                <button type="button" onClick={closeModal} className="px-4 py-2 text-sm text-text-muted hover:text-text-main transition-colors font-semibold">Cancel</button>
+                <button type="submit" form="machine-form" disabled={saving}
+                  className="px-6 py-2 bg-primary text-on-strong font-bold rounded-xl text-sm hover:brightness-110 transition-all flex items-center gap-2 disabled:opacity-50">
+                  <Save size={14} /> {saving ? "Saving…" : editingMachine ? "Save changes" : "Deploy machine"}
+                </button>
               </div>
-            ) : (
-              <div className="mt-6 border border-border rounded-2xl p-4 bg-bg-dark/40 space-y-4">
-                <p className="text-sm font-bold text-text-main uppercase tracking-wide">PLC Binding</p>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-text-muted uppercase">
-                      PLC IP <span className="text-primary">*</span>
-                    </label>
-                    <input
-                      value={formData.plcIp}
-                      onChange={(event) => updateField("plcIp", event.target.value)}
-                      placeholder="192.168.0.10"
-                      required
-                      className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-text-muted uppercase">
-                      PLC Port <span className="text-primary">*</span>
-                    </label>
-                    <input
-                      type="number"
-                      value={formData.plcPort}
-                      onChange={(event) => updateField("plcPort", event.target.value)}
-                      placeholder="5000"
-                      required
-                      className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main focus:border-primary/50 outline-none"
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div className="mt-6 border border-border rounded-2xl p-4 bg-bg-dark/40 space-y-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-sm font-bold text-text-main uppercase tracking-wide">Advanced Signal Map (Optional)</p>
-                {isSlmpProtocol ? (
-                  <button
-                    type="button"
-                    onClick={handleRegenerateSlmpSignalMap}
-                    className="inline-flex items-center gap-2 rounded-lg border border-border bg-bg-dark px-3 py-1.5 text-[11px] font-semibold text-text-main hover:border-primary/60"
-                  >
-                    <RefreshCw size={14} />
-                    Regenerate SLMP Map
-                  </button>
-                ) : null}
-              </div>
-              <p className="text-xs text-text-muted">
-                For protocol-specific I/O mapping (including SLMP), provide JSON array/object. If blank, default TRIGGER/INTERLOCK/COMPLETE/RESET mapping is used.
-              </p>
-              <textarea
-                rows={8}
-                value={formData.plcSignalMap}
-                onChange={(event) => updateField("plcSignalMap", event.target.value)}
-                placeholder={'[{"key":"TRIGGER","label":"START_CMD","register":100,"direction":"PC -> PLC","writable":true,"device":"D"}]'}
-                className="w-full bg-bg-dark border border-border rounded-xl p-3 text-text-main font-mono text-xs focus:border-primary/50 outline-none"
-              />
             </div>
-
-            <div className="flex justify-end mt-8 gap-4 pt-6 border-t border-border">
-              <button
-                type="button"
-                onClick={closeModal}
-                className="px-6 py-3 text-text-muted hover:text-text-main transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="bg-primary px-8 py-3 rounded-xl text-bg-dark font-bold flex gap-2 hover:brightness-110 transition-all shadow-lg shadow-primary/10"
-              >
-                <Save size={18} /> {editingMachine ? "Update" : "Save"}
-              </button>
-            </div>
-          </form>
+          </div>
         </div>
       )}
+
+      <ConfirmModal
+        isOpen={!!deleteConfirmId}
+        onCancel={() => setDeleteConfirmId(null)}
+        onConfirm={confirmDelete}
+        title="Remove machine?"
+        message="This will remove the machine from the registry. Historical production data is preserved but live tracing for this node will stop immediately."
+      />
     </div>
   );
 };

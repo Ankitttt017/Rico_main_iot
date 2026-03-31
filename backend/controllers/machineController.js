@@ -1,7 +1,8 @@
 const { Sequelize, Op } = require("sequelize");
 const Machine = require("../models/Machine");
 const PlcRegisterRange = require("../models/PlcRegisterRange");
-const { testPlcConnection, resetPlcState, sendPlcCommand } = require("../services/plcCommunicationService");
+const plcService = require("../services/plcCommunicationService");
+
 const { writeModbusRegister } = require("../services/plcIoService");
 const { clearMachineLock } = require("../services/machineLockService");
 
@@ -1041,7 +1042,7 @@ exports.resetPlc = async (req, res) => {
       return res.status(400).json({ error: "plcConfig.resetRegister is required for MODBUS_TCP reset" });
     }
 
-    const reset = await resetPlcState({
+    const reset = await plcService.resetPlcState({
       ip: payload.plc_ip,
       port: payload.plc_port,
       protocol: payload.plc_protocol,
@@ -1118,7 +1119,7 @@ exports.sendPlcCommand = async (req, res) => {
       return res.status(400).json({ error: "partId is required for START_OPERATION" });
     }
 
-    const result = await sendPlcCommand({
+    const result = await plcService.sendPlcCommand({
       ip: payload.plc_ip,
       port: payload.plc_port,
       protocol: payload.plc_protocol,

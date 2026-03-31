@@ -21,18 +21,25 @@ import {
   Regex,
   Users,
   FileText,
+  X,
 } from "lucide-react";
 import { APP_ROUTES } from "../constants/routes";
 import { roleAccessApi } from "../api/services";
 import { getUserRole } from "../utils/authStorage";
 import { canAccessModule, getRoleAccessSettings, saveRoleAccessSettings } from "../utils/roleAccess";
 
-const Sidebar = () => {
+const Sidebar = ({ onClose }) => {
   const [collapsed, setCollapsed] = useState(false);
   const [masterOpen, setMasterOpen] = useState(true);
   const [roleAccessSettings, setRoleAccessSettings] = useState(() => getRoleAccessSettings());
   const location = useLocation();
   const userRole = getUserRole();
+
+  // Close mobile sidebar when route changes
+  useEffect(() => {
+    if (onClose) onClose();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname]);
 
   const topNavigation = useMemo(
     () => [
@@ -49,9 +56,8 @@ const Sidebar = () => {
 
   const masterNavigation = useMemo(
     () => [
-      { name: "Master Overview", path: APP_ROUTES.masterSettings, icon: SlidersHorizontal, moduleKey: "master_settings" },
+      { name: "Role Access", path: APP_ROUTES.masterSettings, icon: SlidersHorizontal, moduleKey: "master_settings" },
       { name: "Station Controls", path: APP_ROUTES.stationControls, icon: Settings2, moduleKey: "master_settings" },
-      { name: "Master Reports", path: APP_ROUTES.masterReports, icon: FileText, moduleKey: "master_settings" },
       { name: "Machine Manager", path: APP_ROUTES.machines, icon: Package, moduleKey: "machines" },
       { name: "PLC Manager", path: APP_ROUTES.plcConfig, icon: Cpu, moduleKey: "plc_config" },
       { name: "Scanner Manager", path: APP_ROUTES.scanners, icon: ScanLine, moduleKey: "scanners" },
@@ -83,16 +89,12 @@ const Sidebar = () => {
     roleAccessApi
       .list()
       .then((data) => {
-        if (cancelled || !data) {
-          return;
-        }
+        if (cancelled || !data) return;
         saveRoleAccessSettings(data);
         setRoleAccessSettings(getRoleAccessSettings());
       })
       .catch(() => { });
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
   const renderNavItem = (item, nested = false) => {
@@ -101,81 +103,127 @@ const Sidebar = () => {
       <NavLink
         key={item.path}
         to={item.path}
+        title={collapsed ? item.name : undefined}
         className={({ isActive }) =>
-          `flex items-center ${collapsed ? "justify-center" : "space-x-3"} px-3 py-3 rounded-lg transition-all ${nested && !collapsed ? "ml-3 mr-1" : ""
-          } ${isActive
-            ? "bg-gradient-to-r from-primary/20 to-transparent text-primary border-l-4 border-primary"
-            : "text-text-muted hover:bg-bg-card/80 hover:text-text-main"
+          `flex items-center ${collapsed ? "justify-center" : "gap-3"} px-3 py-2.5 rounded-xl transition-all duration-200
+           ${nested && !collapsed ? "ml-3" : ""}
+           ${isActive
+            ? "bg-primary/15 text-primary font-semibold border border-primary/20 shadow-sm shadow-primary/10"
+            : "text-text-muted hover:bg-bg-hover/60 hover:text-text-main border border-transparent"
           }`
         }
       >
-        <Icon size={18} />
-        {!collapsed && <span className="text-sm font-medium">{item.name}</span>}
+        <Icon size={17} className="flex-shrink-0" />
+        {!collapsed && <span className="text-sm truncate">{item.name}</span>}
       </NavLink>
     );
   };
 
+  const sectionLabel = (label) =>
+    !collapsed && (
+      <p className="px-3 pt-4 pb-1.5 text-[10px] font-bold uppercase tracking-widest text-text-muted/60 select-none">
+        {label}
+      </p>
+    );
+
   return (
     <aside
-      className={`${collapsed ? "w-20" : "w-64"
-        } bg-bg-card/50 backdrop-blur-xl border-r border-border/50 flex flex-col overflow-hidden transition-all duration-300`}
+      className={`
+        ${collapsed ? "w-[72px]" : "w-64"}
+        h-screen flex flex-col
+        bg-bg-card/80 backdrop-blur-2xl
+        border-r border-border/60
+        transition-all duration-300 ease-in-out
+        overflow-hidden
+      `}
     >
-      <div className="h-16 flex items-center justify-between px-4 border-b border-border/50">
-        {!collapsed && (
-          <div className="flex items-center space-x-2">
-            <div className="w-10 h-10 bg-primary/10 rounded-xl flex items-center justify-center border border-primary/20">
-              <QrCode className="text-primary" size={24} />
+      {/* Logo bar */}
+      <div className="h-16 flex-shrink-0 flex items-center justify-between px-3 border-b border-border/60">
+        {!collapsed ? (
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-9 h-9 bg-primary/10 rounded-xl flex items-center justify-center border border-primary/20 flex-shrink-0">
+              <QrCode className="text-primary" size={20} />
             </div>
-            <span className="font-bold text-xl tracking-tight text-text-main font-outfit">
+            <span className="font-bold text-lg tracking-tight text-text-main">
               Indus<span className="text-primary">Trace</span>
             </span>
           </div>
-        )}
-        {collapsed && (
-          <div className="w-10 h-10 bg-primary/10 rounded-xl flex items-center justify-center mx-auto border border-primary/20">
-            <QrCode className="text-primary" size={24} />
+        ) : (
+          <div className="w-9 h-9 bg-primary/10 rounded-xl flex items-center justify-center mx-auto border border-primary/20">
+            <QrCode className="text-primary" size={20} />
           </div>
         )}
-        <button
-          onClick={() => setCollapsed((prev) => !prev)}
-          className="p-1 hover:bg-bg-dark rounded-lg transition-colors"
-        >
-          {collapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
-        </button>
+
+        <div className="flex items-center gap-1 flex-shrink-0">
+          {/* Mobile close button */}
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="p-1.5 hover:bg-bg-hover rounded-lg transition-colors lg:hidden"
+              aria-label="Close sidebar"
+            >
+              <X size={16} />
+            </button>
+          )}
+          {/* Desktop collapse button */}
+          <button
+            onClick={() => setCollapsed((p) => !p)}
+            className="p-1.5 hover:bg-bg-hover rounded-lg transition-colors hidden lg:flex"
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+          </button>
+        </div>
       </div>
 
-      <nav className="flex-1 min-h-0 overflow-y-auto py-6">
-        <div className="space-y-1 px-3">
-          {visibleTopNavigation.map((item) => renderNavItem(item))}
+      {/* Navigation (scrollable) */}
+      <nav className="flex-1 overflow-y-auto overflow-x-hidden py-3 px-2 pr-1 space-y-0.5 scrollbar-thin">
 
-          {visibleMasterNavigation.length > 0 && (
-            <div className="pt-2">
-              <button
-                onClick={() => setMasterOpen((prev) => !prev)}
-                className={`w-full flex items-center ${collapsed ? "justify-center" : "justify-between"
-                  } px-3 py-3 rounded-lg transition-all ${isMasterActive
-                    ? "bg-gradient-to-r from-primary/20 to-transparent text-primary border-l-4 border-primary"
-                    : "text-text-muted hover:bg-bg-card/80 hover:text-text-main"
-                  }`}
-              >
-                <span className={`flex items-center ${collapsed ? "" : "gap-3"}`}>
-                  <SlidersHorizontal size={18} />
-                  {!collapsed && <span className="text-sm font-medium">Settings</span>}
-                </span>
-                {!collapsed ? (
-                  <ChevronDown size={16} className={`transition-transform ${masterOpen ? "rotate-180" : ""}`} />
-                ) : null}
-              </button>
+        {sectionLabel("Main")}
+        {visibleTopNavigation.map((item) => renderNavItem(item))}
 
-              {!collapsed && masterOpen && (
-                <div className="mt-1 space-y-1">
-                  {visibleMasterNavigation.map((item) => renderNavItem(item, true))}
-                </div>
+        {/* Settings group */}
+        {visibleMasterNavigation.length > 0 && (
+          <>
+            {sectionLabel("Settings")}
+            <button
+              onClick={() => setMasterOpen((p) => !p)}
+              className={`w-full flex items-center ${collapsed ? "justify-center" : "justify-between gap-3"} px-3 py-2.5 rounded-xl transition-all border border-transparent
+                ${isMasterActive
+                  ? "bg-primary/15 text-primary border-primary/20"
+                  : "text-text-muted hover:bg-bg-hover/60 hover:text-text-main"
+                }`}
+            >
+              <span className="flex items-center gap-3">
+                <SlidersHorizontal size={17} className="flex-shrink-0" />
+                {!collapsed && <span className="text-sm font-medium">Configuration</span>}
+              </span>
+              {!collapsed && (
+                <ChevronDown size={14} className={`transition-transform flex-shrink-0 ${masterOpen ? "rotate-180" : ""}`} />
               )}
-            </div>
-          )}
-        </div>
+            </button>
+
+            {!collapsed && masterOpen && (
+              <div className="space-y-0.5 mt-0.5">
+                {visibleMasterNavigation.map((item) => renderNavItem(item, true))}
+              </div>
+            )}
+
+            {collapsed && (
+              <div className="space-y-0.5 mt-0.5">
+                {visibleMasterNavigation.map((item) => renderNavItem(item))}
+              </div>
+            )}
+          </>
+        )}
       </nav>
+
+      {/* Version footer */}
+      {!collapsed && (
+        <div className="flex-shrink-0 px-4 py-3 border-t border-border/60">
+          <p className="text-[10px] text-text-muted/60 text-center">IndusTrace v2.0 - Production Ready</p>
+        </div>
+      )}
     </aside>
   );
 };

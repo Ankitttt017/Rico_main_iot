@@ -1,9 +1,36 @@
+/**
+ * IndusTrace Backend — server.js
+ * ─────────────────────────────────────────────────────────────────
+ * Socket.IO Events Emitted by this Server:
+ *
+ * [Realtime / Scan]
+ *   dashboard_refresh      — triggers UI reload
+ *   machine_status         — array of machine states (5s poll)
+ *   scanner_status         — array of scanner states (5s poll)
+ *   scan_event             — new scan processed { partId, machineId, status }
+ *   plc_connection_event   — PLC handshake lifecycle { machineId, state, attempt }
+ *   plc_circuit_event      — circuit breaker state { machineId, state, openUntil }
+ *
+ * [Alarms — Upgrade 6]
+ *   alarm:ng_rate          — NG rate exceeded 10% { machineId, ngRate, totalCount }
+ *   alarm:silent           — Machine silent > 10min { machineId, lastScanTime }
+ *   alarm:plc_disconnect   — PLC socket lost { machineId, ip, port, errorMessage }
+ *
+ * [PLC Write Retry — Upgrade 3]
+ *   plc:write_failed       — PLC write exhausted retries { machineId, operation, payload }
+ *
+ * [Offline Buffer — Upgrade 4]
+ *   db:offline             — DB unreachable, buffering locally { count }
+ *   db:reconnected         — DB back, replaying buffer { replayed, failed }
+ * ─────────────────────────────────────────────────────────────────
+ */
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const http = require("http");
 const { Server } = require("socket.io");
 const sequelize = require("./config/db");
+const { errorHandler } = require("./middleware/errorHandler");
 
 const authRoutes = require("./routes/authRoutes");
 const v1Routes = require("./routes/v1");
@@ -26,9 +53,12 @@ require("./models/ScannerConnection");
 const { getPartRoom, setSocketServer } = require("./services/realtimeService");
 const { startPlcHealthMonitor } = require("./services/plcHealthService");
 const { resetAllMachineLocks } = require("./services/machineLockService");
-const { resetAllScannerConnectionStates } = require("./services/scannerConnectionService");
+const scannerService = require("./services/scannerConnectionService");
+const { startAlarmMonitor } = require("./services/alarmService");
 
 require("./tcp/tcpServer");
+require("./models/AuditLog"); // UPGRADE 5 — auto-sync AuditLog table
+require("./models/Alarm");    // UPGRADE 6 — auto-sync Alarms table
 
 const app = express();
 const server = http.createServer(app);
@@ -43,14 +73,21 @@ setSocketServer(io);
 app.use(cors());
 app.use(express.json());
 
+const { getAuditLog } = require("./controllers/auditController");
+// Mount routes
 app.use("/api/auth", authRoutes);
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1", v1Routes);
 app.use("/api", v1Routes);
+// Upgrade 5 — Audit Log route (Admin only, JWT auth required via v1Routes middleware)
+app.get("/api/audit", getAuditLog);
+app.get("/api/v1/audit", getAuditLog);
 
 app.get("/", (_req, res) => {
   res.send("Traceability Backend Running");
 });
+
+app.use(errorHandler);
 
 io.on("connection", (socket) => {
   console.log("Client connected:", socket.id);
@@ -140,10 +177,11 @@ server.listen(PORT, async () => {
     await sequelize.authenticate();
     await sequelize.sync({ alter: syncAlter });
     await resetAllMachineLocks();
-    await resetAllScannerConnectionStates();
+    await scannerService.resetAllScannerConnectionStates();
     await ensureDefaultAdminUser();
     await ensureDefaultShifts();
     startPlcHealthMonitor();
+    startAlarmMonitor(); // UPGRADE 6 — start alarm monitor
     console.log(`Server Running on ${PORT}`);
   } catch (error) {
     console.error("Unable to connect to the database:", error);

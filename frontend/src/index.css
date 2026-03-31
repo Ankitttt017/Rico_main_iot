@@ -3,52 +3,128 @@
 
 :root,
 :root[data-theme="dark"] {
-  --app-bg-dark: #0b1622;
-  --app-bg-card: #132132;
-  --app-primary: #18b7c9;
-  --app-secondary: #2f88c5;
-  --app-accent: #3ecf9f;
-  --app-danger: #e56b6b;
-  --app-warning: #d8a44a;
-  --app-text-main: #e7f0f7;
-  --app-text-muted: #9db1c5;
-  --app-border: rgba(157, 177, 197, 0.23);
-  --app-grad-a: rgba(24, 183, 201, 0.2);
-  --app-grad-b: rgba(47, 136, 197, 0.22);
-  --app-bg-start: #0a121d;
-  --app-bg-end: #07101a;
+  --app-brand-900: rgb(26, 50, 99);
+  --app-brand-700: rgb(84, 119, 146);
+  --app-brand-400: rgb(250, 185, 91);
+  --app-brand-50: rgb(232, 226, 219);
+  --app-bg-dark: color-mix(in srgb, var(--app-brand-900) 92%, black);
+  --app-bg-card: color-mix(in srgb, var(--app-brand-900) 80%, black);
+  --app-bg-base: color-mix(in srgb, var(--app-brand-900) 96%, black);
+  --app-bg-surface: color-mix(in srgb, var(--app-brand-900) 88%, black);
+  --app-bg-elevated: color-mix(in srgb, var(--app-brand-900) 74%, black);
+  --app-bg-hover: color-mix(in srgb, var(--app-brand-900) 64%, black);
+  --app-bg-deep: color-mix(in srgb, var(--app-brand-900) 98%, black);
+  --app-primary: var(--app-brand-400);
+  --app-secondary: var(--app-brand-700);
+  --app-primary-dim: color-mix(in srgb, var(--app-brand-400) 70%, var(--app-brand-700));
+  --app-accent: #10b981;
+  --app-success: #10b981;
+  --app-danger: #f43f5e;
+  --app-warning: #f59e0b;
+  --app-comm: #f97316;
+  --app-wait: #64748b;
+  --app-text-main: var(--app-brand-50);
+  --app-text-muted: color-mix(in srgb, var(--app-brand-50) 70%, var(--app-brand-700));
+  --app-text-subtle: color-mix(in srgb, var(--app-brand-50) 50%, var(--app-brand-700));
+  --app-text-bright: #ffffff;
+  --app-border: color-mix(in srgb, var(--app-brand-700) 35%, var(--app-brand-900));
+  --app-border-muted: color-mix(in srgb, var(--app-brand-900) 88%, black);
+  --app-border-strong: color-mix(in srgb, var(--app-brand-700) 55%, var(--app-brand-900));
+  --app-grad-a: rgba(250, 185, 91, 0.18);
+  --app-grad-b: rgba(84, 119, 146, 0.2);
+  --app-bg-start: color-mix(in srgb, var(--app-brand-900) 96%, black);
+  --app-bg-end: color-mix(in srgb, var(--app-brand-900) 85%, black);
+  --app-on-strong: var(--app-brand-900);
+  --app-chart-grid: color-mix(in srgb, var(--app-brand-700) 35%, transparent);
+  --app-chart-axis: color-mix(in srgb, var(--app-brand-700) 70%, transparent);
+  --app-chart-axis-text: var(--app-text-muted);
+  --app-chart-cursor: color-mix(in srgb, var(--app-brand-700) 30%, transparent);
+  --app-chart-dot-stroke: var(--app-bg-dark);
+  --app-chart-1: var(--app-primary);
+  --app-chart-2: var(--app-secondary);
+  --app-chart-3: var(--app-accent);
+  --app-chart-4: var(--app-success);
+  --app-chart-5: var(--app-warning);
+  --app-chart-6: var(--app-danger);
+  --app-chart-7: color-mix(in srgb, var(--app-brand-400) 55%, var(--app-brand-700));
+  --app-chart-8: color-mix(in srgb, var(--app-brand-50) 55%, var(--app-brand-700));
   color-scheme: dark;
 }
 
 :root[data-theme="light"] {
-  --app-bg-dark: #edf2f6;
+  --app-brand-900: rgb(26, 50, 99);
+  --app-brand-700: rgb(84, 119, 146);
+  --app-brand-400: rgb(250, 185, 91);
+  --app-brand-50: rgb(232, 226, 219);
+  --app-bg-dark: color-mix(in srgb, var(--app-brand-50) 96%, white);
   --app-bg-card: #ffffff;
-  --app-primary: #0f8ca4;
-  --app-secondary: #2f6f9f;
-  --app-accent: #199b72;
-  --app-danger: #c84f4f;
-  --app-warning: #946b24;
-  --app-text-main: #11263a;
-  --app-text-muted: #536a84;
-  --app-border: rgba(17, 38, 58, 0.17);
-  --app-grad-a: rgba(15, 140, 164, 0.16);
-  --app-grad-b: rgba(47, 111, 159, 0.16);
-  --app-bg-start: #f4f8fc;
-  --app-bg-end: #eaf0f6;
+  --app-bg-base: var(--app-brand-50);
+  --app-bg-surface: color-mix(in srgb, var(--app-brand-50) 85%, white);
+  --app-bg-elevated: color-mix(in srgb, var(--app-brand-50) 72%, white);
+  --app-bg-hover: color-mix(in srgb, var(--app-brand-50) 60%, white);
+  --app-bg-deep: color-mix(in srgb, var(--app-brand-50) 92%, white);
+  --app-primary: var(--app-brand-400);
+  --app-secondary: var(--app-brand-700);
+  --app-primary-dim: color-mix(in srgb, var(--app-brand-400) 70%, var(--app-brand-700));
+  --app-accent: #10b981;
+  --app-success: #10b981;
+  --app-danger: #f43f5e;
+  --app-warning: #f59e0b;
+  --app-comm: #f97316;
+  --app-wait: #64748b;
+  --app-text-main: var(--app-brand-900);
+  --app-text-muted: color-mix(in srgb, var(--app-brand-900) 65%, var(--app-brand-700));
+  --app-text-subtle: color-mix(in srgb, var(--app-brand-900) 45%, var(--app-brand-700));
+  --app-text-bright: var(--app-brand-900);
+  --app-border: color-mix(in srgb, var(--app-brand-700) 28%, var(--app-brand-50));
+  --app-border-muted: color-mix(in srgb, var(--app-brand-50) 80%, white);
+  --app-border-strong: color-mix(in srgb, var(--app-brand-700) 40%, var(--app-brand-50));
+  --app-grad-a: rgba(250, 185, 91, 0.12);
+  --app-grad-b: rgba(84, 119, 146, 0.12);
+  --app-bg-start: color-mix(in srgb, var(--app-brand-50) 92%, white);
+  --app-bg-end: color-mix(in srgb, var(--app-brand-50) 75%, white);
+  --app-on-strong: var(--app-brand-900);
+  --app-chart-grid: color-mix(in srgb, var(--app-brand-700) 30%, transparent);
+  --app-chart-axis: color-mix(in srgb, var(--app-brand-700) 70%, transparent);
+  --app-chart-axis-text: var(--app-text-muted);
+  --app-chart-cursor: color-mix(in srgb, var(--app-brand-700) 22%, transparent);
+  --app-chart-dot-stroke: var(--app-bg-card);
+  --app-chart-1: var(--app-primary);
+  --app-chart-2: var(--app-secondary);
+  --app-chart-3: var(--app-accent);
+  --app-chart-4: var(--app-success);
+  --app-chart-5: var(--app-warning);
+  --app-chart-6: var(--app-danger);
+  --app-chart-7: color-mix(in srgb, var(--app-brand-400) 55%, var(--app-brand-700));
+  --app-chart-8: color-mix(in srgb, var(--app-brand-50) 55%, var(--app-brand-700));
   color-scheme: light;
 }
 
 @theme {
+  --color-bg-base: var(--app-bg-base);
+  --color-bg-surface: var(--app-bg-surface);
+  --color-bg-elevated: var(--app-bg-elevated);
+  --color-bg-hover: var(--app-bg-hover);
+  --color-bg-deep: var(--app-bg-deep);
   --color-bg-dark: var(--app-bg-dark);
   --color-bg-card: var(--app-bg-card);
   --color-primary: var(--app-primary);
+  --color-primary-dim: var(--app-primary-dim);
   --color-secondary: var(--app-secondary);
   --color-accent: var(--app-accent);
+  --color-success: var(--app-success);
   --color-danger: var(--app-danger);
   --color-warning: var(--app-warning);
+  --color-comm: var(--app-comm);
+  --color-wait: var(--app-wait);
   --color-text-main: var(--app-text-main);
   --color-text-muted: var(--app-text-muted);
+  --color-text-subtle: var(--app-text-subtle);
+  --color-text-bright: var(--app-text-bright);
   --color-border: var(--app-border);
+  --color-border-muted: var(--app-border-muted);
+  --color-border-strong: var(--app-border-strong);
+  --color-on-strong: var(--app-on-strong);
   --font-outfit: "Sora", "Outfit", system-ui, -apple-system, sans-serif;
 }
 
@@ -76,11 +152,9 @@ body {
 }
 
 .industrial-card {
-  background: linear-gradient(
-    165deg,
-    color-mix(in srgb, var(--color-bg-card), white 2%),
-    color-mix(in srgb, var(--color-bg-dark), var(--color-bg-card) 28%)
-  );
+  background: linear-gradient(165deg,
+      color-mix(in srgb, var(--color-bg-card), white 2%),
+      color-mix(in srgb, var(--color-bg-dark), var(--color-bg-card) 28%));
   border: 1px solid var(--color-border);
   border-radius: 1.25rem;
   box-shadow:
@@ -107,11 +181,45 @@ body {
   border: 1px solid color-mix(in srgb, var(--color-border), transparent 25%);
 }
 
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--color-primary) 14%, transparent);
+  color: var(--color-primary);
+}
+
+.badge-info {
+  background: color-mix(in srgb, var(--color-secondary) 16%, transparent);
+  border-color: color-mix(in srgb, var(--color-secondary) 45%, transparent);
+  color: var(--color-secondary);
+}
+
+.badge-success {
+  background: color-mix(in srgb, var(--color-success) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-success) 45%, transparent);
+  color: var(--color-success);
+}
+
+.badge-error {
+  background: color-mix(in srgb, var(--color-danger) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-danger) 45%, transparent);
+  color: var(--color-danger);
+}
+
 @keyframes riseIn {
   from {
     opacity: 0;
     transform: translateY(12px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -120,6 +228,25 @@ body {
 
 .rise-in {
   animation: riseIn 450ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
+}
+
+.animate-shake {
+  animation: shake 0.4s ease-in-out;
+}
+
+@keyframes pulse-slow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.82; }
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 3s infinite;
 }
 
 .theme-transition,
@@ -133,17 +260,157 @@ textarea {
     color 220ms ease;
 }
 
+/* Legacy slate palette bridge for light theme */
+:root[data-theme="light"] .bg-slate-950 {
+  background-color: var(--app-bg-deep) !important;
+}
+
+:root[data-theme="light"] .bg-slate-900 {
+  background-color: var(--app-bg-card) !important;
+}
+
+:root[data-theme="light"] .bg-slate-800 {
+  background-color: var(--app-bg-elevated) !important;
+}
+
+:root[data-theme="light"] .bg-slate-700,
+:root[data-theme="light"] .bg-slate-600,
+:root[data-theme="light"] .bg-slate-500 {
+  background-color: var(--app-bg-hover) !important;
+}
+
+:root[data-theme="light"] .bg-slate-200,
+:root[data-theme="light"] .bg-slate-100 {
+  background-color: var(--app-bg-elevated) !important;
+}
+
+:root[data-theme="light"] .bg-slate-50 {
+  background-color: var(--app-bg-surface) !important;
+}
+
+:root[data-theme="light"] .text-slate-500,
+:root[data-theme="light"] .text-slate-400,
+:root[data-theme="light"] .text-slate-300,
+:root[data-theme="light"] .text-slate-600 {
+  color: var(--app-text-muted) !important;
+}
+
+:root[data-theme="light"] .text-slate-200 {
+  color: var(--app-text-main) !important;
+}
+
+:root[data-theme="light"] .border-slate-800,
+:root[data-theme="light"] .border-slate-700,
+:root[data-theme="light"] .border-slate-600,
+:root[data-theme="light"] .border-slate-500,
+:root[data-theme="light"] .border-slate-400 {
+  border-color: var(--app-border) !important;
+}
+
+:root[data-theme="light"] .text-slate-700,
+:root[data-theme="light"] .text-slate-800,
+:root[data-theme="light"] .text-slate-900 {
+  color: var(--app-text-main) !important;
+}
+
+:root[data-theme="light"] .bg-slate-900\/80 {
+  background-color: color-mix(in srgb, var(--app-bg-card) 80%, transparent) !important;
+}
+
+:root[data-theme="light"] .bg-slate-900\/70 {
+  background-color: color-mix(in srgb, var(--app-bg-card) 70%, transparent) !important;
+}
+
+:root[data-theme="light"] .bg-slate-900\/60 {
+  background-color: color-mix(in srgb, var(--app-bg-card) 60%, transparent) !important;
+}
+
+:root[data-theme="light"] .bg-slate-900\/50 {
+  background-color: color-mix(in srgb, var(--app-bg-card) 50%, transparent) !important;
+}
+
+:root[data-theme="light"] .bg-slate-800\/80 {
+  background-color: color-mix(in srgb, var(--app-bg-elevated) 80%, transparent) !important;
+}
+
+:root[data-theme="light"] .bg-slate-800\/70 {
+  background-color: color-mix(in srgb, var(--app-bg-elevated) 70%, transparent) !important;
+}
+
+:root[data-theme="light"] .bg-slate-800\/60 {
+  background-color: color-mix(in srgb, var(--app-bg-elevated) 60%, transparent) !important;
+}
+
+:root[data-theme="light"] .bg-slate-800\/50 {
+  background-color: color-mix(in srgb, var(--app-bg-elevated) 50%, transparent) !important;
+}
+
+:root[data-theme="light"] .bg-slate-800\/40 {
+  background-color: color-mix(in srgb, var(--app-bg-elevated) 40%, transparent) !important;
+}
+
+:root[data-theme="light"] .bg-slate-800\/30 {
+  background-color: color-mix(in srgb, var(--app-bg-elevated) 30%, transparent) !important;
+}
+
+:root[data-theme="light"] .bg-slate-700\/60 {
+  background-color: color-mix(in srgb, var(--app-bg-hover) 60%, transparent) !important;
+}
+
+:root[data-theme="light"] .bg-slate-700\/50 {
+  background-color: color-mix(in srgb, var(--app-bg-hover) 50%, transparent) !important;
+}
+
+:root[data-theme="light"] .bg-slate-700\/40 {
+  background-color: color-mix(in srgb, var(--app-bg-hover) 40%, transparent) !important;
+}
+
+:root[data-theme="light"] .bg-slate-500\/10 {
+  background-color: color-mix(in srgb, var(--app-bg-hover) 10%, transparent) !important;
+}
+
+:root[data-theme="light"] .border-slate-800\/80 {
+  border-color: color-mix(in srgb, var(--app-border-strong) 80%, transparent) !important;
+}
+
+:root[data-theme="light"] .border-slate-700\/60 {
+  border-color: color-mix(in srgb, var(--app-border) 60%, transparent) !important;
+}
+
+:root[data-theme="light"] .border-slate-700\/50 {
+  border-color: color-mix(in srgb, var(--app-border) 50%, transparent) !important;
+}
+
+:root[data-theme="light"] .border-slate-600\/40 {
+  border-color: color-mix(in srgb, var(--app-border) 40%, transparent) !important;
+}
+
+:root[data-theme="light"] .border-slate-600\/30 {
+  border-color: color-mix(in srgb, var(--app-border) 30%, transparent) !important;
+}
+
+:root[data-theme="light"] .border-slate-500\/60 {
+  border-color: color-mix(in srgb, var(--app-border) 60%, transparent) !important;
+}
+
+:root[data-theme="light"] .border-slate-400\/20 {
+  border-color: color-mix(in srgb, var(--app-border) 20%, transparent) !important;
+}
+
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
 }
+
 ::-webkit-scrollbar-track {
   background: color-mix(in srgb, var(--color-bg-dark), transparent 10%);
 }
+
 ::-webkit-scrollbar-thumb {
   background: var(--color-secondary);
   border-radius: 4px;
 }
+
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-primary);
 }

@@ -1,4 +1,6 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
+import { Toaster } from "react-hot-toast";
+import { useAlarmToasts } from "./hooks/useAlarmToasts.jsx";
 import MainLayout from "./layouts/MainLayout";
 import LoginPage from "./pages/LoginPage";
 import Dashboard from "./pages/Dashboard";
@@ -16,7 +18,6 @@ import PackingManagement from "./pages/PackingManagement";
 import Shifts from "./pages/Shifts";
 import MasterOverview from "./pages/MasterOverview";
 import StationControls from "./pages/StationControls";
-import MasterReports from "./pages/MasterReports";
 import PlcConfiguration from "./pages/PlcConfiguration";
 import IoMonitor from "./pages/IoMonitor";
 import { getUserRole, isAuthenticated } from "./utils/authStorage";
@@ -70,8 +71,54 @@ const ModuleRoute = ({ moduleKey, children }) => {
 };
 
 function App() {
+  // Global Socket.IO alarm & scan toasts — active on every page
+  useAlarmToasts();
+
   return (
     <Router>
+      <Toaster
+        position="top-right"
+        gutter={10}
+        containerStyle={{ top: 16, right: 16 }}
+        toastOptions={{
+          duration: 6000,
+          style: {
+            background: "var(--app-bg-card)",
+            color: "var(--app-text-main)",
+            border: "1px solid var(--app-border)",
+            borderRadius: "12px",
+            padding: "12px 16px",
+            fontSize: "13px",
+            fontFamily: "inherit",
+            boxShadow: "0 10px 26px rgba(0,0,0,0.35)",
+            maxWidth: "380px",
+          },
+          success: {
+            iconTheme: { primary: "var(--app-success)", secondary: "var(--app-bg-card)" },
+            style: {
+              background:
+                "color-mix(in srgb, var(--app-success) 14%, var(--app-bg-card))",
+              border: "1px solid color-mix(in srgb, var(--app-success) 50%, transparent)",
+              color: "var(--app-text-main)",
+              borderRadius: "12px",
+              padding: "12px 16px",
+              boxShadow: "0 0 18px color-mix(in srgb, var(--app-success) 45%, transparent)",
+            },
+          },
+          error: {
+            iconTheme: { primary: "var(--app-danger)", secondary: "var(--app-bg-card)" },
+            style: {
+              background:
+                "color-mix(in srgb, var(--app-danger) 12%, var(--app-bg-card))",
+              border: "1px solid color-mix(in srgb, var(--app-danger) 50%, transparent)",
+              color: "var(--app-text-main)",
+              borderRadius: "12px",
+              padding: "12px 16px",
+              boxShadow: "0 0 18px color-mix(in srgb, var(--app-danger) 45%, transparent)",
+            },
+          },
+        }}
+      />
       <Routes>
         <Route
           path={APP_ROUTES.login}
@@ -81,7 +128,7 @@ function App() {
             </PublicOnlyRoute>
           }
         />
-        
+
         <Route
           path={APP_ROUTES.root}
           element={
@@ -115,14 +162,7 @@ function App() {
               </ModuleRoute>
             }
           />
-          <Route
-            path={APP_ROUTES.masterReports.slice(1)}
-            element={
-              <ModuleRoute moduleKey="master_settings">
-                <MasterReports />
-              </ModuleRoute>
-            }
-          />
+          
           <Route
             path={APP_ROUTES.production.slice(1)}
             element={

@@ -1,851 +1,1314 @@
+// ============================================================
+//  IoMonitor.jsx — IndusTrace v3
+//  NEW: "PLC Overview" tab — all PLC IPs, protocol, register
+//       range, connection status, test popup
+//  Signals as cards, inline write, step-by-step control
+// ============================================================
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, AlertCircle, CheckCircle2, Lock, RefreshCw, RotateCcw, Save, ServerCog, WifiOff } from "lucide-react";
+import {
+  Activity, AlertCircle, CheckCircle2, RefreshCw, RotateCcw,
+  Save, History, Cpu, Unplug, Zap, Radio, ShieldAlert,
+  Wifi, WifiOff, Clock, Signal, Settings, Edit3, Send,
+  ChevronDown, ChevronUp, Server, Play, X, List,
+} from "lucide-react";
+import toast from "react-hot-toast";
 import { machineApi, traceabilityApi } from "../api/services";
 import { getUserRole } from "../utils/authStorage";
 
-function normalizeIp(value) {
-  return String(value || "").replace("::ffff:", "").trim();
+// ── Design tokens ──────────────────────────────────────────────────────────
+const DS = `
+  @keyframes ioSpin   { to{transform:rotate(360deg)} }
+  @keyframes ioFadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+  @keyframes ioPulse  { 0%,100%{opacity:1} 50%{opacity:.35} }
+  @keyframes ioPing   { 0%{transform:scale(1);opacity:.7} 100%{transform:scale(2.4);opacity:0} }
+  :root{
+    --io-navy:  26,50,99;  --io-steel: 84,119,146;
+    --io-amber: 250,185,91; --io-linen: 232,226,219;
+    --io-ok:    34,197,94;  --io-ng:    239,68,68;
+    --io-wip:   249,115,22; --io-idle:  148,163,184;
+  }
+  [data-theme="light"]{
+    --io-bg-card:   255,255,255; --io-bg-surf:   240,236,230;
+    --io-bg-input:  255,255,255; --io-txt-pri:   26,50,99;
+    --io-txt-sec:   84,119,146;  --io-txt-muted: 140,160,180;
+    --io-bdr: 84,119,146; --io-bop: 0.14;
+  }
+  [data-theme="dark"]{
+    --io-bg-card:   20,34,62;  --io-bg-surf:  16,26,50;
+    --io-bg-input:  14,22,44;  --io-txt-pri:  232,226,219;
+    --io-txt-sec:   120,160,190; --io-txt-muted: 84,119,146;
+    --io-bdr: 84,119,146; --io-bop: 0.18;
+  }
+`;
+let _ioDS = false;
+function injectDS() {
+  if (_ioDS || typeof document === "undefined") return;
+  _ioDS = true;
+  const el = document.createElement("style");
+  el.textContent = DS;
+  document.head.appendChild(el);
+  if (!document.documentElement.hasAttribute("data-theme"))
+    document.documentElement.setAttribute("data-theme", "dark");
 }
 
-function toIntOrNull(value) {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? Math.trunc(numeric) : null;
+const C = {
+  navy:  (o=1) => `rgba(var(--io-navy),${o})`,
+  steel: (o=1) => `rgba(var(--io-steel),${o})`,
+  amber: (o=1) => `rgba(var(--io-amber),${o})`,
+  linen: (o=1) => `rgba(var(--io-linen),${o})`,
+  ok:    (o=1) => `rgba(var(--io-ok),${o})`,
+  ng:    (o=1) => `rgba(var(--io-ng),${o})`,
+  wip:   (o=1) => `rgba(var(--io-wip),${o})`,
+  idle:  (o=1) => `rgba(var(--io-idle),${o})`,
+  bg:    (v="card") => `rgb(var(--io-bg-${v}))`,
+  txt:   (v="pri")  => `rgb(var(--io-txt-${v}))`,
+  bdr:   (o)        => `rgba(var(--io-bdr),${o||"var(--io-bop)"})`,
+};
+const SH  = `0 2px 12px rgba(var(--io-navy),.08),0 1px 3px rgba(var(--io-navy),.05)`;
+const SHM = `0 8px 28px rgba(var(--io-navy),.2),0 3px 8px rgba(var(--io-navy),.1)`;
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+function normalizeIp(v)   { return String(v||"").replace("::ffff:","").trim(); }
+function toIntOrNull(v)   { const n=Number(v); return Number.isFinite(n)?Math.trunc(n):null; }
+function normalizeRole(v) { return String(v||"").trim().toLowerCase(); }
+function fmtTime(v)  { if(!v) return "—"; const d=new Date(v); return isNaN(d)?"—":d.toLocaleTimeString(); }
+function fmtDT(v)    { if(!v) return "—"; const d=new Date(v); return isNaN(d)?"—":d.toLocaleString(); }
+function toErr(e,fb) {
+  const st=Number(e?.response?.status||0);
+  if (st===401||st===403) return "Access denied. Admin or Engineer role required.";
+  const m=String(e?.response?.data?.error||fb||"").trim();
+  if (/CONNECT.TIMEOUT|ECONNREFUSED/i.test(m)) return `${m} — Check IP/Port and network.`;
+  return m||fb||"An error occurred.";
+}
+function getSignalColor(tone, val) {
+  const t=String(tone||"").toLowerCase();
+  if (t==="good")  return {fg:C.ok(),   bg:C.ok(0.1),   bd:C.ok(0.3)   };
+  if (t==="error") return {fg:C.ng(),   bg:C.ng(0.1),   bd:C.ng(0.3)   };
+  if (t==="warn")  return {fg:C.wip(),  bg:C.wip(0.1),  bd:C.wip(0.3)  };
+  if (val===1)     return {fg:C.ok(),   bg:C.ok(0.08),  bd:C.ok(0.2)   };
+  if (val===0)     return {fg:C.idle(), bg:C.idle(0.06),bd:C.idle(0.15)};
+  return                  {fg:C.steel(),bg:C.steel(0.08),bd:C.steel(0.2)};
 }
 
-function normalizeRole(value) {
-  return String(value || "").trim().toLowerCase();
-}
+// ── Shared atoms ───────────────────────────────────────────────────────────
+const Badge = ({ variant="idle", label, pulse }) => {
+  const map = {
+    ok:    {fg:C.ok(),   bg:C.ok(0.1),   bd:C.ok(0.25)  },
+    ng:    {fg:C.ng(),   bg:C.ng(0.1),   bd:C.ng(0.25)  },
+    wip:   {fg:C.wip(),  bg:C.wip(0.1),  bd:C.wip(0.25) },
+    idle:  {fg:C.idle(), bg:C.idle(0.08),bd:C.idle(0.2) },
+    steel: {fg:C.steel(),bg:C.steel(0.1),bd:C.steel(0.25)},
+    amber: {fg:C.amber(),bg:C.amber(0.12),bd:C.amber(0.3)},
+  };
+  const s=map[variant]||map.idle;
+  return (
+    <span style={{display:"inline-flex",alignItems:"center",gap:5,
+      padding:"3px 10px",borderRadius:99,fontSize:11,fontWeight:700,
+      letterSpacing:"0.04em",color:s.fg,background:s.bg,
+      border:`1px solid ${s.bd}`,whiteSpace:"nowrap"}}>
+      <span style={{width:5,height:5,borderRadius:"50%",background:s.fg,flexShrink:0,
+        animation:pulse?"ioPulse 1.2s ease-in-out infinite":"none"}}/>
+      {label}
+    </span>
+  );
+};
 
-function formatDateTime(value) {
-  if (!value) {
-    return "-";
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "-";
-  }
-  return date.toLocaleString();
-}
+const Btn = ({ children, onClick, disabled, loading, variant="ghost", size="md", full, style:sx={} }) => {
+  const [h,setH]=useState(false);
+  const V={
+    ghost:  {bg:h?C.bg("surf"):"transparent",  color:C.txt("sec"),  border:`1px solid ${C.bdr()}`},
+    navy:   {bg:h?C.navy(0.85):C.navy(),        color:C.linen(),     border:"none"},
+    amber:  {bg:h?C.amber(0.9):C.amber(),       color:C.navy(),      border:"none",fontWeight:800,boxShadow:`0 3px 10px ${C.amber(0.25)}`},
+    ok:     {bg:h?C.ok(0.18):C.ok(0.1),         color:C.ok(),        border:`1px solid ${C.ok(0.3)}`},
+    danger: {bg:h?C.ng(0.18):C.ng(0.1),         color:C.ng(),        border:`1px solid ${C.ng(0.3)}`},
+    steel:  {bg:h?C.steel(0.2):C.steel(0.1),    color:C.steel(),     border:`1px solid ${C.steel(0.3)}`},
+  };
+  const s=V[variant]||V.ghost;
+  const H=size==="sm"?32:size==="lg"?44:38;
+  return (
+    <button onClick={onClick} disabled={disabled||loading}
+      onMouseEnter={()=>setH(true)} onMouseLeave={()=>setH(false)}
+      style={{display:"inline-flex",alignItems:"center",justifyContent:"center",gap:6,
+        height:H,padding:size==="sm"?"0 12px":size==="lg"?"0 22px":"0 16px",
+        width:full?"100%":undefined,
+        borderRadius:8,fontSize:size==="sm"?11:12,fontWeight:700,
+        cursor:disabled||loading?"not-allowed":"pointer",
+        opacity:disabled||loading?0.45:1,
+        transition:"all .15s",...s,...sx}}>
+      {loading ? <RefreshCw size={12} style={{animation:"ioSpin .9s linear infinite"}}/> : children}
+    </button>
+  );
+};
 
-function getToneClass(tone) {
-  const normalized = String(tone || "").trim().toLowerCase();
-  if (normalized === "good") {
-    return "bg-accent/10 text-accent border border-accent/30";
-  }
-  if (normalized === "error") {
-    return "bg-danger/10 text-danger border border-danger/30";
-  }
-  if (normalized === "warn") {
-    return "bg-warning/10 text-warning border border-warning/30";
-  }
-  if (normalized === "idle") {
-    return "bg-slate-500/10 text-slate-300 border border-slate-400/30";
-  }
-  return "bg-bg-dark text-text-muted border border-border";
-}
+const inp = (focus) => ({
+  height:38,padding:"0 11px",background:C.bg("input"),
+  border:`1px solid ${focus?C.steel():C.bdr()}`,
+  borderRadius:8,fontSize:12,color:C.txt("pri"),outline:"none",
+  fontFamily:"'DM Sans',sans-serif",transition:"border-color .15s,box-shadow .15s",
+  boxShadow:focus?`0 0 0 3px ${C.steel(0.1)}`:"none",
+  width:"100%",boxSizing:"border-box",
+});
 
-function toErrorMessage(error, fallback) {
-  const status = Number(error?.response?.status || 0);
-  if (status === 401 || status === 403) {
-    return "Unauthorized. Login with Admin or Engineer role.";
-  }
-  const message = String(error?.response?.data?.error || fallback || "").trim();
-  const normalized = message.toUpperCase();
-  const looksLikeNetworkIssue =
-    normalized.includes("CONNECT TIMEOUT") ||
-    normalized.includes("ECONNREFUSED") ||
-    normalized.includes("EHOSTUNREACH") ||
-    normalized.includes("ENETUNREACH") ||
-    normalized.includes("ETIMEDOUT") ||
-    normalized.includes("UNABLE TO CONNECT");
+const Label = ({children,required})=>(
+  <p style={{fontSize:10,fontWeight:800,textTransform:"uppercase",
+    letterSpacing:"0.08em",color:C.txt("muted"),marginBottom:5,
+    display:"flex",alignItems:"center",gap:3}}>
+    {children}{required&&<span style={{color:C.ng()}}>*</span>}
+  </p>
+);
 
-  if (looksLikeNetworkIssue && !normalized.includes("PING MAY STILL WORK")) {
-    return `${message}. Ping may still work while PLC TCP port is blocked/unreachable. Check PLC service, configured port/protocol, and firewall rules.`;
-  }
+const SCard = ({title,subtitle,accent,right,children,noPad})=>(
+  <div style={{background:C.bg("card"),border:`1px solid ${C.bdr()}`,
+    borderRadius:14,overflow:"hidden",boxShadow:SH,
+    borderLeft:accent?`3px solid ${accent}`:"none"}}>
+    {(title||right)&&(
+      <div style={{padding:"12px 18px",borderBottom:`1px solid ${C.bdr()}`,
+        background:C.bg("surf"),display:"flex",alignItems:"center",
+        justifyContent:"space-between",gap:8}}>
+        <div>
+          {subtitle&&<p style={{fontSize:9,fontWeight:800,textTransform:"uppercase",
+            letterSpacing:"0.1em",color:C.txt("muted"),marginBottom:1}}>{subtitle}</p>}
+          {title&&<p style={{fontSize:13,fontWeight:700,color:C.txt("pri")}}>{title}</p>}
+        </div>
+        {right}
+      </div>
+    )}
+    <div style={noPad?{}:{padding:18}}>{children}</div>
+  </div>
+);
 
-  return message;
-}
+// ── Signal Card ───────────────────────────────────────────────────────────
+const SignalCard = ({ row, onWrite, canWrite, writing }) => {
+  const [showWrite,setShowWrite]=useState(false);
+  const [writeVal, setWriteVal] =useState("");
+  const [focus,    setFocus]    =useState(false);
+  const val   = row.currentValue??0;
+  const sc    = getSignalColor(row.tone, val);
+  const isHigh = val===1;
 
+  return (
+    <div style={{background:C.bg("card"),border:`1px solid ${sc.bd}`,
+      borderRadius:12,overflow:"hidden",boxShadow:SH,transition:"box-shadow .15s,border-color .15s"}}>
+      {/* Header */}
+      <div style={{padding:"12px 14px 10px",borderBottom:`1px solid ${C.bdr()}`,background:sc.bg}}>
+        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:6}}>
+          <div style={{minWidth:0}}>
+            <p style={{fontSize:12,fontWeight:800,color:C.txt("pri"),lineHeight:1.2,marginBottom:3,
+              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+              {row.signal||"Signal"}
+            </p>
+            <p style={{fontSize:10,fontFamily:"'DM Mono',monospace",color:C.steel(),fontWeight:600}}>
+              Reg: {row.register||"—"}
+              {row.direction&&<span style={{marginLeft:8,color:C.txt("muted")}}>{row.direction}</span>}
+            </p>
+          </div>
+          {row.writable&&(
+            <span style={{fontSize:9,fontWeight:700,color:C.amber(),textTransform:"uppercase",
+              letterSpacing:"0.06em",padding:"2px 6px",borderRadius:4,
+              background:C.amber(0.1),border:`1px solid ${C.amber(0.25)}`,flexShrink:0}}>
+              Writable
+            </span>
+          )}
+        </div>
+      </div>
+      {/* Value */}
+      <div style={{padding:"14px",display:"flex",alignItems:"center",
+        justifyContent:"space-between",gap:10}}>
+        <div style={{display:"flex",alignItems:"baseline",gap:8}}>
+          <span style={{fontSize:42,fontWeight:900,lineHeight:1,
+            fontFamily:"'DM Mono',monospace",color:sc.fg,
+            textShadow:isHigh?`0 0 20px ${sc.fg}`:"none",
+            transition:"color .3s,text-shadow .3s"}}>
+            {val}
+          </span>
+          <div style={{display:"flex",flexDirection:"column",gap:3}}>
+            <span style={{fontSize:10,fontWeight:800,textTransform:"uppercase",
+              letterSpacing:"0.07em",color:sc.fg}}>
+              {isHigh?"ON":val===0?"OFF":"—"}
+            </span>
+            {row.description&&(
+              <span style={{fontSize:10,color:C.txt("muted"),maxWidth:120,lineHeight:1.3,
+                display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>
+                {row.description}
+              </span>
+            )}
+          </div>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6}}>
+          <Badge
+            variant={row.tone==="good"?"ok":row.tone==="error"?"ng":row.tone==="warn"?"wip":isHigh?"ok":val===0?"idle":"wip"}
+            label={row.tone==="good"?"Active":row.tone==="error"?"Fault":row.tone==="warn"?"Warning":isHigh?"Active":"Idle"}
+            pulse={isHigh}
+          />
+          {row.writable&&canWrite&&(
+            <button onClick={()=>setShowWrite(p=>!p)}
+              style={{display:"inline-flex",alignItems:"center",gap:4,fontSize:10,
+                fontWeight:700,color:C.steel(),background:"none",border:"none",
+                cursor:"pointer",padding:"3px 0",transition:"color .15s"}}
+              onMouseEnter={e=>e.currentTarget.style.color=C.amber()}
+              onMouseLeave={e=>e.currentTarget.style.color=C.steel()}>
+              <Edit3 size={11}/>
+              {showWrite?"Cancel":"Write"}
+              {showWrite?<ChevronUp size={10}/>:<ChevronDown size={10}/>}
+            </button>
+          )}
+        </div>
+      </div>
+      {/* Inline write */}
+      {showWrite&&row.writable&&canWrite&&(
+        <div style={{padding:"10px 14px 12px",borderTop:`1px solid ${C.bdr()}`,
+          background:C.bg("surf"),animation:"ioFadeIn .15s ease"}}>
+          <p style={{fontSize:10,fontWeight:700,color:C.txt("muted"),marginBottom:7}}>
+            Write value to register {row.register}
+          </p>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            {[0,1,9].map(p=>(
+              <button key={p} onClick={()=>setWriteVal(String(p))}
+                style={{width:36,height:34,borderRadius:7,fontSize:13,fontWeight:800,cursor:"pointer",
+                  background:writeVal===String(p)?C.amber(0.15):"transparent",
+                  border:`1px solid ${writeVal===String(p)?C.amber(0.4):C.bdr()}`,
+                  color:writeVal===String(p)?C.amber():C.txt("muted"),transition:"all .12s"}}>
+                {p}
+              </button>
+            ))}
+            <input value={writeVal} onChange={e=>setWriteVal(e.target.value)}
+              placeholder="value"
+              onFocus={()=>setFocus(true)} onBlur={()=>setFocus(false)}
+              style={{...inp(focus),flex:1,fontFamily:"'DM Mono',monospace",textAlign:"center"}}/>
+            <Btn variant="amber" size="sm" loading={writing}
+              disabled={writeVal===""||writing}
+              onClick={()=>{
+                const v=toIntOrNull(writeVal);
+                if (v===null){toast.error("Enter a number");return;}
+                onWrite(row,v,()=>{setShowWrite(false);setWriteVal("");});
+              }}>
+              <Send size={12}/> Send
+            </Btn>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ── ConnCard ──────────────────────────────────────────────────────────────
+const ConnCard = ({ connected, label, sublabel, protocol }) => (
+  <div style={{background:C.bg("card"),
+    border:`1px solid ${connected?C.ok(0.3):C.ng(0.3)}`,
+    borderLeft:`3px solid ${connected?C.ok():C.ng()}`,
+    borderRadius:12,padding:"14px 16px",boxShadow:SH,
+    display:"flex",alignItems:"center",gap:12}}>
+    <div style={{position:"relative",width:38,height:38,flexShrink:0}}>
+      {connected&&(
+        <div style={{position:"absolute",inset:0,borderRadius:"50%",
+          background:C.ok(0.25),animation:"ioPing 1.8s ease-out infinite"}}/>
+      )}
+      <div style={{width:38,height:38,borderRadius:"50%",position:"relative",
+        background:connected?C.ok(0.12):C.ng(0.1),
+        border:`1.5px solid ${connected?C.ok(0.4):C.ng(0.3)}`,
+        display:"flex",alignItems:"center",justifyContent:"center"}}>
+        {connected?<Wifi size={17} color={C.ok()}/>:<WifiOff size={17} color={C.ng()}/>}
+      </div>
+    </div>
+    <div style={{flex:1,minWidth:0}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3,flexWrap:"wrap"}}>
+        <p style={{fontSize:13,fontWeight:800,color:C.txt("pri")}}>{label}</p>
+        <Badge variant={connected?"ok":"ng"} label={connected?"Connected":"Disconnected"} pulse={connected}/>
+      </div>
+      <p style={{fontSize:11,fontFamily:"'DM Mono',monospace",color:C.txt("muted")}}>
+        {sublabel}
+        {protocol&&<span style={{marginLeft:8,fontWeight:700,color:C.steel()}}>{protocol}</span>}
+      </p>
+    </div>
+  </div>
+);
+
+// ── PLC Test Modal ────────────────────────────────────────────────────────
+const PlcTestModal = ({ plc, onClose }) => {
+  const [testing,   setTesting]   = useState(false);
+  const [result,    setResult]    = useState(null);
+  const [register,  setRegister]  = useState("");
+  const [testVal,   setTestVal]   = useState("0");
+  const [focus,     setFocus]     = useState("");
+
+  const isMitsu = (plc.protocol||"").toUpperCase().includes("SLMP") ||
+                  (plc.protocol||"").toUpperCase().includes("MITSUBISHI");
+
+  useEffect(()=>{
+    setRegister(plc.testRegister || (isMitsu ? "D100" : String(plc.startRegister||40001)));
+    setTestVal("0");
+  },[plc,isMitsu]);
+
+  const runTest = async () => {
+    setTesting(true); setResult(null);
+    const t0 = Date.now();
+    try {
+      const res = await machineApi.testPlc({ machineId: plc.machineId });
+      setResult({
+        success: true,
+        message: res?.message || "PLC connection test passed. Controller is responding correctly.",
+        latency: Date.now()-t0,
+      });
+    } catch(e) {
+      setResult({
+        success: false,
+        message: toErr(e, "Connection failed. Check IP, port, and ensure PLC is powered on."),
+        latency: Date.now()-t0,
+      });
+    } finally { setTesting(false); }
+  };
+
+  const inpM = (f) => ({...inp(focus===f), height:38});
+
+  return (
+    <div style={{position:"fixed",inset:0,zIndex:1200,
+      display:"flex",alignItems:"center",justifyContent:"center",
+      padding:16,background:"rgba(0,0,0,0.72)",backdropFilter:"blur(6px)"}}>
+      <div style={{width:"100%",maxWidth:480,
+        background:C.bg("card"),border:`1px solid ${C.bdr()}`,
+        borderRadius:18,overflow:"hidden",boxShadow:SHM,
+        animation:"ioFadeIn .2s ease"}}>
+
+        <div style={{height:3,background:`linear-gradient(90deg,${C.navy()},${C.steel()},${C.amber()})`}}/>
+
+        {/* Header */}
+        <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.bdr()}`,
+          background:C.bg("surf"),display:"flex",alignItems:"center",
+          justifyContent:"space-between"}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{width:32,height:32,borderRadius:9,
+              background:C.steel(0.12),border:`1px solid ${C.steel(0.3)}`,
+              display:"flex",alignItems:"center",justifyContent:"center"}}>
+              <Cpu size={15} color={C.steel()}/>
+            </div>
+            <div>
+              <p style={{fontSize:9,fontWeight:800,textTransform:"uppercase",
+                letterSpacing:"0.1em",color:C.txt("muted"),marginBottom:1}}>
+                Test PLC Connection
+              </p>
+              <p style={{fontSize:13,fontWeight:700,color:C.txt("pri")}}>
+                {plc.name}
+              </p>
+            </div>
+          </div>
+          <button onClick={onClose} style={{width:28,height:28,borderRadius:6,
+            background:"none",border:`1px solid ${C.bdr()}`,cursor:"pointer",
+            display:"flex",alignItems:"center",justifyContent:"center",
+            color:C.txt("muted")}}>
+            <X size={13}/>
+          </button>
+        </div>
+
+        {/* Body */}
+        <div style={{padding:"18px 20px 22px"}}>
+          {/* PLC info */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:18}}>
+            {[
+              {label:"IP Address", value:plc.ip,       mono:true },
+              {label:"Port",       value:plc.port,     mono:true },
+              {label:"Protocol",   value:plc.protocol, mono:false},
+            ].map((f,i)=>(
+              <div key={i} style={{background:C.bg("surf"),border:`1px solid ${C.bdr()}`,
+                borderRadius:9,padding:"9px 11px"}}>
+                <p style={{fontSize:9,fontWeight:800,textTransform:"uppercase",
+                  letterSpacing:"0.08em",color:C.txt("muted"),marginBottom:4}}>{f.label}</p>
+                <p style={{fontSize:12,fontWeight:700,color:C.txt("pri"),
+                  fontFamily:f.mono?"'DM Mono',monospace":"inherit"}}>{f.value||"—"}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* Test register fields */}
+          <p style={{fontSize:11,fontWeight:700,color:C.txt("sec"),marginBottom:10,
+            display:"flex",alignItems:"center",gap:6}}>
+            {isMitsu
+              ? <><Radio size={12}/> SLMP — Read a device register (e.g. D100)</>
+              : <><Server size={12}/> Modbus TCP — Read a holding register (e.g. 40001)</>}
+          </p>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:18}}>
+            <div>
+              <Label>{isMitsu?"Device Register":"Register Address"}</Label>
+              <input value={register} onChange={e=>setRegister(e.target.value)}
+                placeholder={isMitsu?"D100":"40001"}
+                style={{...inpM("reg"),fontFamily:"'DM Mono',monospace"}}
+                onFocus={()=>setFocus("reg")} onBlur={()=>setFocus("")}/>
+            </div>
+            <div>
+              <Label>Test Value</Label>
+              <div style={{display:"flex",gap:6}}>
+                {[0,1].map(p=>(
+                  <button key={p} onClick={()=>setTestVal(String(p))}
+                    style={{width:38,height:38,borderRadius:7,fontSize:14,fontWeight:800,
+                      cursor:"pointer",
+                      background:testVal===String(p)?C.amber(0.15):"transparent",
+                      border:`1px solid ${testVal===String(p)?C.amber(0.4):C.bdr()}`,
+                      color:testVal===String(p)?C.amber():C.txt("muted"),
+                      transition:"all .12s"}}>
+                    {p}
+                  </button>
+                ))}
+                <input value={testVal} onChange={e=>setTestVal(e.target.value)}
+                  placeholder="val"
+                  style={{...inpM("val"),flex:1,fontFamily:"'DM Mono',monospace",textAlign:"center"}}
+                  onFocus={()=>setFocus("val")} onBlur={()=>setFocus("")}/>
+              </div>
+            </div>
+          </div>
+
+          {/* Result */}
+          {result&&(
+            <div style={{display:"flex",alignItems:"flex-start",gap:10,
+              padding:"12px 14px",borderRadius:10,marginBottom:18,
+              background:result.success?C.ok(0.07):C.ng(0.07),
+              border:`1px solid ${result.success?C.ok(0.22):C.ng(0.22)}`,
+              animation:"ioFadeIn .2s ease"}}>
+              {result.success
+                ? <CheckCircle2 size={16} color={C.ok()} style={{flexShrink:0,marginTop:1}}/>
+                : <AlertCircle  size={16} color={C.ng()} style={{flexShrink:0,marginTop:1}}/>}
+              <div>
+                <p style={{fontSize:12,fontWeight:700,marginBottom:4,
+                  color:result.success?C.ok():C.ng()}}>
+                  {result.success?"Test Passed":"Test Failed"}
+                </p>
+                <p style={{fontSize:11,lineHeight:1.5,
+                  color:result.success?C.ok(0.85):C.ng(0.85)}}>
+                  {result.message}
+                </p>
+                <p style={{fontSize:10,color:C.txt("muted"),marginTop:4,
+                  fontFamily:"'DM Mono',monospace"}}>
+                  Response time: {result.latency}ms
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Buttons */}
+          <div style={{display:"flex",gap:10}}>
+            <Btn onClick={onClose} variant="ghost" style={{flex:1,justifyContent:"center"}}>
+              Close
+            </Btn>
+            <Btn onClick={runTest} loading={testing} variant="amber"
+              style={{flex:2,justifyContent:"center"}}>
+              {!testing&&<Zap size={14}/>}
+              {testing?"Testing…":result?"Test Again":"Run Test"}
+            </Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ══════════════════════════════════════════════════════════════════════════
+//  IoMonitor MAIN
+// ══════════════════════════════════════════════════════════════════════════
 const IoMonitor = () => {
-  const userRole = getUserRole();
-  const canControlPlc = useMemo(() => {
-    const normalized = normalizeRole(userRole);
-    return normalized === "admin" || normalized === "engineer";
-  }, [userRole]);
+  injectDS();
 
-  const [machines, setMachines] = useState([]);
-  const [loadingMachines, setLoadingMachines] = useState(true);
-  const [selectedPlcIp, setSelectedPlcIp] = useState("");
+  const userRole   = getUserRole();
+  const canControl = useMemo(()=>["admin","engineer"].includes(normalizeRole(userRole)),[userRole]);
+
+  const [machines,          setMachines]          = useState([]);
+  const [loadingMachines,   setLoadingMachines]   = useState(true);
+  const [selectedPlcIp,     setSelectedPlcIp]     = useState("");
   const [selectedMachineId, setSelectedMachineId] = useState("");
-  const [snapshot, setSnapshot] = useState(null);
-  const [loadingSnapshot, setLoadingSnapshot] = useState(false);
-  const [refreshingSnapshot, setRefreshingSnapshot] = useState(false);
-  const [errorMessage, setErrorMessage] = useState("");
-  const [controlResult, setControlResult] = useState(null);
-  const [plcTesting, setPlcTesting] = useState(false);
-  const [plcResetting, setPlcResetting] = useState(false);
-  const [plcWriting, setPlcWriting] = useState(false);
-  const [plcCommanding, setPlcCommanding] = useState(false);
-  const [plcCommand, setPlcCommand] = useState("START_OPERATION");
-  const [commandPartId, setCommandPartId] = useState("");
-  const [commandStationNo, setCommandStationNo] = useState("");
-  const [writeSignal, setWriteSignal] = useState("TRIGGER");
-  const [writeValue, setWriteValue] = useState("");
-  const [customRegister, setCustomRegister] = useState("");
+  const [snapshot,          setSnapshot]          = useState(null);
+  const [loadingSnap,       setLoadingSnap]       = useState(false);
+  const [refreshingSnap,    setRefreshingSnap]    = useState(false);
+  const [errorMsg,          setErrorMsg]          = useState("");
+  const [activeTab,         setActiveTab]         = useState("plc_list"); // start on PLC list
+  const [focus,             setFocus]             = useState("");
+  const [testPlcItem,       setTestPlcItem]       = useState(null);
+
+  const [acting,  setActing]   = useState({testing:false,resetting:false,writing:false,commanding:false});
+  const [writeSignal,    setWriteSignal]     = useState("TRIGGER");
+  const [writeValue,     setWriteValue]      = useState("");
+  const [customReg,      setCustomReg]       = useState("");
+  const [commandStation, setCommandStation]  = useState("");
+  const [plcCommand,     setPlcCommand]      = useState("START_OPERATION");
+
   const inFlightRef = useRef(false);
 
-  const loadMachines = useCallback(async () => {
+  const loadMachines = useCallback(async()=>{
     try {
       setLoadingMachines(true);
       const rows = await machineApi.list();
-      const activeRows = (rows || []).filter((row) => String(row.status || "ACTIVE").toUpperCase() === "ACTIVE");
-      setMachines(activeRows);
-      setErrorMessage("");
-    } catch (error) {
-      setMachines([]);
-      setErrorMessage(error.response?.data?.error || "Unable to load machines. Check backend/API status.");
-    } finally {
-      setLoadingMachines(false);
-    }
-  }, []);
+      setMachines((rows||[]).filter(r=>String(r.status||"ACTIVE").toUpperCase()==="ACTIVE"));
+    } catch(e){ setMachines([]); setErrorMsg(e.response?.data?.error||"Unable to load machines."); }
+    finally { setLoadingMachines(false); }
+  },[]);
 
-  useEffect(() => {
-    loadMachines();
-  }, [loadMachines]);
+  useEffect(()=>{ loadMachines(); },[loadMachines]);
 
-  const plcOptions = useMemo(() => {
-    const unique = new Set();
-    for (const machine of machines) {
-      const ip = normalizeIp(machine.plcIp || machine.machineIp);
-      if (ip) {
-        unique.add(ip);
-      }
-    }
-    return Array.from(unique).sort((a, b) => a.localeCompare(b));
-  }, [machines]);
+  const plcOptions = useMemo(()=>
+    Array.from(new Set(machines.map(m=>normalizeIp(m.plcIp||m.machineIp)).filter(Boolean))).sort()
+  ,[machines]);
 
-  const filteredMachines = useMemo(() => {
-    if (!selectedPlcIp) {
-      return machines;
-    }
-    return machines.filter((machine) => normalizeIp(machine.plcIp || machine.machineIp) === selectedPlcIp);
-  }, [machines, selectedPlcIp]);
+  const filteredMachines = useMemo(()=>
+    selectedPlcIp?machines.filter(m=>normalizeIp(m.plcIp||m.machineIp)===selectedPlcIp):machines
+  ,[machines,selectedPlcIp]);
 
-  useEffect(() => {
-    if (filteredMachines.length === 0) {
-      setSelectedMachineId("");
-      setSnapshot(null);
-      return;
-    }
-    if (!filteredMachines.some((machine) => String(machine.id) === String(selectedMachineId))) {
+  useEffect(()=>{
+    if (!filteredMachines.length){setSelectedMachineId("");setSnapshot(null);return;}
+    if (!filteredMachines.some(m=>String(m.id)===String(selectedMachineId)))
       setSelectedMachineId(String(filteredMachines[0].id));
+  },[filteredMachines,selectedMachineId]);
+
+  const loadSnapshot = useCallback(async({silent=false}={})=>{
+    const machineId=Number(selectedMachineId||0);
+    if (!machineId||inFlightRef.current) return;
+    inFlightRef.current=true;
+    if (silent) setRefreshingSnap(true); else setLoadingSnap(true);
+    try {
+      const data=await traceabilityApi.ioSnapshot({machineId,plcIp:selectedPlcIp||undefined});
+      setSnapshot(data||null); setErrorMsg("");
+    } catch(e){ setSnapshot(null); setErrorMsg(e.response?.data?.error||"Unable to load signal data."); }
+    finally {
+      if (silent) setRefreshingSnap(false); else setLoadingSnap(false);
+      inFlightRef.current=false;
     }
-  }, [filteredMachines, selectedMachineId]);
+  },[selectedMachineId,selectedPlcIp]);
 
-  const loadSnapshot = useCallback(
-    async ({ silent = false } = {}) => {
-      const machineId = Number(selectedMachineId || 0);
-      if (!machineId || inFlightRef.current) {
-        return;
-      }
+  useEffect(()=>{
+    if (!selectedMachineId) return;
+    loadSnapshot({silent:false});
+    const t=setInterval(()=>loadSnapshot({silent:true}),1000);
+    return()=>clearInterval(t);
+  },[selectedMachineId,selectedPlcIp,loadSnapshot]);
 
-      inFlightRef.current = true;
-      if (silent) {
-        setRefreshingSnapshot(true);
-      } else {
-        setLoadingSnapshot(true);
-      }
+  const selectedMachine=filteredMachines.find(m=>String(m.id)===String(selectedMachineId))||null;
 
-      try {
-        const data = await traceabilityApi.ioSnapshot({
-          machineId,
-          plcIp: selectedPlcIp || undefined,
-        });
-        setSnapshot(data || null);
-        setErrorMessage("");
-      } catch (error) {
-        setSnapshot(null);
-        setErrorMessage(
-          error.response?.data?.error ||
-            "Unable to load I/O snapshot. Validate machine mapping, PLC network, and backend service."
-        );
-      } finally {
-        if (silent) {
-          setRefreshingSnapshot(false);
-        } else {
-          setLoadingSnapshot(false);
-        }
-        inFlightRef.current = false;
-      }
-    },
-    [selectedMachineId, selectedPlcIp]
-  );
+  useEffect(()=>{
+    if (selectedMachine) setCommandStation(selectedMachine.operationNo||selectedMachine.stationNo||"");
+  },[selectedMachine]);
 
-  useEffect(() => {
-    if (!selectedMachineId) {
-      return undefined;
+  const rows=useMemo(()=>Array.isArray(snapshot?.rows)?snapshot.rows:[],[snapshot?.rows]);
+
+  const writableOpts=useMemo(()=>{
+    const seen=new Set();const opts=[];
+    for (const r of rows){
+      const k=String(r.signalKey||r.signal||"").trim().toUpperCase();
+      if (!k||seen.has(k)||!r.writable) continue;
+      seen.add(k);
+      opts.push({key:k,label:r.signal||k,register:toIntOrNull(r.register),currentValue:toIntOrNull(r.currentValue)});
     }
+    return opts.length>0?opts:[
+      {key:"TRIGGER",label:"Start Signal (Trigger)",register:null,currentValue:null},
+      {key:"RESET",  label:"Reset Signal",           register:null,currentValue:null},
+    ];
+  },[rows]);
 
-    loadSnapshot({ silent: false });
-    const timer = setInterval(() => {
-      loadSnapshot({ silent: true });
-    }, 1000);
+  const getMappedReg=useCallback((m,sig)=>{
+    if (!m) return null;
+    const c=m.plcConfig||{};
+    if (sig==="TRIGGER") return toIntOrNull(c.startRegister??m.plcStartRegister);
+    if (sig==="RESET")   return toIntOrNull(c.resetRegister??m.plcResetRegister);
+    return null;
+  },[]);
+  const getMappedVal=useCallback((m,sig)=>{
+    if (!m) return null;
+    const c=m.plcConfig||{};
+    if (sig==="TRIGGER") return toIntOrNull(c.startValue??m.plcStartValue)??1;
+    if (sig==="RESET")   return toIntOrNull(c.resetValue??m.plcResetValue)??9;
+    return null;
+  },[]);
 
-    return () => clearInterval(timer);
-  }, [selectedMachineId, selectedPlcIp, loadSnapshot]);
+  useEffect(()=>{
+    if (!selectedMachine){setWriteSignal("TRIGGER");setWriteValue("");setCustomReg("");return;}
+    const def=writableOpts[0]?.key||"TRIGGER";
+    setWriteSignal(def);
+    setWriteValue(String(getMappedVal(selectedMachine,def)??writableOpts.find(e=>e.key===def)?.currentValue??1));
+    setCustomReg("");
+  },[selectedMachine,getMappedVal,writableOpts]);
 
-  useEffect(() => {
-    setControlResult(null);
-  }, [selectedMachineId, selectedPlcIp]);
-
-  const selectedMachine = filteredMachines.find((machine) => String(machine.id) === String(selectedMachineId)) || null;
-
-  useEffect(() => {
-    if (!selectedMachine) {
-      setCommandStationNo("");
-      setCommandPartId("");
-      return;
-    }
-    setCommandStationNo(selectedMachine.operationNo || selectedMachine.stationNo || "");
-    setCommandPartId("");
-  }, [selectedMachine]);
-
-  const rows = useMemo(() => (Array.isArray(snapshot?.rows) ? snapshot.rows : []), [snapshot?.rows]);
-  const writableSignalOptions = useMemo(() => {
-    const seen = new Set();
-    const options = [];
-    for (const row of rows) {
-      const key = String(row.signalKey || row.signal || "").trim().toUpperCase();
-      if (!key || seen.has(key) || !row.writable) {
-        continue;
-      }
+  // Build PLC list from machines
+  const plcList = useMemo(()=>{
+    const seen=new Set();const list=[];
+    for (const m of machines){
+      const ip=normalizeIp(m.plcIp||m.machineIp);
+      const port=m.plcPort||m.machinePort||502;
+      const key=`${ip}:${port}`;
+      if (!ip||seen.has(key)) continue;
       seen.add(key);
-      options.push({
-        key,
-        label: row.signal || key,
-        register: toIntOrNull(row.register),
-        currentValue: toIntOrNull(row.currentValue),
+      const proto=(m.plcProtocol||m.protocol||"Modbus TCP").toUpperCase();
+      const isMitsu=proto.includes("SLMP")||proto.includes("MITSUBISHI");
+      const linked=machines.filter(x=>normalizeIp(x.plcIp||x.machineIp)===ip);
+      const startReg=m.plcStartRegister||m.plcConfig?.startRegister||(isMitsu?"D100":"40001");
+      const resetReg=m.plcResetRegister||m.plcConfig?.resetRegister||(isMitsu?"D102":"40003");
+      const statusReg=m.plcStatusRegister||m.plcConfig?.statusRegister||(isMitsu?"D101":"40002");
+      list.push({
+        id:key, ip, port, protocol:proto, isMitsu,
+        name:m.plcName||`PLC — ${ip}`,
+        machineId:m.id, machineName:m.machineName,
+        startReg, statusReg, resetReg,
+        linkedMachines:linked.map(x=>x.machineName||x.name).filter(Boolean),
+        connected:m.plcConnected!==undefined?Boolean(m.plcConnected):null,
+        testRegister:m.plcTestRegister,
       });
     }
-    if (options.length === 0) {
-      return [
-        { key: "TRIGGER", label: "TRIGGER", register: null, currentValue: null },
-        { key: "RESET", label: "RESET", register: null, currentValue: null },
-      ];
-    }
-    return options;
-  }, [rows]);
+    return list;
+  },[machines]);
 
-  const getMappedRegister = useCallback((machine, signalKey) => {
-    if (!machine) {
-      return null;
-    }
-    const config = machine.plcConfig || {};
-    if (signalKey === "TRIGGER") {
-      return toIntOrNull(config.startRegister ?? machine.plcStartRegister);
-    }
-    if (signalKey === "RESET") {
-      return toIntOrNull(config.resetRegister ?? machine.plcResetRegister);
-    }
-    return null;
-  }, []);
-
-  const getMappedValue = useCallback((machine, signalKey) => {
-    if (!machine) {
-      return null;
-    }
-    const config = machine.plcConfig || {};
-    if (signalKey === "TRIGGER") {
-      return toIntOrNull(config.startValue ?? machine.plcStartValue) ?? 1;
-    }
-    if (signalKey === "RESET") {
-      return toIntOrNull(config.resetValue ?? machine.plcResetValue) ?? 9;
-    }
-    return null;
-  }, []);
-
-  useEffect(() => {
-    if (!selectedMachine) {
-      setWriteSignal("TRIGGER");
-      setWriteValue("");
-      setCustomRegister("");
-      return;
-    }
-    const defaultSignal = writableSignalOptions[0]?.key || "TRIGGER";
-    setWriteSignal(defaultSignal);
-    const mapped = getMappedValue(selectedMachine, defaultSignal);
-    const rowValue = writableSignalOptions.find((entry) => entry.key === defaultSignal)?.currentValue;
-    setWriteValue(String(mapped ?? rowValue ?? 1));
-    setCustomRegister("");
-  }, [selectedMachine, getMappedValue, writableSignalOptions]);
-
-  useEffect(() => {
-    if (!selectedMachine || writeSignal === "CUSTOM") {
-      return;
-    }
-    const mapped = getMappedValue(selectedMachine, writeSignal);
-    const rowValue = writableSignalOptions.find((entry) => entry.key === writeSignal)?.currentValue;
-    setWriteValue(String(mapped ?? rowValue ?? ""));
-  }, [selectedMachine, writeSignal, getMappedValue, writableSignalOptions]);
-
-  const handleTestPlc = async () => {
-    if (!selectedMachine) {
-      return;
-    }
+  // PLC actions
+  const handleTest=async()=>{
+    if (!selectedMachine) return;
+    setActing(p=>({...p,testing:true}));
+    try { const res=await machineApi.testPlc({machineId:selectedMachine.id}); toast.success(res?.message||"PLC connection test passed."); }
+    catch(e){ toast.error(toErr(e,"PLC test failed")); }
+    finally { setActing(p=>({...p,testing:false})); }
+  };
+  const handleReset=async()=>{
+    if (!selectedMachine) return;
+    setActing(p=>({...p,resetting:true}));
     try {
-      setPlcTesting(true);
-      setControlResult(null);
-      const response = await machineApi.testPlc({ machineId: selectedMachine.id });
-      const probe = response?.probe || {};
-      const details =
-        probe.protocol === "MODBUS_TCP" && Number.isFinite(Number(probe.statusValue))
-          ? `STATUS=${probe.statusValue}`
-          : "Connected";
-      setControlResult({
-        type: "success",
-        message: `${response?.message || "PLC connection test successful"} (${details})`,
-      });
-    } catch (error) {
-      setControlResult({
-        type: "error",
-        message: toErrorMessage(error, "PLC test failed"),
-      });
-    } finally {
-      setPlcTesting(false);
-    }
+      await machineApi.resetPlc({machineId:selectedMachine.id,stationNo:selectedMachine.operationNo||selectedMachine.stationNo});
+      toast.success("PLC reset signal sent.");
+      await loadSnapshot({silent:false});
+    } catch(e){ toast.error(toErr(e,"PLC reset failed")); }
+    finally { setActing(p=>({...p,resetting:false})); }
+  };
+  const handleCardWrite=async(row,val,onDone)=>{
+    if (!selectedMachine) return;
+    const reg=writableOpts.find(e=>e.key===String(row.signalKey||row.signal||"").toUpperCase())?.register??toIntOrNull(row.register);
+    if (reg===null) return toast.error("Register address not found.");
+    setActing(p=>({...p,writing:true}));
+    try {
+      await machineApi.writePlcValue({machineId:selectedMachine.id,value:val,registerNo:reg,signalKey:String(row.signalKey||row.signal||"").toUpperCase()||undefined});
+      toast.success(`${row.signal||"Register"} ${reg} → ${val}`);
+      onDone?.();
+      await loadSnapshot({silent:false});
+    } catch(e){ toast.error(toErr(e,"Write failed")); }
+    finally { setActing(p=>({...p,writing:false})); }
+  };
+  const handleWrite=async()=>{
+    if (!selectedMachine) return;
+    const reg=writeSignal==="CUSTOM"?toIntOrNull(customReg):(writableOpts.find(e=>e.key===writeSignal)?.register??getMappedReg(selectedMachine,writeSignal));
+    const val=toIntOrNull(writeValue);
+    if (reg===null||val===null) return toast.error("Enter a valid register and value.");
+    setActing(p=>({...p,writing:true}));
+    try {
+      await machineApi.writePlcValue({machineId:selectedMachine.id,value:val,registerNo:reg,signalKey:writeSignal!=="CUSTOM"?writeSignal:undefined});
+      toast.success(`Register ${reg} set to ${val}`);
+      await loadSnapshot({silent:false});
+    } catch(e){ toast.error(toErr(e,"Write failed")); }
+    finally { setActing(p=>({...p,writing:false})); }
+  };
+  const handleCommand=async()=>{
+    if (!selectedMachine) return;
+    setActing(p=>({...p,commanding:true}));
+    try {
+      await machineApi.sendPlcCommand({machineId:selectedMachine.id,command:plcCommand,stationNo:commandStation});
+      toast.success("PLC command sent.");
+      await loadSnapshot({silent:false});
+    } catch(e){ toast.error(toErr(e,"Command failed")); }
+    finally { setActing(p=>({...p,commanding:false})); }
   };
 
-  const handleResetPlc = async () => {
-    if (!selectedMachine) {
-      return;
-    }
-    try {
-      setPlcResetting(true);
-      setControlResult(null);
-      const response = await machineApi.resetPlc({
-        machineId: selectedMachine.id,
-        stationNo: selectedMachine.operationNo || selectedMachine.stationNo,
-      });
-      setControlResult({
-        type: "success",
-        message: response?.message || "PLC reset command sent",
-      });
-      await loadSnapshot({ silent: false });
-    } catch (error) {
-      setControlResult({
-        type: "error",
-        message: toErrorMessage(error, "PLC reset failed"),
-      });
-    } finally {
-      setPlcResetting(false);
-    }
-  };
-
-  const handleWritePlcValue = async () => {
-    if (!selectedMachine) {
-      return;
-    }
-
-    const protocol = String(selectedMachine.plcProtocol || "").toUpperCase();
-    if (protocol !== "MODBUS_TCP") {
-      setControlResult({
-        type: "error",
-        message: "Write test value is available for MODBUS_TCP machines only.",
-      });
-      return;
-    }
-
-    const registerNo =
-      writeSignal === "CUSTOM"
-        ? toIntOrNull(customRegister)
-        : writableSignalOptions.find((entry) => entry.key === writeSignal)?.register ??
-          getMappedRegister(selectedMachine, writeSignal);
-    const value = toIntOrNull(writeValue);
-
-    if (registerNo === null) {
-      setControlResult({
-        type: "error",
-        message: "Register mapping missing. Select valid signal/register.",
-      });
-      return;
-    }
-    if (value === null) {
-      setControlResult({
-        type: "error",
-        message: "Enter valid numeric value.",
-      });
-      return;
-    }
-
-    try {
-      setPlcWriting(true);
-      setControlResult(null);
-      const payload = {
-        machineId: selectedMachine.id,
-        value,
-        registerNo,
-      };
-      if (writeSignal !== "CUSTOM") {
-        payload.signalKey = writeSignal;
-      }
-      const response = await machineApi.writePlcValue(payload);
-      setControlResult({
-        type: "success",
-        message:
-          response?.message ||
-          `Register ${registerNo} updated with value ${value}.`,
-      });
-      await loadSnapshot({ silent: false });
-    } catch (error) {
-      setControlResult({
-        type: "error",
-        message: toErrorMessage(error, "Unable to write PLC register"),
-      });
-    } finally {
-      setPlcWriting(false);
-    }
-  };
-
-  const handleSendPlcCommand = async () => {
-    if (!selectedMachine) {
-      return;
-    }
-    const command = String(plcCommand || "").trim().toUpperCase();
-    if (!command) {
-      setControlResult({ type: "error", message: "Select a PLC command." });
-      return;
-    }
-    if (command === "START_OPERATION" && !String(commandPartId || "").trim()) {
-      setControlResult({ type: "error", message: "Part ID is required for START_OPERATION." });
-      return;
-    }
-
-    try {
-      setPlcCommanding(true);
-      setControlResult(null);
-      const response = await machineApi.sendPlcCommand({
-        machineId: selectedMachine.id,
-        command,
-        partId: String(commandPartId || "").trim() || undefined,
-        stationNo: String(commandStationNo || "").trim() || undefined,
-      });
-      setControlResult({
-        type: "success",
-        message: response?.message || `PLC command sent (${command}).`,
-      });
-      await loadSnapshot({ silent: false });
-    } catch (error) {
-      setControlResult({
-        type: "error",
-        message: toErrorMessage(error, "PLC command failed"),
-      });
-    } finally {
-      setPlcCommanding(false);
-    }
-  };
-
-  const mappedRegister =
-    writeSignal === "CUSTOM"
-      ? toIntOrNull(customRegister)
-      : writableSignalOptions.find((entry) => entry.key === writeSignal)?.register ??
-        getMappedRegister(selectedMachine, writeSignal);
-  const plcConnected = Boolean(snapshot?.plcConnection?.connected);
+  const plcConnected     = Boolean(snapshot?.plcConnection?.connected);
   const scannerConnected = Boolean(snapshot?.scannerHealth?.connected);
-  const backendErrors = Array.isArray(snapshot?.errors) ? snapshot.errors.filter(Boolean) : [];
-  const protocolLabel = String(snapshot?.plc?.protocol || selectedMachine?.plcProtocol || "").toUpperCase();
+  const protocol         = (snapshot?.plc?.protocol||selectedMachine?.plcProtocol||"Modbus TCP").toUpperCase();
+  const plcIp            = snapshot?.plc?.ip||selectedMachine?.plcIp||"—";
+  const plcPort          = snapshot?.plc?.port||selectedMachine?.plcPort||"—";
 
+  const TABS=[
+    {key:"plc_list", label:"PLC Overview",    icon:List   },
+    {key:"signals",  label:"Signal Monitor",  icon:Signal },
+    {key:"control",  label:"PLC Control",     icon:Settings},
+    {key:"logs",     label:"Connection Log",  icon:History},
+  ];
+
+  // ═════════════════════════════════════════════════════════════════════
   return (
-    <div className="space-y-6 text-text-main">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="p-3 bg-primary/10 rounded-xl text-primary border border-primary/20">
-            <Activity size={24} />
+    <div style={{display:"flex",flexDirection:"column",gap:18,paddingBottom:32,animation:"ioFadeIn .3s ease"}}>
+
+      {/* PLC Test Modal */}
+      {testPlcItem&&<PlcTestModal plc={testPlcItem} onClose={()=>setTestPlcItem(null)}/>}
+
+      {/* ── Header ────────────────────────────────────────────────── */}
+      <div style={{background:C.bg("card"),border:`1px solid ${C.bdr()}`,
+        borderRadius:16,padding:"16px 20px",boxShadow:SH,overflow:"hidden"}}>
+        <div style={{height:3,background:`linear-gradient(90deg,${C.navy()},${C.steel()},${C.amber()})`,margin:"-16px -20px 14px"}}/>
+        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
+          <div style={{display:"flex",alignItems:"center",gap:13}}>
+            <div style={{width:44,height:44,borderRadius:12,flexShrink:0,
+              background:`linear-gradient(135deg,${C.navy()},${C.steel(0.8)})`,
+              display:"flex",alignItems:"center",justifyContent:"center",
+              boxShadow:`0 4px 12px ${C.navy(0.35)}`}}>
+              <Activity size={21} color={C.linen()}/>
+            </div>
+            <div>
+              <h1 style={{fontSize:17,fontWeight:800,color:C.txt("pri"),letterSpacing:"-0.02em",lineHeight:1.2}}>
+                I/O Signal Monitor
+              </h1>
+              <div style={{display:"flex",alignItems:"center",gap:7,marginTop:3}}>
+                <div style={{position:"relative",width:7,height:7}}>
+                  <div style={{position:"absolute",inset:0,borderRadius:"50%",background:C.ok(),animation:"ioPing 1.6s ease-out infinite",opacity:0.6}}/>
+                  <div style={{width:7,height:7,borderRadius:"50%",background:C.ok()}}/>
+                </div>
+                <p style={{fontSize:11,color:C.txt("muted")}}>Live polling every second</p>
+              </div>
+            </div>
           </div>
-          <div>
-            <h1 className="text-2xl font-bold">I/O Monitor</h1>
-            <p className="text-sm text-text-muted">Live PLC signal view with 1-second auto refresh.</p>
-          </div>
+          <Btn onClick={()=>loadSnapshot({silent:false})} loading={refreshingSnap||loadingSnap} variant="ghost">
+            <RefreshCw size={12}/> Refresh
+          </Btn>
         </div>
+      </div>
 
-        <button
-          onClick={() => {
-            loadMachines().then(() => loadSnapshot({ silent: false }));
-          }}
-          disabled={loadingMachines || loadingSnapshot}
-          className="inline-flex items-center gap-2 rounded-xl border border-border bg-bg-card px-3 py-2 text-sm text-text-main hover:border-primary disabled:opacity-60"
-        >
-          <RefreshCw size={14} className={refreshingSnapshot || loadingSnapshot ? "animate-spin" : ""} />
-          Refresh Now
-        </button>
-      </header>
+      {/* ── Tabs ────────────────────────────────────────────────── */}
+      <div style={{display:"flex",gap:5,padding:5,background:C.bg("card"),
+        border:`1px solid ${C.bdr()}`,borderRadius:11,
+        width:"fit-content",overflowX:"auto",maxWidth:"100%"}}>
+        {TABS.map(tab=>{
+          const active=activeTab===tab.key;
+          const TI=tab.icon;
+          return (
+            <button key={tab.key} onClick={()=>setActiveTab(tab.key)}
+              style={{display:"inline-flex",alignItems:"center",gap:6,
+                height:34,padding:"0 14px",borderRadius:7,
+                fontSize:12,fontWeight:700,cursor:"pointer",
+                whiteSpace:"nowrap",border:"none",
+                background:active?C.navy():"transparent",
+                color:active?C.linen():C.txt("muted"),
+                boxShadow:active?`0 2px 8px ${C.navy(0.3)}`:"none",
+                transition:"all .15s"}}>
+              <TI size={13}/>{tab.label}
+            </button>
+          );
+        })}
+      </div>
 
-      <section className="industrial-card p-4 space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div className="space-y-1">
-            <label className="text-xs font-bold uppercase text-text-muted">PLC</label>
-            <select
-              value={selectedPlcIp}
-              onChange={(event) => setSelectedPlcIp(event.target.value)}
-              className="w-full rounded-xl border border-border bg-bg-dark px-3 py-2.5 text-sm text-text-main focus:border-primary focus:outline-none"
-            >
-              <option value="">All PLCs</option>
-              {plcOptions.map((ip) => (
-                <option key={ip} value={ip}>
-                  {ip}
-                </option>
-              ))}
-            </select>
+      {/* ══ TAB: PLC Overview ═══════════════════════════════════ */}
+      {activeTab==="plc_list" && (
+        <div style={{display:"flex",flexDirection:"column",gap:14}}>
+
+          {/* Summary strip */}
+          <div style={{display:"grid",
+            gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:12}}>
+            {[
+              {label:"Total PLCs",     value:plcList.length,                                                   color:C.steel(), icon:Cpu   },
+              {label:"Connected",      value:plcList.filter(p=>p.connected===true).length,                     color:C.ok(),    icon:Wifi  },
+              {label:"Offline",        value:plcList.filter(p=>p.connected===false).length,                    color:C.ng(),    icon:WifiOff},
+              {label:"Status Unknown", value:plcList.filter(p=>p.connected===null).length,                     color:C.amber(), icon:AlertCircle},
+            ].map((s,i)=>(
+              <div key={i} style={{background:C.bg("card"),border:`1px solid ${C.bdr()}`,
+                borderLeft:`3px solid ${s.color}`,borderRadius:12,
+                padding:"12px 14px",boxShadow:SH,
+                display:"flex",alignItems:"center",gap:10}}>
+                <div style={{width:32,height:32,borderRadius:8,flexShrink:0,
+                  display:"flex",alignItems:"center",justifyContent:"center",
+                  background:`${s.color.replace("1)","0.1)")}`}}>
+                  <s.icon size={15} color={s.color}/>
+                </div>
+                <div>
+                  <p style={{fontSize:10,fontWeight:700,textTransform:"uppercase",
+                    letterSpacing:"0.07em",color:C.txt("muted"),marginBottom:2}}>{s.label}</p>
+                  <p style={{fontSize:22,fontWeight:800,color:C.txt("pri"),
+                    fontFamily:"'DM Mono',monospace",lineHeight:1}}>{s.value}</p>
+                </div>
+              </div>
+            ))}
           </div>
 
-          <div className="space-y-1">
-            <label className="text-xs font-bold uppercase text-text-muted">Machine</label>
-            <select
-              value={selectedMachineId}
-              onChange={(event) => setSelectedMachineId(event.target.value)}
-              className="w-full rounded-xl border border-border bg-bg-dark px-3 py-2.5 text-sm text-text-main focus:border-primary focus:outline-none"
-            >
-              {!selectedMachineId && <option value="">Select machine</option>}
-              {filteredMachines.map((machine) => (
-                <option key={machine.id} value={machine.id}>
-                  {machine.machineName} | {machine.operationNo}
-                </option>
-              ))}
-            </select>
+          {/* PLC Table */}
+          <SCard noPad title="All PLC Controllers" subtitle="Network Registry"
+            right={
+              <p style={{fontSize:11,color:C.txt("muted")}}>
+                Click Test to verify connection
+              </p>
+            }>
+            {plcList.length===0 ? (
+              <div style={{padding:"48px 24px",textAlign:"center"}}>
+                <Cpu size={28} color={C.txt("muted")} style={{margin:"0 auto 12px"}}/>
+                <p style={{fontSize:13,fontWeight:600,color:C.txt("sec"),marginBottom:6}}>
+                  No PLC controllers found
+                </p>
+                <p style={{fontSize:12,color:C.txt("muted")}}>
+                  Configure machines with PLC IP addresses to see them here.
+                </p>
+              </div>
+            ) : (
+              <div style={{overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                  <thead>
+                    <tr style={{background:C.bg("surf"),borderBottom:`1px solid ${C.bdr()}`}}>
+                      {["Status","PLC Name / IP","Port","Protocol","Start Reg","Status Reg","Reset Reg","Linked Machines","Test"].map(h=>(
+                        <th key={h} style={{padding:"10px 14px",textAlign:"left",
+                          fontSize:9,fontWeight:800,textTransform:"uppercase",
+                          letterSpacing:"0.09em",color:C.txt("muted"),whiteSpace:"nowrap"}}>
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {plcList.map((plc,i)=>(
+                      <tr key={plc.id} style={{
+                        borderBottom:`1px solid ${C.bdr()}`,
+                        background:i%2===1?C.bg("surf"):"transparent",
+                        transition:"background .1s",
+                      }}
+                        onMouseEnter={e=>e.currentTarget.style.background=C.steel(0.04)}
+                        onMouseLeave={e=>e.currentTarget.style.background=i%2===1?C.bg("surf"):"transparent"}
+                      >
+                        {/* Status */}
+                        <td style={{padding:"12px 14px"}}>
+                          <div style={{display:"flex",alignItems:"center",gap:7}}>
+                            <div style={{position:"relative",width:10,height:10,flexShrink:0}}>
+                              {plc.connected===true&&(
+                                <div style={{position:"absolute",inset:0,borderRadius:"50%",
+                                  background:C.ok(0.4),animation:"ioPing 1.8s ease-out infinite"}}/>
+                              )}
+                              <div style={{width:10,height:10,borderRadius:"50%",position:"relative",
+                                background:plc.connected===true?C.ok():plc.connected===false?C.ng():C.idle()}}/>
+                            </div>
+                            {plc.connected===null
+                              ? <Badge variant="idle"  label="Unknown"/>
+                              : plc.connected
+                                ? <Badge variant="ok"  label="Online"  pulse/>
+                                : <Badge variant="ng"  label="Offline"/>}
+                          </div>
+                        </td>
+                        {/* Name / IP */}
+                        <td style={{padding:"12px 14px"}}>
+                          <p style={{fontSize:12,fontWeight:700,color:C.txt("pri"),marginBottom:3}}>
+                            {plc.name}
+                          </p>
+                          <p style={{fontFamily:"'DM Mono',monospace",fontSize:11,
+                            fontWeight:600,color:C.steel()}}>
+                            {plc.ip}
+                          </p>
+                        </td>
+                        {/* Port */}
+                        <td style={{padding:"12px 14px"}}>
+                          <span style={{fontFamily:"'DM Mono',monospace",fontSize:12,
+                            fontWeight:700,color:C.txt("pri")}}>{plc.port}</span>
+                        </td>
+                        {/* Protocol */}
+                        <td style={{padding:"12px 14px"}}>
+                          <Badge
+                            variant={plc.isMitsu?"steel":"amber"}
+                            label={plc.isMitsu?"Mitsubishi SLMP":"Modbus TCP"}
+                          />
+                        </td>
+                        {/* Start reg */}
+                        <td style={{padding:"12px 14px"}}>
+                          <span style={{fontFamily:"'DM Mono',monospace",fontSize:12,
+                            fontWeight:700,color:C.ok()}}>{plc.startReg||"—"}</span>
+                        </td>
+                        {/* Status reg */}
+                        <td style={{padding:"12px 14px"}}>
+                          <span style={{fontFamily:"'DM Mono',monospace",fontSize:12,
+                            fontWeight:700,color:C.steel()}}>{plc.statusReg||"—"}</span>
+                        </td>
+                        {/* Reset reg */}
+                        <td style={{padding:"12px 14px"}}>
+                          <span style={{fontFamily:"'DM Mono',monospace",fontSize:12,
+                            fontWeight:700,color:C.ng()}}>{plc.resetReg||"—"}</span>
+                        </td>
+                        {/* Linked machines */}
+                        <td style={{padding:"12px 14px"}}>
+                          <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                            {plc.linkedMachines.slice(0,2).map((m,j)=>(
+                              <span key={j} style={{fontSize:9,fontWeight:700,
+                                padding:"2px 7px",borderRadius:4,
+                                background:C.navy(0.1),border:`1px solid ${C.navy(0.25)}`,
+                                color:C.steel(),whiteSpace:"nowrap"}}>
+                                {m}
+                              </span>
+                            ))}
+                            {plc.linkedMachines.length>2&&(
+                              <span style={{fontSize:9,color:C.txt("muted"),padding:"2px 4px"}}>
+                                +{plc.linkedMachines.length-2}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        {/* Test button */}
+                        <td style={{padding:"12px 14px"}}>
+                          <Btn size="sm" variant="amber"
+                            onClick={()=>setTestPlcItem(plc)}>
+                            <Play size={11}/> Test
+                          </Btn>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </SCard>
+
+          {/* Register color legend */}
+          <div style={{display:"flex",alignItems:"center",gap:20,
+            padding:"10px 16px",borderRadius:10,
+            background:C.bg("card"),border:`1px solid ${C.bdr()}`,
+            flexWrap:"wrap",boxShadow:SH}}>
+            <p style={{fontSize:11,fontWeight:700,color:C.txt("muted")}}>Register legend:</p>
+            {[
+              {color:C.ok(),   label:"Start Reg   — Write 1 to trigger operation start"},
+              {color:C.steel(),label:"Status Reg  — Read to check PLC acknowledgment"},
+              {color:C.ng(),   label:"Reset Reg   — Write to clear and reset after cycle"},
+            ].map((l,i)=>(
+              <div key={i} style={{display:"flex",alignItems:"center",gap:6}}>
+                <div style={{width:10,height:10,borderRadius:3,background:l.color,flexShrink:0}}/>
+                <span style={{fontSize:11,color:C.txt("muted")}}>{l.label}</span>
+              </div>
+            ))}
           </div>
-
-          <div className="rounded-xl border border-border bg-bg-dark/70 px-3 py-2.5">
-            <p className="text-[11px] uppercase text-text-muted">Auto Refresh</p>
-            <p className="text-sm font-semibold text-text-main">Every 1 second</p>
-            <p className="text-[11px] text-text-muted mt-1">Last snapshot: {formatDateTime(snapshot?.snapshotAt)}</p>
-          </div>
-        </div>
-      </section>
-
-      {errorMessage ? (
-        <div className="rounded-xl border border-danger/40 bg-danger/10 text-danger px-4 py-3 text-sm flex items-center gap-2">
-          <AlertCircle size={16} />
-          <span>{errorMessage}</span>
-        </div>
-      ) : null}
-
-      {backendErrors.length > 0 && (
-        <div className="rounded-xl border border-warning/40 bg-warning/10 text-warning px-4 py-3 text-sm space-y-1">
-          {backendErrors.map((entry, index) => (
-            <p key={`${entry}-${index}`}>{entry}</p>
-          ))}
         </div>
       )}
 
-      <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="industrial-card p-4">
-          <p className="text-xs uppercase tracking-wide text-text-muted mb-2">Machine</p>
-          <p className="text-base font-semibold text-text-main">{snapshot?.machine?.machineName || selectedMachine?.machineName || "-"}</p>
-          <p className="text-sm text-text-muted mt-1">
-            {snapshot?.machine?.operationNo || selectedMachine?.operationNo || "-"} |{" "}
-            {snapshot?.machine?.lineName || selectedMachine?.lineName || "-"}
-          </p>
-        </div>
-
-        <div className="industrial-card p-4">
-          <p className="text-xs uppercase tracking-wide text-text-muted mb-2">PLC Endpoint</p>
-          <p className="text-base font-mono font-semibold text-text-main">
-            {snapshot?.plc?.ip || selectedMachine?.plcIp || "-"}:{snapshot?.plc?.port ?? selectedMachine?.plcPort ?? "-"}
-          </p>
-          <p className="text-sm text-text-muted mt-1">{snapshot?.plc?.protocol || selectedMachine?.plcProtocol || "-"}</p>
-        </div>
-
-        <div className="industrial-card p-4 space-y-2">
-          <div className="flex items-center justify-between">
-            <p className="text-xs uppercase tracking-wide text-text-muted">PLC Link</p>
-            <span
-              className={`px-2 py-1 rounded-full text-xs font-semibold ${
-                plcConnected ? "bg-accent/10 text-accent border border-accent/30" : "bg-danger/10 text-danger border border-danger/30"
-              }`}
-            >
-              {plcConnected ? "CONNECTED" : "DISCONNECTED"}
-            </span>
-          </div>
-          <div className="flex items-center justify-between">
-            <p className="text-xs uppercase tracking-wide text-text-muted">Scanner</p>
-            <span
-              className={`px-2 py-1 rounded-full text-xs font-semibold ${
-                scannerConnected ? "bg-accent/10 text-accent border border-accent/30" : "bg-slate-500/10 text-slate-300 border border-slate-400/30"
-              }`}
-            >
-              {scannerConnected ? "CONNECTED" : "OFFLINE"}
-            </span>
-          </div>
-        </div>
-      </section>
-
-      <section className="industrial-card p-4 space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <p className="text-xs uppercase tracking-wide text-text-muted">PLC Control Panel</p>
-            <p className="text-sm text-text-main font-semibold">Test, Reset, and Controlled Register Write</p>
-          </div>
-          <span
-            className={`px-2 py-1 rounded-full text-xs font-semibold ${
-              canControlPlc
-                ? "bg-accent/10 text-accent border border-accent/30"
-                : "bg-warning/10 text-warning border border-warning/30"
-            }`}
-          >
-            Role: {userRole || "Unknown"}
-          </span>
-        </div>
-
-        {!canControlPlc ? (
-          <div className="rounded-xl border border-warning/40 bg-warning/10 text-warning px-3 py-2 text-sm flex items-center gap-2">
-            <Lock size={14} />
-            PLC controls are restricted to Admin and Engineer.
-          </div>
-        ) : (
-          <>
-            <div className="grid grid-cols-1 lg:grid-cols-[auto_auto_1fr] gap-3">
-              <button
-                onClick={handleTestPlc}
-                disabled={!selectedMachine || plcTesting || plcResetting || plcWriting || plcCommanding}
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-border bg-bg-card px-4 py-2.5 text-sm text-text-main hover:border-primary disabled:opacity-60"
-              >
-                <Activity size={14} className={plcTesting ? "animate-spin" : ""} />
-                {plcTesting ? "Testing..." : "Test PLC"}
-              </button>
-              <button
-                onClick={handleResetPlc}
-                disabled={!selectedMachine || plcResetting || plcTesting || plcWriting || plcCommanding}
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-warning/40 bg-bg-card px-4 py-2.5 text-sm text-warning hover:bg-warning/10 disabled:opacity-60"
-              >
-                <RotateCcw size={14} className={plcResetting ? "animate-spin" : ""} />
-                {plcResetting ? "Resetting..." : "Reset PLC"}
-              </button>
-              <div className="rounded-xl border border-border bg-bg-dark/70 px-3 py-2 text-xs text-text-muted">
-                Use only when line is safe and machine is in maintenance/test mode.
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-border bg-bg-dark/70 px-3 py-2 text-xs text-text-muted">
-              Protocol mode: <span className="text-text-main font-semibold">{protocolLabel || "UNKNOWN"}</span>.{" "}
-              {protocolLabel === "MODBUS_TCP"
-                ? "Live register read/write + signal testing are enabled."
-                : "Connectivity monitoring and reset are supported; direct register write is limited in this protocol mode."}
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-              <div className="space-y-1">
-                <label className="text-xs font-bold uppercase text-text-muted">Signal</label>
-                <select
-                  value={writeSignal}
-                  onChange={(event) => setWriteSignal(event.target.value)}
-                  className="w-full rounded-xl border border-border bg-bg-dark px-3 py-2.5 text-sm text-text-main focus:border-primary focus:outline-none"
-                >
-                  {writableSignalOptions.map((option) => (
-                    <option key={option.key} value={option.key}>
-                      {option.label}
-                    </option>
-                  ))}
-                  <option value="CUSTOM">CUSTOM</option>
+      {/* ══ TAB: Signal Monitor ═══════════════════════════════════ */}
+      {activeTab==="signals" && (
+        <div style={{display:"flex",flexDirection:"column",gap:14}}>
+          {/* Machine selector */}
+          <div style={{background:C.bg("card"),border:`1px solid ${C.bdr()}`,
+            borderRadius:12,padding:14,boxShadow:SH}}>
+            <p style={{fontSize:10,fontWeight:800,textTransform:"uppercase",
+              letterSpacing:"0.09em",color:C.txt("muted"),marginBottom:10}}>
+              Select Machine
+            </p>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <div>
+                <Label>Filter by PLC IP</Label>
+                <select value={selectedPlcIp}
+                  onChange={e=>setSelectedPlcIp(e.target.value)}
+                  style={{...inp(focus==="plcip"),fontFamily:"'DM Mono',monospace",fontSize:11}}
+                  onFocus={()=>setFocus("plcip")} onBlur={()=>setFocus("")}>
+                  <option value="">All PLC Controllers</option>
+                  {plcOptions.map(ip=><option key={ip} value={ip}>{ip}</option>)}
                 </select>
               </div>
-
-              <div className="space-y-1">
-                <label className="text-xs font-bold uppercase text-text-muted">Register</label>
-                {writeSignal === "CUSTOM" ? (
-                  <input
-                    type="number"
-                    value={customRegister}
-                    onChange={(event) => setCustomRegister(event.target.value)}
-                    placeholder="e.g. 103"
-                    className="w-full rounded-xl border border-border bg-bg-dark px-3 py-2.5 text-sm text-text-main focus:border-primary focus:outline-none"
-                  />
-                ) : (
-                  <input
-                    readOnly
-                    value={mappedRegister ?? "-"}
-                    className="w-full rounded-xl border border-border bg-bg-dark px-3 py-2.5 text-sm text-text-main opacity-80"
-                  />
+              <div>
+                <Label>Machine / Station</Label>
+                {loadingMachines?(
+                  <div style={{height:38,borderRadius:8,background:C.bg("surf"),
+                    border:`1px solid ${C.bdr()}`,display:"flex",alignItems:"center",
+                    paddingLeft:11,gap:7}}>
+                    <RefreshCw size={12} color={C.txt("muted")} style={{animation:"ioSpin .9s linear infinite"}}/>
+                    <span style={{fontSize:11,color:C.txt("muted")}}>Loading…</span>
+                  </div>
+                ):(
+                  <select value={selectedMachineId}
+                    onChange={e=>setSelectedMachineId(e.target.value)}
+                    style={inp(focus==="machine")}
+                    onFocus={()=>setFocus("machine")} onBlur={()=>setFocus("")}>
+                    {filteredMachines.length===0
+                      ? <option>No machines available</option>
+                      : filteredMachines.map(m=>(
+                        <option key={m.id} value={m.id}>
+                          {m.machineName} — {m.operationNo||m.stationNo||"—"}
+                        </option>
+                      ))}
+                  </select>
                 )}
               </div>
+            </div>
+          </div>
 
-              <div className="space-y-1">
-                <label className="text-xs font-bold uppercase text-text-muted">Value</label>
-                <input
-                  type="number"
-                  value={writeValue}
-                  onChange={(event) => setWriteValue(event.target.value)}
-                  placeholder="numeric value"
-                  className="w-full rounded-xl border border-border bg-bg-dark px-3 py-2.5 text-sm text-text-main focus:border-primary focus:outline-none"
-                />
+          {/* Connection status */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:10}}>
+            <ConnCard connected={plcConnected} label="PLC Controller"
+              sublabel={`${plcIp} : ${plcPort}`} protocol={protocol}/>
+            <ConnCard connected={scannerConnected} label="Barcode / QR Scanner"
+              sublabel={snapshot?.scannerHealth?.ip
+                ?`${snapshot.scannerHealth.ip} : ${snapshot.scannerHealth.port||5000}`
+                :"TCP Scanner Link"}/>
+            <div style={{background:C.bg("card"),border:`1px solid ${C.bdr()}`,
+              borderLeft:`3px solid ${C.steel()}`,borderRadius:12,
+              padding:"14px 16px",boxShadow:SH,display:"flex",alignItems:"center",gap:11}}>
+              <div style={{width:36,height:36,borderRadius:"50%",flexShrink:0,
+                background:C.steel(0.1),border:`1px solid ${C.steel(0.25)}`,
+                display:"flex",alignItems:"center",justifyContent:"center"}}>
+                <Clock size={16} color={C.steel()}/>
               </div>
-
-              <div className="space-y-1">
-                <label className="text-xs font-bold uppercase text-text-muted">Action</label>
-                <button
-                  onClick={handleWritePlcValue}
-                  disabled={!selectedMachine || plcWriting || plcTesting || plcResetting || plcCommanding}
-                  className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-bg-dark hover:brightness-110 disabled:opacity-60"
-                >
-                  <Save size={14} className={plcWriting ? "animate-pulse" : ""} />
-                  {plcWriting ? "Writing..." : "Write Value"}
-                </button>
+              <div>
+                <p style={{fontSize:12,fontWeight:800,color:C.txt("pri"),marginBottom:2}}>Last Updated</p>
+                <p style={{fontSize:11,color:C.txt("muted"),fontFamily:"'DM Mono',monospace"}}>
+                  {fmtTime(snapshot?.refreshedAt)||"—"}
+                </p>
               </div>
             </div>
+          </div>
 
-            <div className="rounded-xl border border-border bg-bg-dark/70 px-3 py-3 space-y-3">
-              <p className="text-xs uppercase tracking-wide text-text-muted">Manual PLC Command</p>
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                <div className="space-y-1">
-                  <label className="text-xs font-bold uppercase text-text-muted">Command</label>
-                  <select
-                    value={plcCommand}
-                    onChange={(event) => setPlcCommand(event.target.value)}
-                    className="w-full rounded-xl border border-border bg-bg-dark px-3 py-2.5 text-sm text-text-main focus:border-primary focus:outline-none"
-                  >
-                    <option value="START_OPERATION">START_OPERATION</option>
-                    <option value="BLOCK_OPERATION">BLOCK_OPERATION</option>
-                    <option value="RESET_OPERATION">RESET_OPERATION</option>
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-bold uppercase text-text-muted">Part ID</label>
-                  <input
-                    value={commandPartId}
-                    onChange={(event) => setCommandPartId(event.target.value)}
-                    placeholder="PART1234"
-                    className="w-full rounded-xl border border-border bg-bg-dark px-3 py-2.5 text-sm text-text-main focus:border-primary focus:outline-none"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-bold uppercase text-text-muted">Station No</label>
-                  <input
-                    value={commandStationNo}
-                    onChange={(event) => setCommandStationNo(event.target.value)}
-                    placeholder="OP-10"
-                    className="w-full rounded-xl border border-border bg-bg-dark px-3 py-2.5 text-sm text-text-main focus:border-primary focus:outline-none"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-bold uppercase text-text-muted">Action</label>
-                  <button
-                    onClick={handleSendPlcCommand}
-                    disabled={!selectedMachine || plcCommanding || plcTesting || plcResetting || plcWriting}
-                    className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-bg-dark hover:brightness-110 disabled:opacity-60"
-                  >
-                    <Save size={14} className={plcCommanding ? "animate-pulse" : ""} />
-                    {plcCommanding ? "Sending..." : "Send Command"}
-                  </button>
-                </div>
-              </div>
-              <p className="text-[11px] text-text-muted">
-                START_OPERATION requires Part ID. Station defaults to the selected machine operation.
+          {errorMsg&&(
+            <div style={{display:"flex",alignItems:"center",gap:9,padding:"10px 14px",
+              borderRadius:9,background:C.ng(0.07),border:`1px solid ${C.ng(0.22)}`,
+              color:C.ng(),fontSize:12,fontWeight:600}}>
+              <AlertCircle size={14} style={{flexShrink:0}}/>{errorMsg}
+            </div>
+          )}
+
+          {/* Signal cards */}
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+            flexWrap:"wrap",gap:8}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <p style={{fontSize:12,fontWeight:700,color:C.txt("pri")}}>Live Signal Registers</p>
+              {rows.length>0&&(
+                <span style={{fontSize:11,color:C.txt("muted"),
+                  background:C.bg("surf"),border:`1px solid ${C.bdr()}`,
+                  padding:"2px 8px",borderRadius:5}}>
+                  {rows.length} registers
+                </span>
+              )}
+            </div>
+            <Badge variant={plcConnected?"ok":"ng"}
+              label={plcConnected?"PLC Online":"PLC Offline"} pulse={plcConnected}/>
+          </div>
+
+          {loadingSnap?(
+            <div style={{padding:"48px 24px",textAlign:"center",
+              background:C.bg("card"),border:`1px solid ${C.bdr()}`,borderRadius:14}}>
+              <RefreshCw size={24} color={C.txt("muted")}
+                style={{margin:"0 auto 12px",animation:"ioSpin .9s linear infinite"}}/>
+              <p style={{fontSize:12,color:C.txt("muted")}}>Loading signal data…</p>
+            </div>
+          ):rows.length===0?(
+            <div style={{padding:"48px 24px",textAlign:"center",
+              background:C.bg("card"),border:`1px solid ${C.bdr()}`,borderRadius:14}}>
+              <Signal size={28} color={C.txt("muted")} style={{margin:"0 auto 12px"}}/>
+              <p style={{fontSize:13,fontWeight:600,color:C.txt("sec"),marginBottom:6}}>
+                No signals available
+              </p>
+              <p style={{fontSize:12,color:C.txt("muted")}}>
+                Select a machine and ensure the PLC is connected.
               </p>
             </div>
-
-            {controlResult ? (
-              <div
-                className={`rounded-xl border px-4 py-3 text-sm ${
-                  controlResult.type === "success"
-                    ? "border-accent/40 bg-accent/10 text-accent"
-                    : "border-danger/40 bg-danger/10 text-danger"
-                }`}
-              >
-                {controlResult.message}
-              </div>
-            ) : null}
-          </>
-        )}
-      </section>
-
-      <section className="industrial-card border border-border rounded-2xl overflow-hidden">
-        <div className="px-4 py-3 border-b border-border bg-bg-dark/40 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-sm font-semibold text-text-main">
-            <ServerCog size={16} />
-            <span>Signal Snapshot</span>
-          </div>
-          {loadingSnapshot ? <span className="text-xs text-text-muted">Loading...</span> : null}
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-bg-dark/70 text-xs uppercase text-text-muted">
-              <tr>
-                <th className="px-4 py-3 text-left">Signal</th>
-                <th className="px-4 py-3 text-left">Register</th>
-                <th className="px-4 py-3 text-left">Direction</th>
-                <th className="px-4 py-3 text-left">Current Value</th>
-                <th className="px-4 py-3 text-left">Status</th>
-                <th className="px-4 py-3 text-left">Notes</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-text-muted">
-                    {selectedMachineId ? "No I/O rows available for selected machine." : "Select machine to view live I/O."}
-                  </td>
-                </tr>
-              )}
-              {rows.map((row, index) => (
-                <tr key={`${row.signal}-${row.register}-${index}`} className="border-t border-border/70">
-                  <td className="px-4 py-3 font-semibold text-text-main">{row.signal}</td>
-                  <td className="px-4 py-3 font-mono text-text-main">{row.register ?? "-"}</td>
-                  <td className="px-4 py-3 text-text-main">{row.direction || "-"}</td>
-                  <td className="px-4 py-3 font-mono text-text-main">{row.currentValue ?? "-"}</td>
-                  <td className="px-4 py-3">
-                    <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold ${getToneClass(row.tone)}`}>
-                      {String(row.status || "UNKNOWN").replaceAll("_", " ")}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-xs text-text-muted">{row.description || "-"}</td>
-                </tr>
+          ):(
+            <div style={{display:"grid",
+              gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:12}}>
+              {rows.map((r,i)=>(
+                <SignalCard key={i} row={r} canWrite={canControl}
+                  writing={acting.writing} onWrite={handleCardWrite}/>
               ))}
-            </tbody>
-          </table>
+            </div>
+          )}
         </div>
-      </section>
+      )}
 
-      <section className="industrial-card p-4">
-        <p className="text-xs uppercase tracking-wide text-text-muted mb-2">Latest Operation Context</p>
-        {snapshot?.latestOperation ? (
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
-            <p>
-              <span className="text-text-muted">Part:</span>{" "}
-              <span className="font-mono text-text-main">{snapshot.latestOperation.partId || "-"}</span>
-            </p>
-            <p>
-              <span className="text-text-muted">PLC Status:</span>{" "}
-              <span className="font-semibold text-text-main">{snapshot.latestOperation.plcStatus || "-"}</span>
-            </p>
-            <p>
-              <span className="text-text-muted">Result:</span>{" "}
-              <span className="font-semibold text-text-main">{snapshot.latestOperation.result || "-"}</span>
-            </p>
-            <p>
-              <span className="text-text-muted">Time:</span>{" "}
-              <span className="text-text-main">{formatDateTime(snapshot.latestOperation.createdAt)}</span>
-            </p>
+      {/* ══ TAB: PLC Control ════════════════════════════════════ */}
+      {activeTab==="control" && (
+        <div style={{display:"flex",flexDirection:"column",gap:14}}>
+          {!canControl&&(
+            <div style={{display:"flex",flexDirection:"column",alignItems:"center",
+              padding:"40px 24px",textAlign:"center",gap:12,
+              background:C.ng(0.05),border:`1px solid ${C.ng(0.18)}`,borderRadius:14}}>
+              <ShieldAlert size={34} color={C.ng(0.7)}/>
+              <div>
+                <p style={{fontSize:14,fontWeight:800,color:C.txt("pri"),marginBottom:6}}>Access Restricted</p>
+                <p style={{fontSize:12,color:C.txt("muted"),maxWidth:340,margin:"0 auto",lineHeight:1.6}}>
+                  PLC control is available to Admin and Engineer roles only.
+                </p>
+              </div>
+            </div>
+          )}
+          <div style={{opacity:canControl?1:0.3,pointerEvents:canControl?"auto":"none",
+            display:"flex",flexDirection:"column",gap:14}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <SCard title="Test Connection" subtitle="Step 1 — Verify" accent={C.steel()}>
+                <p style={{fontSize:12,color:C.txt("muted"),lineHeight:1.6,marginBottom:14}}>
+                  Ping the PLC to confirm the TCP link is active.
+                </p>
+                <Btn full onClick={handleTest} loading={acting.testing} variant="navy">
+                  <Wifi size={13}/> Test PLC Connection
+                </Btn>
+              </SCard>
+              <SCard title="Reset PLC" subtitle="Step 2 — Fault Recovery" accent={C.ng(0.7)}>
+                <p style={{fontSize:12,color:C.txt("muted"),lineHeight:1.6,marginBottom:14}}>
+                  Send a reset signal to clear active faults and restore normal operation.
+                </p>
+                <Btn full onClick={handleReset} loading={acting.resetting} variant="danger">
+                  <RotateCcw size={13}/> Reset PLC
+                </Btn>
+              </SCard>
+            </div>
+            <SCard title="Send Operation Command" subtitle="Step 3 — Control" accent={C.amber()}>
+              <p style={{fontSize:12,color:C.txt("muted"),lineHeight:1.6,marginBottom:14}}>
+                Send a direct command to the PLC. No part ID required.
+              </p>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr auto",gap:10,alignItems:"end"}}>
+                <div>
+                  <Label>Command</Label>
+                  <select value={plcCommand} onChange={e=>setPlcCommand(e.target.value)}
+                    style={inp(focus==="cmd")}
+                    onFocus={()=>setFocus("cmd")} onBlur={()=>setFocus("")}>
+                    <option value="START_OPERATION">Start Operation</option>
+                    <option value="STOP_OPERATION"> Stop Operation</option>
+                    <option value="RESET_STATION">  Reset Station</option>
+                    <option value="CLEAR_INTERLOCK">Clear Interlock</option>
+                  </select>
+                </div>
+                <div>
+                  <Label>Station No.</Label>
+                  <input value={commandStation} onChange={e=>setCommandStation(e.target.value)}
+                    placeholder="e.g. OP-10"
+                    style={inp(focus==="stn")}
+                    onFocus={()=>setFocus("stn")} onBlur={()=>setFocus("")}/>
+                </div>
+                <Btn onClick={handleCommand} loading={acting.commanding} variant="amber" style={{whiteSpace:"nowrap"}}>
+                  <Zap size={13}/> Send
+                </Btn>
+              </div>
+            </SCard>
+            <SCard title="Write Register Value" subtitle="Step 4 — Manual Override" accent={C.ok()}>
+              <p style={{fontSize:12,color:C.txt("muted"),lineHeight:1.6,marginBottom:14}}>
+                Directly write a value to a PLC register. For diagnostics only.
+              </p>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10,alignItems:"end"}}>
+                <div>
+                  <Label>Signal</Label>
+                  <select value={writeSignal}
+                    onChange={e=>{
+                      setWriteSignal(e.target.value);
+                      if (e.target.value!=="CUSTOM")
+                        setWriteValue(String(getMappedVal(selectedMachine,e.target.value)??writableOpts.find(o=>o.key===e.target.value)?.currentValue??1));
+                    }}
+                    style={inp(focus==="wsig")} onFocus={()=>setFocus("wsig")} onBlur={()=>setFocus("")}>
+                    {writableOpts.map(o=><option key={o.key} value={o.key}>{o.label}</option>)}
+                    <option value="CUSTOM">Custom register…</option>
+                  </select>
+                </div>
+                <div>
+                  <Label>Register</Label>
+                  <input readOnly={writeSignal!=="CUSTOM"}
+                    value={writeSignal==="CUSTOM"?customReg:(getMappedReg(selectedMachine,writeSignal)||"—")}
+                    onChange={e=>setCustomReg(e.target.value)}
+                    placeholder="e.g. 100"
+                    style={{...inp(focus==="wreg"),fontFamily:"'DM Mono',monospace",color:C.steel(),
+                      background:writeSignal!=="CUSTOM"?C.bg("surf"):C.bg("input")}}
+                    onFocus={()=>setFocus("wreg")} onBlur={()=>setFocus("")}/>
+                </div>
+                <div>
+                  <Label>Value</Label>
+                  <div style={{display:"flex",gap:6}}>
+                    {[0,1,9].map(p=>(
+                      <button key={p} onClick={()=>setWriteValue(String(p))}
+                        style={{flex:1,height:38,borderRadius:7,fontSize:13,fontWeight:800,cursor:"pointer",
+                          background:writeValue===String(p)?C.ok(0.15):"transparent",
+                          border:`1px solid ${writeValue===String(p)?C.ok(0.4):C.bdr()}`,
+                          color:writeValue===String(p)?C.ok():C.txt("muted"),transition:"all .12s"}}>
+                        {p}
+                      </button>
+                    ))}
+                    <input value={writeValue} onChange={e=>setWriteValue(e.target.value)}
+                      placeholder="…"
+                      style={{...inp(focus==="wval"),flex:1,fontFamily:"'DM Mono',monospace",textAlign:"center"}}
+                      onFocus={()=>setFocus("wval")} onBlur={()=>setFocus("")}/>
+                  </div>
+                </div>
+                <Btn onClick={handleWrite} loading={acting.writing} variant="ok">
+                  <Save size={13}/> Write
+                </Btn>
+              </div>
+            </SCard>
           </div>
-        ) : (
-          <p className="text-sm text-text-muted flex items-center gap-2">
-            <WifiOff size={15} />
-            No recent operation log found for selected machine.
-          </p>
-        )}
+        </div>
+      )}
 
-        {snapshot?.plcConnection?.error ? (
-          <p className="mt-3 text-sm text-danger flex items-center gap-2">
-            <AlertCircle size={14} />
-            {snapshot.plcConnection.error}
-          </p>
-        ) : (
-          snapshot?.plcConnection?.connected && (
-            <p className="mt-3 text-sm text-accent flex items-center gap-2">
-              <CheckCircle2 size={14} />
-              PLC communication healthy at {formatDateTime(snapshot.plcConnection.checkedAt)}
-            </p>
-          )
-        )}
-      </section>
+      {/* ══ TAB: Connection Log ═══════════════════════════════════ */}
+      {activeTab==="logs" && (
+        <div style={{display:"flex",flexDirection:"column",gap:14}}>
+          {snapshot?.latestOperation?(
+            <SCard title="Latest Scan Event" subtitle="Most Recent">
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10}}>
+                {[
+                  {label:"Part Serial",value:snapshot.latestOperation.partId||"—",mono:true},
+                  {label:"PLC Status", value:snapshot.latestOperation.plcStatus||"—"},
+                  {label:"Result",     value:snapshot.latestOperation.result||"—",
+                    variant:snapshot.latestOperation.result==="OK"?"ok":snapshot.latestOperation.result==="NG"?"ng":"wip"},
+                  {label:"Time",       value:fmtTime(snapshot.latestOperation.createdAt),mono:true},
+                ].map((k,i)=>(
+                  <div key={i} style={{background:C.bg("surf"),border:`1px solid ${C.bdr()}`,
+                    borderRadius:9,padding:"11px 13px"}}>
+                    <p style={{fontSize:9,fontWeight:800,textTransform:"uppercase",
+                      letterSpacing:"0.09em",color:C.txt("muted"),marginBottom:5}}>{k.label}</p>
+                    {k.variant
+                      ?<Badge variant={k.variant} label={k.value}/>
+                      :<p style={{fontSize:13,fontWeight:700,
+                          fontFamily:k.mono?"'DM Mono',monospace":"inherit",
+                          color:C.txt("pri"),overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                          {k.value}
+                        </p>}
+                  </div>
+                ))}
+              </div>
+            </SCard>
+          ):(
+            <div style={{padding:"28px 20px",textAlign:"center",
+              background:C.bg("card"),border:`1px solid ${C.bdr()}`,
+              borderRadius:14,color:C.txt("muted"),fontSize:12}}>
+              No recent scan activity for this machine.
+            </div>
+          )}
+          <SCard title="PLC Connection" subtitle="Network Status">
+            {snapshot?.plcConnection?.error?(
+              <div style={{display:"flex",alignItems:"flex-start",gap:10,padding:"13px 15px",
+                borderRadius:9,background:C.ng(0.07),border:`1px solid ${C.ng(0.22)}`}}>
+                <Unplug size={16} color={C.ng()} style={{flexShrink:0,marginTop:1}}/>
+                <div>
+                  <p style={{fontSize:12,fontWeight:700,color:C.ng(),marginBottom:3}}>Connection Error</p>
+                  <p style={{fontSize:11,color:C.ng(0.8),lineHeight:1.5,fontFamily:"'DM Mono',monospace"}}>
+                    {snapshot.plcConnection.error}
+                  </p>
+                  <p style={{fontSize:11,color:C.txt("muted"),marginTop:5}}>
+                    Check the PLC IP address, port, and network connectivity.
+                  </p>
+                </div>
+              </div>
+            ):(
+              <div style={{display:"flex",alignItems:"flex-start",gap:10,padding:"13px 15px",
+                borderRadius:9,background:C.ok(0.07),border:`1px solid ${C.ok(0.22)}`}}>
+                <CheckCircle2 size={16} color={C.ok()} style={{flexShrink:0,marginTop:1}}/>
+                <div>
+                  <p style={{fontSize:12,fontWeight:700,color:C.ok(),marginBottom:3}}>Connection Stable</p>
+                  <p style={{fontSize:11,color:C.ok(0.85),lineHeight:1.5}}>
+                    TCP link verified over {protocol} at {plcIp}:{plcPort}
+                  </p>
+                  <p style={{fontSize:10,color:C.txt("muted"),marginTop:4,fontFamily:"'DM Mono',monospace"}}>
+                    Last checked: {fmtDT(snapshot?.plcConnection?.checkedAt)||fmtDT(new Date())}
+                  </p>
+                </div>
+              </div>
+            )}
+          </SCard>
+          {Array.isArray(snapshot?.recentLogs)&&snapshot.recentLogs.length>0&&(
+            <SCard title="Recent Scan Log" subtitle="History" noPad>
+              <div style={{overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                  <thead>
+                    <tr style={{background:C.bg("surf"),borderBottom:`1px solid ${C.bdr()}`}}>
+                      {["Part Serial","Station","Signal","Result","Time"].map(h=>(
+                        <th key={h} style={{padding:"9px 14px",textAlign:"left",fontSize:9,
+                          fontWeight:800,textTransform:"uppercase",letterSpacing:"0.09em",
+                          color:C.txt("muted"),whiteSpace:"nowrap"}}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {snapshot.recentLogs.slice(0,20).map((lg,i)=>(
+                      <tr key={i} style={{borderBottom:`1px solid ${C.bdr()}`,
+                        background:i%2===1?C.bg("surf"):"transparent"}}>
+                        <td style={{padding:"9px 14px",fontFamily:"'DM Mono',monospace",
+                          fontSize:11,fontWeight:700,color:C.txt("pri")}}>{lg.partId||"—"}</td>
+                        <td style={{padding:"9px 14px",fontSize:11,color:C.txt("sec")}}>{lg.stationNo||"—"}</td>
+                        <td style={{padding:"9px 14px",fontSize:11,fontFamily:"'DM Mono',monospace",color:C.txt("muted")}}>{lg.signalKey||"—"}</td>
+                        <td style={{padding:"9px 14px"}}>
+                          <Badge variant={lg.result==="OK"?"ok":lg.result==="NG"?"ng":"idle"}
+                            label={lg.result==="OK"?"Pass":lg.result==="NG"?"Fail":"—"}/>
+                        </td>
+                        <td style={{padding:"9px 14px",fontSize:11,fontFamily:"'DM Mono',monospace",color:C.txt("muted")}}>
+                          {fmtTime(lg.createdAt)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </SCard>
+          )}
+        </div>
+      )}
     </div>
   );
 };

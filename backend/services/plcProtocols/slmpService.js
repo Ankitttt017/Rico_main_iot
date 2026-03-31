@@ -1,4 +1,5 @@
-const { sleep, withTimeout, hashToRegisterValue } = require("./utils");
+// UPGRADE 1 COMPLETE — 32-bit Part/Station hash via dual-word SLMP writeWords
+const { sleep, withTimeout, hashToRegisterValue, split32To16 } = require("./utils");
 const { withSocket } = require("./socketPool");
 
 const DEFAULT_CONNECT_TIMEOUT_MS = Number(process.env.PLC_CONNECT_TIMEOUT_MS || 2000);
@@ -247,18 +248,28 @@ async function handshake({ ip, port, partId, stationNo, machine }) {
     let startCommandActive = false;
     try {
       if (partRegister !== null) {
+        const hash32p = hashToRegisterValue(partId);
+        const [phigh, plow] = split32To16(hash32p);
+        console.log(
+          `[PLC:SLMP] PART_ID_HASH hash32=${hash32p} dev=${devicePart} reg[${partRegister}]=0x${phigh.toString(16).padStart(4,'0')} (high) reg[${partRegister+1}]=0x${plow.toString(16).padStart(4,'0')} (low)`
+        );
         await writeWords(socket, {
           device: devicePart,
           address: partRegister,
-          values: [hashToRegisterValue(partId)],
+          values: [phigh, plow],
           timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
         });
       }
       if (stationRegister !== null) {
+        const hash32s = hashToRegisterValue(stationNo);
+        const [shigh, slow] = split32To16(hash32s);
+        console.log(
+          `[PLC:SLMP] STATION_HASH hash32=${hash32s} dev=${deviceStation} reg[${stationRegister}]=0x${shigh.toString(16).padStart(4,'0')} (high) reg[${stationRegister+1}]=0x${slow.toString(16).padStart(4,'0')} (low)`
+        );
         await writeWords(socket, {
           device: deviceStation,
           address: stationRegister,
-          values: [hashToRegisterValue(stationNo)],
+          values: [shigh, slow],
           timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
         });
       }
@@ -402,18 +413,26 @@ async function sendCommand({ ip, port, command, machine, partId, stationNo }) {
   const deviceReset = resolveDevice(machine, "RESET");
   await withSocket({ ip, port, timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS }, async (socket) => {
     if (normalized === "START_OPERATION" && Number.isFinite(machine?.plc_part_register)) {
+      const hash32p = hashToRegisterValue(partId);
+      const [phigh, plow] = split32To16(hash32p);
+      const pBase = Number(machine.plc_part_register);
+      console.log(`[PLC:SLMP] sendCommand PART_ID_HASH hash32=${hash32p} reg[${pBase}]=0x${phigh.toString(16)} reg[${pBase+1}]=0x${plow.toString(16)}`);
       await writeWords(socket, {
         device: resolveDevice(machine, "PART_ID_HASH"),
-        address: Number(machine.plc_part_register),
-        values: [hashToRegisterValue(partId)],
+        address: pBase,
+        values: [phigh, plow],
         timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
       });
     }
     if (normalized === "START_OPERATION" && Number.isFinite(machine?.plc_station_register)) {
+      const hash32s = hashToRegisterValue(stationNo);
+      const [shigh, slow] = split32To16(hash32s);
+      const sBase = Number(machine.plc_station_register);
+      console.log(`[PLC:SLMP] sendCommand STATION_HASH hash32=${hash32s} reg[${sBase}]=0x${shigh.toString(16)} reg[${sBase+1}]=0x${slow.toString(16)}`);
       await writeWords(socket, {
         device: resolveDevice(machine, "STATION_HASH"),
-        address: Number(machine.plc_station_register),
-        values: [hashToRegisterValue(stationNo)],
+        address: sBase,
+        values: [shigh, slow],
         timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
       });
     }

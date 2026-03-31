@@ -17,6 +17,22 @@ function normalizeStationScope(value) {
   return Array.from(new Set(stations)).join(",");
 }
 
+function normalizeModelCode(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return null;
+  }
+
+  const models = text
+    .split(/\r?\n|[,;|]/)
+    .map((entry) => String(entry || "").trim().toUpperCase())
+    .filter(Boolean);
+  if (models.length === 0) {
+    return null;
+  }
+  return Array.from(new Set(models)).join(", ");
+}
+
 function toResponse(rule) {
   return {
     id: rule.id,
@@ -45,7 +61,7 @@ exports.createRule = async (req, res) => {
   try {
     const { formatName, name, modelCode, regexPattern, stationScope, sampleValue, description, isActive } = req.body;
     const normalizedName = String(formatName ?? name ?? "").trim();
-    const normalizedModelCode = String(modelCode || "").trim().toUpperCase();
+    const normalizedModelCode = normalizeModelCode(modelCode);
     const normalizedPattern = String(regexPattern || "").trim();
     const normalizedStationScope = normalizeStationScope(stationScope);
     if (!normalizedName || !normalizedPattern) {
@@ -106,7 +122,7 @@ exports.updateRule = async (req, res) => {
 
     const isActive = req.body.isActive === undefined ? rule.is_active : Boolean(req.body.isActive);
     const stationScope = req.body.stationScope === undefined ? rule.station_scope : normalizeStationScope(req.body.stationScope);
-    const modelCode = req.body.modelCode === undefined ? rule.model_code : String(req.body.modelCode || "").trim().toUpperCase();
+    const modelCode = req.body.modelCode === undefined ? rule.model_code : normalizeModelCode(req.body.modelCode);
 
     await rule.update({
       format_name: req.body.formatName

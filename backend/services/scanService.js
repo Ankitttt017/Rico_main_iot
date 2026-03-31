@@ -238,7 +238,11 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
     };
   }
 
-  if (part.is_interlocked || part.status === "INTERLOCKED") {
+  // Check if we are at the same station where the part was interlocked
+  const isInterlockRecovery = (part.status === "INTERLOCKED" || part.is_interlocked) && 
+                              (part.current_operation === station || part.current_station === station);
+
+  if ((part.is_interlocked || part.status === "INTERLOCKED") && !isInterlockRecovery) {
     await saveAuditLog(normalizedPartId, mId, "NG", part.interlock_reason || "PART_INTERLOCKED", userId);
     emitRealtime("scan_event", {
       type: "WARNING",
@@ -261,19 +265,20 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
     where: { part_id: normalizedPartId, station_no: station },
     order: [["createdAt", "DESC"]],
   });
-  // Production rule: once scanned at a station, next scan must be blocked as duplicate
-  // unless operator/admin explicitly performs reset-operation.
+  
   const isRetryableCommFailure = String(existingAtStation?.plc_status || "") === "RESET";
-  if (existingAtStation && !part.is_rework && !isRetryableCommFailure) {
+
+  if (existingAtStation && !part.is_rework && !isRetryableCommFailure && !isInterlockRecovery) {
     await saveAuditLog(normalizedPartId, mId, "NG", "DUPLICATE_SCAN", userId);
     emitRealtime("scan_event", {
       type: "WARNING",
+      code: "DUPLICATE_SCAN",
       partId: normalizedPartId,
       stationNo: station,
       machineId: mId || null,
       decision: "BLOCK",
       reason: "DUPLICATE_SCAN",
-      message: "Duplicate scan",
+      message: `Duplicate scan at station ${station}. Part is currently ${part.status}.`,
     });
     return {
       decision: "BLOCK",
@@ -282,6 +287,14 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
       currentStatus: part.status,
     };
   }
+
+  if (isInterlockRecovery) {
+    // Reset the previous log entry to allow a clean retry
+    if (existingAtStation && existingAtStation.plc_status !== "PENDING") {
+      await existingAtStation.update({ plc_status: "RETRY", interlock_reason: "INTERLOCK_RECOVERY_SCAN" });
+    }
+  }
+
 
   const sequence = await getActiveStations();
   if (!sequence.includes(station)) {
@@ -305,16 +318,28 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
 
   const expectedStation = getExpectedStation(part, sequence);
   if (expectedStation && station !== expectedStation) {
+    const errorDetail = {
+      level: "ERROR",
+      code: "SEQ_VIOLATION",
+      partId: normalizedPartId,
+      expectedStation,
+      actualStation: station,
+      lastCompletedStation: part.current_station || "START",
+      timestamp: new Date().toISOString()
+    };
+    console.error(`[TRACEABILITY] Sequence Violation:`, errorDetail);
+
     await saveAuditLog(normalizedPartId, mId, "NG", "PREVIOUS_STATION_NOT_COMPLETED", userId);
     emitRealtime("scan_event", {
-      type: "WARNING",
+      type: "ERROR",
+      code: "SEQ_VIOLATION",
       partId: normalizedPartId,
       stationNo: station,
       machineId: mId || null,
       decision: "BLOCK",
       reason: "PREVIOUS_STATION_NOT_COMPLETED",
       expectedStation,
-      message: "Previous station not completed",
+      message: `Sequence violation. Expected ${expectedStation}, got ${station}.`,
     });
     return {
       decision: "BLOCK",

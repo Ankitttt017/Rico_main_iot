@@ -1,4 +1,5 @@
 import axios from "axios";
+import toast from "react-hot-toast";
 import { clearAuthSession } from "../utils/authStorage";
 
 export const API_BASE_URL =
@@ -33,12 +34,18 @@ apiClient.interceptors.response.use(
     const authFailure =
       status === 401 || (status === 403 && (apiError.includes("UNAUTHORIZED") || apiError.includes("NO TOKEN")));
 
-    if (authFailure && !isAuthEndpoint(requestUrl) && typeof window !== "undefined") {
+    const isAuthEndpointReq = isAuthEndpoint(requestUrl);
+
+    if (authFailure && !isAuthEndpointReq && typeof window !== "undefined") {
       clearAuthSession();
       localStorage.setItem("auth_error_reason", "SESSION_EXPIRED");
       if (!window.location.pathname.startsWith("/login")) {
         window.location.assign("/login");
       }
+    } else if (!isAuthEndpointReq && status !== 401 && status !== 403) {
+      // General error catching for non-auth requests
+      const errorMessage = error?.response?.data?.error || error?.message || "An unexpected error occurred.";
+      toast.error(errorMessage, { id: "api-error" }); // use id to prevent duplicates
     }
 
     return Promise.reject(error);
