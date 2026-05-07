@@ -667,17 +667,11 @@ async function handleStationPlcFlow({
       return;
     }
 
-    await markEndOk({
-      operationLogId: scanResult.operationLogId,
-      partId,
-      stationNo,
-      machineId: machine.id,
-    });
-    await clearMachineLock(machine.id);
-    scanResult.plcHandshake = "SKIPPED";
-    scanResult.operationStatus = "ENDED_OK";
-    scanResult.message = "QR verified. PLC confirmation skipped as per station settings. Marked OK.";
-    emitRealtime("dashboard_refresh", { reason: "PLC_CONFIRMATION_SKIPPED" });
+    // Keep scan locked and wait for explicit PLC end confirmation.
+    scanResult.plcHandshake = "WAITING_PLC_END";
+    scanResult.operationStatus = "PENDING";
+    scanResult.message = "QR verified. Waiting PLC operation end signal.";
+    emitRealtime("dashboard_refresh", { reason: "PLC_WAITING_END_SIGNAL" });
     return;
   }
 
@@ -1066,7 +1060,7 @@ const server = net.createServer((socket) => {
         scannerIp,
         status: operationStatus,
         plcStatus: operationStatus,
-        qrResult: scanResult.decision === "ALLOW" || scanResult.reason === "MACHINE_RUNNING" ? "PASS" : "FAIL",
+        qrResult: scanResult.decision === "ALLOW" ? "PASS" : "FAIL",
         reason: scanResult.reason || null,
         expectedStation: scanResult.expectedStation || null,
         qrReason: scanResult.reason || null,

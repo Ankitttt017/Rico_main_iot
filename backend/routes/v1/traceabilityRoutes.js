@@ -21,6 +21,7 @@ router.post("/traceability/rework", verifyToken, traceabilityController.reworkPa
 router.post("/traceability/reset-interlock", verifyToken, traceabilityController.resetInterlock);
 router.post("/traceability/reset-operation", verifyToken, traceabilityController.resetOperation);
 router.post("/traceability/reset-station", verifyToken, traceabilityController.resetStationOperation);
+router.post("/traceability/delete-part", verifyToken, traceabilityController.deletePartTraceability);
 router.post("/traceability/bypass", verifyToken, traceabilityController.bypassOperation);
 
 module.exports = router;

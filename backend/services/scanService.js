@@ -5,6 +5,7 @@ const Machine = require("../models/Machine");
 const QrFormatRule = require("../models/QrFormatRule");
 const { emitRealtime } = require("./realtimeService");
 const { testQrPattern } = require("../utils/qrRegex");
+const RECENT_DUPLICATE_GRACE_MS = Math.max(Number(process.env.RECENT_DUPLICATE_GRACE_MS || 1500), 0);
 
 function normalizeResult(result) {
   return String(result || "OK").trim().toUpperCase() === "OK" ? "OK" : "NG";
@@ -142,6 +143,10 @@ function getExpectedStation(part, sequence) {
     return sequence[sequence.length - 1];
   }
   return sequence[currentIndex + 1];
+}
+
+function toUpper(value) {
+  return String(value || "").trim().toUpperCase();
 }
 
 exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = null, options = {}) => {
@@ -324,6 +329,41 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
     !isRetryableCommFailure &&
     !isInterlockRecovery
   ) {
+    const existingStatus = toUpper(existingAtStation.plc_status);
+    const createdAtMs = existingAtStation.createdAt ? new Date(existingAtStation.createdAt).getTime() : NaN;
+    const ageMs = Number.isFinite(createdAtMs) ? Date.now() - createdAtMs : Number.POSITIVE_INFINITY;
+    const sameMachine =
+      !mId ||
+      !Number(existingAtStation.machine_id) ||
+      Number(existingAtStation.machine_id) === Number(mId);
+    const canTreatAsIdempotent =
+      RECENT_DUPLICATE_GRACE_MS > 0 &&
+      sameMachine &&
+      ageMs >= 0 &&
+      ageMs <= RECENT_DUPLICATE_GRACE_MS &&
+      (existingStatus === "PENDING" || existingStatus === "STARTED" || existingStatus === "ENDED_OK");
+
+    if (canTreatAsIdempotent) {
+      emitRealtime("scan_event", {
+        type: "INFO",
+        code: "RECENT_DUPLICATE_IGNORED",
+        partId: normalizedPartId,
+        stationNo: station,
+        machineId: mId || null,
+        decision: "ALLOW",
+        reason: "RECENT_DUPLICATE_IGNORED",
+        message: `Duplicate packet ignored at ${station}; using recent scan result.`,
+      });
+      return {
+        decision: "ALLOW",
+        reason: "RECENT_DUPLICATE_IGNORED",
+        message: `Duplicate packet ignored at ${station}; previous scan kept.`,
+        currentStatus: part.status,
+        operationStatus: existingStatus || "PENDING",
+        stationNo: station,
+      };
+    }
+
     await saveAuditLog(normalizedPartId, mId, "NG", "DUPLICATE_SCAN", userId);
     emitRealtime("scan_event", {
       type: "WARNING",

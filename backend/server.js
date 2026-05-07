@@ -55,6 +55,7 @@ const { startPlcHealthMonitor } = require("./services/plcHealthService");
 const { resetAllMachineLocks } = require("./services/machineLockService");
 const scannerService = require("./services/scannerConnectionService");
 const { startAlarmMonitor } = require("./services/alarmService");
+const { ensureMachineQrScannerUniqueness } = require("./services/machineSchemaService");
 
 require("./tcp/tcpServer");
 require("./models/AuditLog"); // UPGRADE 5 — auto-sync AuditLog table
@@ -117,7 +118,7 @@ io.on("connection", (socket) => {
 
 async function ensureDefaultAdminUser() {
   const defaultUsername = process.env.DEFAULT_ADMIN_USERNAME || "admin";
-  const defaultPassword = process.env.DEFAULT_ADMIN_PASSWORD || "admin123";
+  const defaultPassword = process.env.DEFAULT_ADMIN_PASSWORD || "admin@123";
   const defaultRole = process.env.DEFAULT_ADMIN_ROLE || "Admin";
 
   const existingUser = await User.findOne({ where: { username: defaultUsername } });
@@ -213,6 +214,7 @@ async function startServer() {
         throw syncError;
       }
     }
+    await runStartupDbTask("ensureMachineQrScannerUniqueness", () => ensureMachineQrScannerUniqueness());
     await runStartupDbTask("resetAllMachineLocks", () => resetAllMachineLocks());
     await runStartupDbTask("resetAllScannerConnectionStates", () => scannerService.resetAllScannerConnectionStates());
     await runStartupDbTask("ensureDefaultAdminUser", () => ensureDefaultAdminUser());

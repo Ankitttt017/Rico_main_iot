@@ -154,6 +154,16 @@ function normalizeDecisionState(value) {
   if (n==="WAIT") return "WAIT";
   return "";
 }
+function mapBlockReasonToPlcStatus(payload = {}) {
+  const reason = String(payload.reason || payload.qrReason || "").trim().toUpperCase();
+  if (!reason) return "WAIT";
+  if (reason === "DUPLICATE_SCAN") return "FAILED";
+  if (reason === "RESET_REQUIRED_AFTER_PLC_COMM_ERROR") return "PLC_COMM_ERROR";
+  if (reason.startsWith("PLC_TIMEOUT")) return "PLC_COMM_ERROR";
+  if (reason === "MACHINE_RUNNING") return "WAIT";
+  if (reason === "PART_INTERLOCKED") return "INTERLOCKED";
+  return "WAIT";
+}
 function isResetLikePayload(payload={}) {
   const status=String(payload.status||payload.plcStatus||payload.plc_status||"").trim().toUpperCase();
   const reason=String(payload.reason||payload.qrReason||"").trim().toUpperCase();
@@ -165,7 +175,7 @@ function getOperationVariant(status) {
   if (s==="ENDED_OK"||s==="PASSED")           return "ok";
   if (["ENDED_NG","INTERLOCKED","FAILED"].includes(s)) return "ng";
   if (["PLC_COMM_ERROR","COMM_ERROR"].includes(s))     return "wip";
-  if (["STARTED","PENDING","IN_PROGRESS"].includes(s)) return "wip";
+  if (["STARTED","IN_PROGRESS"].includes(s)) return "wip";
   return "idle";
 }
 function getOperationLabel(status) {
@@ -173,7 +183,7 @@ function getOperationLabel(status) {
   if (s==="ENDED_OK"||s==="PASSED")           return "Pass";
   if (["ENDED_NG","INTERLOCKED","FAILED"].includes(s)) return "Fail";
   if (["PLC_COMM_ERROR","COMM_ERROR"].includes(s))     return "Comm Error";
-  if (["STARTED","PENDING","IN_PROGRESS"].includes(s)) return "Running";
+  if (["STARTED","IN_PROGRESS"].includes(s)) return "Running";
   return "Waiting";
 }
 function fmtTime(v) { if(!v) return "—"; const d=new Date(v); return isNaN(d)?"—":d.toLocaleTimeString(); }
@@ -441,25 +451,37 @@ const OperatorView = () => {
   const producedCount  = Number(qualitySummary.processedCount||0);
   const progressPct    = Math.min(100,Math.round((producedCount/expectedCount)*100));
   const qualityPct     = Number(qualitySummary.accuracy||0);
-  const machineMode    = liveState?.current?"Running":liveState?.lastEvent?"Idle":"Waiting";
+  const machineMode    = liveState?.machine?.isRunning || liveState?.current ? "Running" : liveState?.lastEvent ? "Idle" : "Waiting";
   const machineClock   = formatElapsed(liveState?.current?.createdAt||liveState?.lastEvent?.createdAt,clockTick);
 
   const currentContext  = liveState?.current||stationStats?.current||liveState?.lastEvent||stationStats?.lastEvent||null;
   const plcHealth       = liveState?.plcHealth||stationStats?.plcHealth||null;
   const scannerHealth   = liveState?.scannerHealth||stationStats?.scannerHealth||null;
   const scannerInfo     = liveState?.scanner||stationStats?.scanner||null;
-  const plcConnected    = Boolean(plcHealth?.healthy);
+  const plcHealthKnown  = typeof plcHealth?.healthy === "boolean";
+  const plcConnected    = plcHealthKnown ? Boolean(plcHealth?.healthy) : null;
   const scannerConfigured = String(scannerHealth?.status||"").toUpperCase()!=="NOT_CONFIGURED";
   const scannerConnected  = Boolean(scannerHealth?.connected);
 
   const opVariant = useMemo(()=>getOperationVariant(currentContext?.plcStatus),[currentContext?.plcStatus]);
   const opLabel   = useMemo(()=>getOperationLabel(currentContext?.plcStatus),[currentContext?.plcStatus]);
 
+  const quickResetPartId = useMemo(
+    ()=>normalizePartId(currentContext?.partId || popup?.partId || popup?.part_id),
+    [currentContext?.partId,popup?.partId,popup?.part_id]
+  );
+  const quickResetStation = useMemo(
+    ()=>String(popup?.stationNo || popup?.station_no || selectedStation || "").trim().toUpperCase(),
+    [popup?.stationNo,popup?.station_no,selectedStation]
+  );
+
   const canQuickReset = useMemo(()=>{
-    if (!currentContext?.partId||!selectedStation) return false;
+    if (!quickResetPartId||!quickResetStation) return false;
     const s=String(currentContext?.plcStatus||"").trim().toUpperCase();
-    return ["ENDED_NG","FAILED","NG","INTERLOCKED","PLC_COMM_ERROR","COMM_ERROR","TIMEOUT","PLC_TIMEOUT"].includes(s);
-  },[currentContext?.partId,currentContext?.plcStatus,selectedStation]);
+    const r=String(popup?.reason||popup?.qrReason||"").trim().toUpperCase();
+    if (["ENDED_NG","FAILED","NG","INTERLOCKED","PLC_COMM_ERROR","COMM_ERROR","TIMEOUT","PLC_TIMEOUT"].includes(s)) return true;
+    return r==="DUPLICATE_SCAN" || r==="RESET_REQUIRED_AFTER_PLC_COMM_ERROR" || r.startsWith("PLC_TIMEOUT");
+  },[quickResetPartId,quickResetStation,currentContext?.plcStatus,popup?.reason,popup?.qrReason]);
 
   const rejectionSummary = useMemo(()=>{
     const rows=stationStats?.recentParts||[];
@@ -631,7 +653,7 @@ const OperatorView = () => {
     const socket=io(SOCKET_URL,{path:"/socket.io/",transports:["websocket","polling"]});
     socket.on("scan_event",(p={})=>{
       const rel=processQrSignal(p);
-      if (rel){ const d=extractQrDecision(p); if (d==="BLOCK"){ if (isDuplicatePopupEvent({...p,type:"ERROR"})){scheduleLiveRefresh();return;} if (shouldSuppressPopupPayload(p)){scheduleLiveRefresh();return;} mergePopupPayload({type:"ERROR",title:"Scan Blocked",message:formatScanErrorMessage(p),reason:p.reason||"",partId:p.partId||p.part_id,stationNo:p.stationNo||p.station_no,machineId:p.machineId||p.machine_id,qrResult:"FAIL",plcStatus:"WAIT",timestamp:p.timestamp}); } scheduleLiveRefresh(); }
+      if (rel){ const d=extractQrDecision(p); if (d==="BLOCK"){ if (isDuplicatePopupEvent({...p,type:"ERROR"})){scheduleLiveRefresh();return;} if (shouldSuppressPopupPayload(p)){scheduleLiveRefresh();return;} mergePopupPayload({type:"ERROR",title:"Scan Blocked",message:formatScanErrorMessage(p),reason:p.reason||"",partId:p.partId||p.part_id,stationNo:p.stationNo||p.station_no,machineId:p.machineId||p.machine_id,qrResult:"FAIL",plcStatus:mapBlockReasonToPlcStatus(p),timestamp:p.timestamp}); } scheduleLiveRefresh(); }
     });
     socket.on("journey_update",(p={})=>{ if (String(p.sourceEvent||"").toLowerCase()==="scan_event") return; if (hasQrDecision(p)&&processQrSignal(p)) scheduleLiveRefresh(); });
     socket.on("operator_popup",(p={})=>{
@@ -644,8 +666,8 @@ const OperatorView = () => {
       scheduleLiveRefresh();
     });
     socket.on("dashboard_refresh",()=>scheduleLiveRefresh());
-    socket.on("plc_health",(p={})=>{ if (String(p.machineId||p.machine_id||"")===selectedMachineIdRef.current) scheduleLiveRefresh(); });
-    socket.on("scanner_health",(p={})=>{ if (String(p.machineId||p.machine_id||"")===selectedMachineIdRef.current) scheduleLiveRefresh(); });
+    // Avoid noisy refresh storms caused by transient health flaps.
+    // Operator telemetry already refreshes on interval and on scan/popup events.
     return()=>{ if (liveRefreshTimerRef.current){clearTimeout(liveRefreshTimerRef.current);liveRefreshTimerRef.current=null;} socket.disconnect(); };
   },[scheduleLiveRefresh,processQrSignal,mergePopupPayload,isDuplicatePopupEvent]);
 
@@ -659,8 +681,9 @@ const OperatorView = () => {
   useEffect(()=>{
     if (qrSignal||!currentContext?.partId) return;
     const s=String(currentContext?.plcStatus||"").trim().toUpperCase();
-    if (!["PENDING","STARTED","ENDED_OK","ENDED_NG","PLC_COMM_ERROR"].includes(s)) return;
-    const inferred={id:`${Date.now()}-inferred`,label:"QR PASS",variant:"ok",partId:normalizePartId(currentContext.partId),stationNo:String(selectedStation||"").trim().toUpperCase(),decision:"ALLOW",reason:"QR_VALIDATED",message:"Restored from station state",timestamp:currentContext.createdAt||new Date().toISOString()};
+    if (!["ENDED_OK","ENDED_NG"].includes(s)) return;
+    const isPass = s === "ENDED_OK";
+    const inferred={id:`${Date.now()}-inferred`,label:isPass?"QR PASS":"QR FAIL",variant:isPass?"ok":"ng",partId:normalizePartId(currentContext.partId),stationNo:String(selectedStation||"").trim().toUpperCase(),decision:isPass?"ALLOW":"BLOCK",reason:isPass?"QR_VALIDATED":"SCAN_RESULT_NG",message:"Restored from station state",timestamp:currentContext.createdAt||new Date().toISOString()};
     setQrSignal(inferred); setQrFeed(prev=>prev.length?prev:[inferred]);
     const mk=String(selectedMachineIdRef.current||"");
     if (mk){ try{ const c=JSON.parse(localStorage.getItem(QR_STORAGE_KEY)||"{}"); c[mk]=inferred; localStorage.setItem(QR_STORAGE_KEY,JSON.stringify(c)); }catch{} }
@@ -836,19 +859,24 @@ const OperatorView = () => {
                   <div style={{
                     display:"flex",alignItems:"center",justifyContent:"space-between",
                     padding:"8px 10px",borderRadius:9,
-                    background:plcConnected?C.ok(0.07):C.ng(0.07),
-                    border:`1px solid ${plcConnected?C.ok(0.22):C.ng(0.22)}`,
+                    background:plcConnected===null?C.idle(0.07):plcConnected?C.ok(0.07):C.ng(0.07),
+                    border:`1px solid ${plcConnected===null?C.bdr():plcConnected?C.ok(0.22):C.ng(0.22)}`,
                   }}>
                     <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
-                      <ConnDot connected={plcConnected}/>
+                      <ConnDot connected={Boolean(plcConnected)}/>
                       <div style={{minWidth:0}}>
                         <p style={{fontSize:isCompact?11:12,fontWeight:700,color:C.txt("pri")}}>PLC Controller</p>
                         <p style={{fontSize:9,color:C.txt("muted"),fontFamily:"'DM Mono',monospace",overflow:"hidden",textOverflow:"ellipsis"}}>
-                          {plcHealth?.ip||"—"}
+                          {plcHealth?.plcIp||selectedMachine?.plcIp||liveState?.machine?.plcIp||"—"}
                         </p>
                       </div>
                     </div>
-                    <Badge variant={plcConnected?"ok":"ng"} label={plcConnected?"Online":"Offline"} pulse={plcConnected} size={isCompact?"sm":"sm"}/>
+                    <Badge
+                      variant={plcConnected===null?"idle":plcConnected?"ok":"ng"}
+                      label={plcConnected===null?"Checking":plcConnected?"Online":"Offline"}
+                      pulse={Boolean(plcConnected)}
+                      size={isCompact?"sm":"sm"}
+                    />
                   </div>
 
                   {/* Scanner */}
@@ -902,7 +930,7 @@ const OperatorView = () => {
                   compact={isCompact}
                 />
                 {canQuickReset&&(
-                  <button onClick={()=>openResetConfirm(currentContext.partId,selectedStation)}
+                  <button onClick={()=>openResetConfirm(quickResetPartId,quickResetStation)}
                     style={{
                       width:"100%",marginTop:12,height:isCompact?34:38,
                       background:C.ng(),color:"white",
@@ -1217,3 +1245,4 @@ const OperatorView = () => {
 };
 
 export default OperatorView;
+

@@ -1013,6 +1013,18 @@ const MachinePage = () => {
   };
   const closeBypassModal = () => { setBypassModalMachine(null); setBypassEnabled(false); setBypassReason(""); };
 
+  const getSaveErrorMessage = (err) => {
+    const data = err?.response?.data || {};
+    const details = Array.isArray(data?.details) ? data.details : [];
+    if (details.includes("qrScannerIp")) {
+      return "Duplicate Scanner IP detected. Keep Scanner IP empty or use a unique value.";
+    }
+    if (details.includes("machineNumber")) {
+      return "Machine Number already exists. Please change operation/sequence or use a different machine number.";
+    }
+    return data?.error || "Failed to save machine";
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     const err = validateCurrentTab(activeTab);
@@ -1026,7 +1038,7 @@ const MachinePage = () => {
       else await machineApi.create(payload);
       toast.success(editingMachine ? "Machine updated" : "Machine created");
       closeModal(); await loadData();
-    } catch (err) { toast.error(err.response?.data?.error || "Failed to save machine"); }
+    } catch (err) { toast.error(getSaveErrorMessage(err)); }
     finally { setSaving(false); }
   };
 

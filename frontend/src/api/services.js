@@ -45,6 +45,10 @@ export const machineApi = {
     const { data } = await apiClient.post(ENDPOINTS.machinePlcCommand, payload, config);
     return data;
   },
+  readPlcValue: async (payload, config = {}) => {
+    const { data } = await apiClient.post(ENDPOINTS.machineReadPlcValue, payload, config);
+    return data;
+  },
   writePlcValue: async (payload, config = {}) => {
     const { data } = await apiClient.post(ENDPOINTS.machineWritePlcValue, payload, config);
     return data;
@@ -251,6 +255,10 @@ export const traceabilityApi = {
   },
   resetOperation: async (payload) => {
     const { data } = await apiClient.post(ENDPOINTS.traceability.resetOperation, payload);
+    return data;
+  },
+  deletePart: async (payload) => {
+    const { data } = await apiClient.post(ENDPOINTS.traceability.deletePart, payload);
     return data;
   },
   bypass: async (payload) => {

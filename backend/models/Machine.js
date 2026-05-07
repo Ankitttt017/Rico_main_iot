@@ -34,7 +34,6 @@ const Machine = sequelize.define("Machine", {
   qr_scanner_ip: {
     type: DataTypes.STRING,
     allowNull: true,
-    unique: true,
   },
   plc_ip: {
     type: DataTypes.STRING,

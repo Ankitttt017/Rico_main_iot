@@ -38,7 +38,12 @@ const IO_SNAPSHOT_CACHE_MAX_AGE_MS = Math.max(
   Number(process.env.IO_SNAPSHOT_CACHE_MAX_AGE_MS || IO_SNAPSHOT_MIN_INTERVAL_MS * 2),
   IO_SNAPSHOT_MIN_INTERVAL_MS
 );
+const IO_PLC_DISCONNECT_FAILURE_THRESHOLD = Math.max(
+  Number(process.env.IO_PLC_DISCONNECT_FAILURE_THRESHOLD || 3),
+  1
+);
 const ioSnapshotCache = new Map();
+const ioPlcConnectionStability = new Map();
 
 function normalizeStation(value) {
   return String(value || "")
@@ -52,6 +57,63 @@ function getMachineOperationStage(machine) {
 
 function getIoSnapshotCacheKey(machineId, plcIp) {
   return `${Number(machineId) || 0}:${normalizeIp(plcIp || "")}`;
+}
+
+function getInstantPlcConnected(plcConnection = {}) {
+  const protocol = toUpper(plcConnection.protocol || "TCP_TEXT");
+  if (protocol === "TCP_TEXT") {
+    return Boolean(plcConnection.transportConnected);
+  }
+  return Boolean(plcConnection.transportConnected || plcConnection.readConnected);
+}
+
+function applyPlcConnectionStability(machineId, plcConnection = {}) {
+  const key = Number(machineId || 0);
+  const instantConnected = getInstantPlcConnected(plcConnection);
+
+  if (!key) {
+    return {
+      connected: instantConnected,
+      instantConnected,
+      failureCount: instantConnected ? 0 : 1,
+      holdActive: false,
+    };
+  }
+
+  const previous =
+    ioPlcConnectionStability.get(key) || {
+      connected: false,
+      failureCount: 0,
+    };
+
+  let nextConnected = previous.connected;
+  let failureCount = previous.failureCount;
+
+  if (instantConnected) {
+    nextConnected = true;
+    failureCount = 0;
+  } else {
+    failureCount = Math.max(0, Number(previous.failureCount || 0)) + 1;
+    if (failureCount >= IO_PLC_DISCONNECT_FAILURE_THRESHOLD) {
+      nextConnected = false;
+    }
+  }
+
+  ioPlcConnectionStability.set(key, {
+    connected: nextConnected,
+    failureCount,
+    updatedAtMs: Date.now(),
+  });
+
+  return {
+    connected: nextConnected,
+    instantConnected,
+    failureCount,
+    holdActive:
+      !instantConnected &&
+      nextConnected &&
+      failureCount < IO_PLC_DISCONNECT_FAILURE_THRESHOLD,
+  };
 }
 
 function uniqueStages(stages) {
@@ -70,6 +132,29 @@ function uniqueStages(stages) {
 function toIntegerOrNull(value) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? Math.trunc(numeric) : null;
+}
+
+function parseRegisterToken(rawValue, fallbackDevice = null) {
+  const text = String(rawValue ?? "").trim().toUpperCase();
+  if (!text) {
+    return { register: null, device: fallbackDevice };
+  }
+  const direct = Number(text);
+  if (Number.isFinite(direct)) {
+    return { register: Math.trunc(direct), device: fallbackDevice };
+  }
+  const match = text.match(/^([A-Z]+)?\s*(\d+)$/);
+  if (!match) {
+    return { register: null, device: fallbackDevice };
+  }
+  const register = Number(match[2]);
+  if (!Number.isFinite(register)) {
+    return { register: null, device: fallbackDevice };
+  }
+  return {
+    register: Math.trunc(register),
+    device: String(match[1] || fallbackDevice || "").trim().toUpperCase() || fallbackDevice,
+  };
 }
 
 function toUpper(value) {
@@ -107,22 +192,8 @@ function evaluateSignalState(signalKey, value, machine, latestPlcStatus) {
   const resetValue = toIntegerOrNull(machine?.plc_reset_value) ?? 9;
 
   if (value === null || value === undefined) {
-    if (signalKey === "TRIGGER" && latestPlcStatus === "STARTED") {
-      return { status: "RUNNING", tone: "warn" };
-    }
-    if (signalKey === "INTERLOCK") {
-      if (latestPlcStatus === "ENDED_OK") {
-        return { status: "PASS", tone: "good" };
-      }
-      if (latestPlcStatus === "ENDED_NG" || latestPlcStatus === "INTERLOCKED") {
-        return { status: "FAIL", tone: "error" };
-      }
-      if (latestPlcStatus === "STARTED" || latestPlcStatus === "PENDING") {
-        return { status: "IN_PROGRESS", tone: "warn" };
-      }
-      if (latestPlcStatus === "PLC_COMM_ERROR") {
-        return { status: "COMM_ERROR", tone: "error" };
-      }
+    if (latestPlcStatus === "PLC_COMM_ERROR") {
+      return { status: "COMM_ERROR", tone: "error" };
     }
     return { status: "NO_DATA", tone: "muted" };
   }
@@ -209,12 +280,15 @@ function parseMachineHandshakeMap(machine) {
     const snapshot = typeof machine.plc_registers === "string" ? JSON.parse(machine.plc_registers) : machine.plc_registers;
     const rows = Array.isArray(snapshot?.handshakeMap) ? snapshot.handshakeMap : [];
     return rows
-      .map((row) => ({
+      .map((row) => {
+        const parsedRegister = parseRegisterToken(row?.register ?? row?.registerNo ?? row?.address, null);
+        return {
         signal: String(row?.signal || row?.label || "").trim(),
-        register: toIntegerOrNull(row?.register ?? row?.registerNo ?? row?.address),
+        register: parsedRegister.register,
         direction: normalizeHandshakeDirectionToSignalDirection(row?.direction),
         meaning: String(row?.meaning || row?.purpose || row?.description || "").trim() || null,
-      }))
+      };
+      })
       .filter((row) => row.signal && row.register !== null);
   } catch (_error) {
     return [];
@@ -320,11 +394,13 @@ function parseMachineSignalMap(machine) {
       row?.direction,
       ["TRIGGER", "RESET"].includes(key) ? "PC -> PLC" : "PLC -> PC"
     );
+    const explicitDevice = String(row?.device || "").trim().toUpperCase() || null;
+    const parsedRegister = parseRegisterToken(row?.register ?? row?.registerNo ?? row?.address, explicitDevice);
     normalized.push({
       key,
       label: String(row?.label || key).trim() || key,
-      register: toIntegerOrNull(row?.register ?? row?.registerNo ?? row?.address),
-      device: String(row?.device || "").trim().toUpperCase() || null,
+      register: parsedRegister.register,
+      device: parsedRegister.device || explicitDevice,
       direction,
       writable: row?.writable === undefined ? direction !== "PLC -> PC" : Boolean(row.writable),
       description: String(row?.description || "").trim() || "Configured signal mapping",
@@ -489,6 +565,41 @@ function getQualitySummaryFromOperationLogs(rows) {
   };
 }
 
+function isInProgressPlcStatus(value) {
+  const normalized = toUpper(value);
+  return normalized === "STARTED" || normalized === "PENDING";
+}
+
+function resolveCurrentOperationForMachine(logs, machine) {
+  if (!Array.isArray(logs) || logs.length === 0 || !machine) {
+    return null;
+  }
+
+  if (!Boolean(machine.is_running)) {
+    return null;
+  }
+
+  const runningPartId = String(machine.running_part_id || "").trim();
+  const runningStation = normalizeStation(machine.running_station_no);
+  return (
+    logs.find((row) => {
+      if (!isInProgressPlcStatus(row?.plc_status)) {
+        return false;
+      }
+      if (runningPartId && String(row?.part_id || "").trim() !== runningPartId) {
+        return false;
+      }
+      if (runningStation) {
+        const rowStation = normalizeStation(row?.station_no || row?.operation_no);
+        if (rowStation !== runningStation) {
+          return false;
+        }
+      }
+      return true;
+    }) || null
+  );
+}
+
 async function getLatestOperationLog(partId, stationNo) {
   return OperationLog.findOne({
     where: {
@@ -524,17 +635,19 @@ async function buildScannerHealth(scanner, machineId) {
   }
 
   const connectionSnapshot = await getScannerConnectionSnapshot(scanner.scanner_ip).catch(() => null);
+  const connectionConnected = Boolean(connectionSnapshot?.connected);
 
   const byIpHealth = getScannerHealthSnapshot({ scannerIp: scanner.scanner_ip });
   if (byIpHealth) {
+    const connected = Boolean(byIpHealth.connected) || connectionConnected;
     return {
       ...byIpHealth,
       scannerId: byIpHealth.scannerId || scanner.id,
       scannerName: byIpHealth.scannerName || scanner.scanner_name,
       machineId: byIpHealth.machineId || machineId || null,
-      connected: Boolean(connectionSnapshot?.connected ?? byIpHealth.connected),
-      status: String(connectionSnapshot?.status || byIpHealth.status || "DISCONNECTED").toUpperCase(),
-      connectedAt: connectionSnapshot?.connectedAt || null,
+      connected,
+      status: connected ? "CONNECTED" : "DISCONNECTED",
+      connectedAt: byIpHealth.lastSeenAt || connectionSnapshot?.connectedAt || null,
       lastDataAt: connectionSnapshot?.lastDataAt || byIpHealth.lastSeenAt || null,
       source: connectionSnapshot?.source || "HEARTBEAT",
     };
@@ -548,14 +661,15 @@ async function buildScannerHealth(scanner, machineId) {
       null;
 
     if (match) {
+      const connected = Boolean(match.connected) || connectionConnected;
       return {
         ...match,
         scannerId: match.scannerId || scanner.id,
         scannerName: match.scannerName || scanner.scanner_name,
         machineId: match.machineId || machineId || null,
-        connected: Boolean(connectionSnapshot?.connected ?? match.connected),
-        status: String(connectionSnapshot?.status || match.status || "DISCONNECTED").toUpperCase(),
-        connectedAt: connectionSnapshot?.connectedAt || null,
+        connected,
+        status: connected ? "CONNECTED" : "DISCONNECTED",
+        connectedAt: match.lastSeenAt || connectionSnapshot?.connectedAt || null,
         lastDataAt: connectionSnapshot?.lastDataAt || match.lastSeenAt || null,
         source: connectionSnapshot?.source || "HEARTBEAT",
       };
@@ -1130,18 +1244,12 @@ async function handleStationPlcFlow({
       return;
     }
 
-    await markOperationEndedOk({
-      operationLogId: response.operationLogId,
-      partId,
-      stationNo,
-      machineId: machine.id,
-      userId,
-    });
-    await clearMachineLock(machine.id);
-    emitRealtime("dashboard_refresh", { reason: "PLC_CONFIRMATION_SKIPPED" });
-    response.plcHandshake = "SKIPPED";
-    response.operationStatus = "ENDED_OK";
-    response.message = "QR verified. PLC confirmation skipped as per station settings. Marked OK.";
+    // Even when station confirmation toggle is disabled, keep the cycle held
+    // until an explicit PLC end signal/API confirmation is received.
+    response.plcHandshake = "WAITING_PLC_END";
+    response.operationStatus = "PENDING";
+    response.message = "QR verified. Waiting PLC operation end signal.";
+    emitRealtime("dashboard_refresh", { reason: "PLC_WAITING_END_SIGNAL" });
     return;
   }
 
@@ -1340,7 +1448,7 @@ exports.getLiveMachineState = async (req, res) => {
       limit: 20,
     });
 
-    const current = logs.find((row) => row.plc_status === "STARTED" || row.plc_status === "PENDING") || null;
+    const current = resolveCurrentOperationForMachine(logs, machine);
     const lastEvent = logs[0] || null;
     const plcHealth = getPlcHealthSnapshot(machine.id);
     const plcCircuit = getPlcCircuitSnapshot().find((entry) => entry.key === `machine:${machine.id}`) || null;
@@ -1616,11 +1724,11 @@ exports.getIoSnapshot = async (req, res) => {
       }
     }
 
-    plcConnection.connected = Boolean(
-      protocol === "TCP_TEXT"
-        ? plcConnection.transportConnected
-        : plcConnection.transportConnected || plcConnection.readConnected
-    );
+    const stableState = applyPlcConnectionStability(machine.id, plcConnection);
+    plcConnection.connected = stableState.connected;
+    plcConnection.instantConnected = stableState.instantConnected;
+    plcConnection.failureCount = stableState.failureCount;
+    plcConnection.holdActive = stableState.holdActive;
 
     const latestPlcStatus = toUpper(latestLog?.plc_status);
     const rows = buildIoSignalRows(machine, registerValues, latestPlcStatus);
@@ -1710,7 +1818,22 @@ exports.getPartJourney = async (req, res) => {
     ]);
 
     if (!part && logs.length === 0) {
-      return res.status(404).json({ error: "Part not found" });
+      return res.json({
+        part: {
+          part_id: partId,
+          status: "NOT_FOUND",
+          current_station: null,
+          current_operation: null,
+        },
+        sequence: sequenceData.sequence || [],
+        expectedNextStation: sequenceData.sequence?.[0] || null,
+        journey: [],
+        stationTimeline: [],
+        interlockHistory: [],
+        auditTrail: [],
+        reworkHistory: [],
+        notFound: true,
+      });
     }
 
     const machineIds = uniqueStages(
@@ -1976,7 +2099,7 @@ exports.getMachineStationStats = async (req, res) => {
       .sort((a, b) => String(a.hour).localeCompare(String(b.hour)))
       .slice(-12);
 
-    const current = logs.find((row) => row.plc_status === "STARTED" || row.plc_status === "PENDING") || null;
+    const current = resolveCurrentOperationForMachine(logs, machine);
     const lastEvent = logs[0] || null;
     const recentParts = logs.slice(0, 10).map((row) => ({
       id: row.id,
@@ -2175,7 +2298,7 @@ exports.processScan = async (req, res) => {
       requiredPlcPartCount,
     });
 
-    const qrStatus = response.decision === "ALLOW" || response.reason === "MACHINE_RUNNING" ? "PASS" : "FAIL";
+    const qrStatus = response.decision === "ALLOW" ? "PASS" : "FAIL";
     const operationStatus = response.operationStatus || (response.decision === "ALLOW" ? "PENDING" : "WAIT");
     const popupType =
       response.decision === "ALLOW" && operationStatus === "ENDED_OK" ? "SUCCESS" : mapScanDecisionToPopupType(response);
@@ -2333,7 +2456,7 @@ exports.verifyScanForOperator = async (req, res) => {
       requiredPlcPartCount,
     });
 
-    const qrStatus = response.decision === "ALLOW" || response.reason === "MACHINE_RUNNING" ? "PASS" : "FAIL";
+    const qrStatus = response.decision === "ALLOW" ? "PASS" : "FAIL";
     const operationStatus = response.operationStatus || (response.decision === "ALLOW" ? "PENDING" : "WAIT");
     const popupType =
       response.decision === "ALLOW" && operationStatus === "ENDED_OK" ? "SUCCESS" : mapScanDecisionToPopupType(response);
@@ -2685,6 +2808,51 @@ exports.resetOperation = async (req, res) => {
   }
 };
 
+async function purgePartTraceabilityData(partId) {
+  const normalizedPartId = String(partId || "").trim();
+  const [part, opRows, prodRows, reworkRows] = await Promise.all([
+    Part.findOne({ where: { part_id: normalizedPartId } }),
+    OperationLog.findAll({
+      where: { part_id: normalizedPartId },
+      attributes: ["id", "machine_id"],
+      raw: true,
+    }),
+    ProductionLog.findAll({
+      where: { part_id: normalizedPartId },
+      attributes: ["id", "machine_id"],
+      raw: true,
+    }),
+    ReworkLog.findAll({
+      where: { part_id: normalizedPartId },
+      attributes: ["id"],
+      raw: true,
+    }),
+  ]);
+
+  if (!part && opRows.length === 0 && prodRows.length === 0 && reworkRows.length === 0) {
+    return null;
+  }
+
+  await Promise.all([
+    OperationLog.destroy({ where: { part_id: normalizedPartId } }),
+    ProductionLog.destroy({ where: { part_id: normalizedPartId } }),
+    ReworkLog.destroy({ where: { part_id: normalizedPartId } }),
+    Part.destroy({ where: { part_id: normalizedPartId } }),
+  ]);
+
+  const machineIds = [...new Set([...opRows, ...prodRows].map((row) => Number(row.machine_id)).filter(Number.isFinite))];
+  if (machineIds.length > 0) {
+    await Promise.all(machineIds.map((machineId) => clearMachineLock(machineId)));
+  }
+
+  return {
+    operationLogs: opRows.length,
+    productionLogs: prodRows.length,
+    reworkLogs: reworkRows.length,
+    machineLocksCleared: machineIds.length,
+  };
+}
+
 exports.resetStationOperation = async (req, res) => {
   try {
     const partId = String(req.body.partId || "").trim();
@@ -2693,6 +2861,27 @@ exports.resetStationOperation = async (req, res) => {
 
     if (!partId || !targetStation) {
       return res.status(400).json({ error: "partId and stationNo are required" });
+    }
+
+    if (targetStation === "ALL") {
+      const purgeSummary = await purgePartTraceabilityData(partId);
+      if (!purgeSummary) {
+        return res.status(404).json({ error: "Part not found" });
+      }
+
+      emitOperatorPopup("WARNING", {
+        partId,
+        status: "PART_DELETED",
+        message: `Part ${partId} removed from traceability records`,
+      });
+      emitRealtime("dashboard_refresh", { reason: "PART_DELETED", partId });
+
+      return res.json({
+        message: "Part deleted successfully",
+        partId,
+        deleted: purgeSummary,
+        reason: reason || "Manual full deletion",
+      });
     }
 
     const [part, sequenceData] = await Promise.all([Part.findOne({ where: { part_id: partId } }), getActiveMachineSequenceData()]);
@@ -2770,6 +2959,37 @@ exports.resetStationOperation = async (req, res) => {
       previousStation,
       deletedLogs: operationLogIdsToDelete.length,
       status: part.status,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.deletePartTraceability = async (req, res) => {
+  try {
+    const partId = String(req.body.partId || req.body.part_id || req.params.partId || "").trim();
+    const reason = String(req.body.reason || "").trim();
+    if (!partId) {
+      return res.status(400).json({ error: "partId is required" });
+    }
+
+    const purgeSummary = await purgePartTraceabilityData(partId);
+    if (!purgeSummary) {
+      return res.status(404).json({ error: "Part not found" });
+    }
+
+    emitOperatorPopup("WARNING", {
+      partId,
+      status: "PART_DELETED",
+      message: `Part ${partId} removed from traceability records`,
+    });
+    emitRealtime("dashboard_refresh", { reason: "PART_DELETED", partId });
+
+    res.json({
+      message: "Part deleted successfully",
+      partId,
+      deleted: purgeSummary,
+      reason: reason || "Manual deletion",
     });
   } catch (error) {
     res.status(500).json({ error: error.message });

@@ -158,7 +158,7 @@ function getStationMeta(status) {
   if (["PASSED","ENDED_OK","COMPLETED"].includes(s))    return {variant:"ok",  label:"Pass",       icon:CheckCircle2};
   if (["FAILED","INTERLOCKED","ENDED_NG","NG"].includes(s)) return {variant:"ng",  label:"Fail",       icon:XCircle};
   if (["COMM_ERROR","PLC_COMM_ERROR"].includes(s))       return {variant:"wip", label:"Comm Error", icon:AlertTriangle};
-  if (["IN_PROGRESS","STARTED","PENDING","REWORK"].includes(s)) return {variant:"wip",label:"In Progress",icon:Clock3};
+  if (["IN_PROGRESS","STARTED","REWORK"].includes(s)) return {variant:"wip",label:"In Progress",icon:Clock3};
   return {variant:"idle",label:"Waiting",icon:Clock3};
 }
 function getPartMeta(status) {
@@ -319,18 +319,17 @@ const PartActionBtn = ({ icon, label, color, bgColor, borderColor, hoverBg, onCl
 const QrModal = ({ partId, onClose, onDeletePart }) => {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting,      setDeleting]      = useState(false);
+  const [deleteError,   setDeleteError]   = useState("");
 
   const handleDelete = async () => {
     setDeleting(true);
+    setDeleteError("");
     try {
-      await traceabilityApi.deletePart?.(partId)
-        || traceabilityApi.resetStation?.({partId, stationNo:"ALL", reason:"Full part deletion"});
+      await traceabilityApi.deletePart({ partId, reason: "Full part deletion" });
       onDeletePart(partId);
       onClose();
     } catch(e) {
-      // fallback — still close modal
-      onDeletePart(partId);
-      onClose();
+      setDeleteError(e.response?.data?.error || "Unable to remove part");
     } finally { setDeleting(false); }
   };
 
@@ -393,7 +392,7 @@ const QrModal = ({ partId, onClose, onDeletePart }) => {
 
           {/* Delete section */}
           {!confirmDelete ? (
-            <button onClick={()=>setConfirmDelete(true)}
+            <button onClick={() => { setDeleteError(""); setConfirmDelete(true); }}
               style={{display:"flex",alignItems:"center",gap:6,
                 fontSize:12,fontWeight:700,color:C.ng(),
                 background:C.ng(0.08),border:`1px solid ${C.ng(0.25)}`,
@@ -414,7 +413,7 @@ const QrModal = ({ partId, onClose, onDeletePart }) => {
                 all its station history from start to end. This cannot be undone.
               </p>
               <div style={{display:"flex",gap:8}}>
-                <Btn onClick={()=>setConfirmDelete(false)}
+                <Btn onClick={() => { setDeleteError(""); setConfirmDelete(false); }}
                   style={{flex:1,justifyContent:"center",padding:"8px 0"}}>
                   Cancel
                 </Btn>
@@ -424,6 +423,11 @@ const QrModal = ({ partId, onClose, onDeletePart }) => {
                   {deleting?"Removing…":"Yes, Remove"}
                 </Btn>
               </div>
+              {deleteError ? (
+                <p style={{marginTop:10,fontSize:11,color:C.ng(),lineHeight:1.4}}>
+                  {deleteError}
+                </p>
+              ) : null}
             </div>
           )}
         </div>
@@ -517,11 +521,13 @@ const ComponentJourney = () => {
   },[refreshJourneyNow]);
 
   const patchPartFromRealtime = useCallback((payload={})=>{
-    const rPartId=normalizePartId(payload.partId||payload.part_id);
-    if (!rPartId) return;
-    const rStatus=String(payload.currentStatus||payload.partStatus||payload.status||"").trim().toUpperCase();
-    const resolved=["COMPLETED","IN_PROGRESS","NG","INTERLOCKED","REWORK"].includes(rStatus)?rStatus
-      :["ENDED_OK","STARTED","PENDING"].includes(rStatus)?"IN_PROGRESS"
+  const rPartId=normalizePartId(payload.partId||payload.part_id);
+  if (!rPartId) return;
+  const rStatus=String(payload.currentStatus||payload.partStatus||payload.status||"").trim().toUpperCase();
+  const resolved=["COMPLETED","IN_PROGRESS","NG","INTERLOCKED","REWORK"].includes(rStatus)?rStatus
+      :rStatus==="ENDED_OK"?"COMPLETED"
+      :rStatus==="STARTED"?"IN_PROGRESS"
+      :rStatus==="PENDING"?"PENDING"
       :rStatus==="ENDED_NG"?"NG":"";
     const rStation=String(payload.stationNo||payload.station_no||"").trim().toUpperCase();
     const rTimestamp=payload.timestamp||new Date().toISOString();

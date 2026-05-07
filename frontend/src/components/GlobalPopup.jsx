@@ -41,6 +41,9 @@ function resolveOperationState(popup = {}) {
   )
     .trim()
     .toUpperCase();
+  const reason = String(popup.reason || popup.qrReason || "")
+    .trim()
+    .toUpperCase();
   if (["ENDED_OK", "PASSED", "COMPLETED"].includes(status)) return "PASS";
   if (["ENDED_NG", "FAILED", "NG", "INTERLOCKED", "BLOCKED"].includes(status))
     return "FAIL";
@@ -48,7 +51,11 @@ function resolveOperationState(popup = {}) {
     ["PLC_COMM_ERROR", "COMM_ERROR", "PLC_TIMEOUT", "TIMEOUT"].includes(status)
   )
     return "COMM";
-  if (["STARTED", "PENDING", "IN_PROGRESS"].includes(status)) return "RUN";
+  if (reason === "DUPLICATE_SCAN") return "FAIL";
+  if (reason === "RESET_REQUIRED_AFTER_PLC_COMM_ERROR") return "COMM";
+  if (reason.startsWith("PLC_TIMEOUT")) return "COMM";
+  if (["STARTED", "IN_PROGRESS"].includes(status)) return "RUN";
+  if (status === "PENDING") return "WAIT";
   return "WAIT";
 }
 
@@ -122,28 +129,35 @@ export const StatusBadge = ({ status, overrideLabel }) => {
 // --- StationCard --------------------------------------------------------------
 const StationCard = ({ station, isLast }) => {
   const isCompleted = station.status === "COMPLETED";
+  const isFailed = station.status === "FAILED";
   const isInProgress = station.status === "IN_PROGRESS";
   const isPending = station.status === "PENDING";
 
   const dotClass = isCompleted
     ? "bg-success"
+    : isFailed
+    ? "bg-danger"
     : isInProgress
     ? "bg-primary shadow-[0_0_0_4px_rgba(0,180,216,0.2)] animate-[pulse-ring_1.5s_ease-out_infinite]"
     : "bg-border-strong";
 
   const cardClass = isCompleted
     ? "bg-success/8 border-success/30"
+    : isFailed
+    ? "bg-danger/8 border-danger/30"
     : isInProgress
     ? "bg-primary/8 border-primary/40 border-[1.5px]"
     : "bg-bg-card border-border border-dashed opacity-60";
 
   const titleColor = isCompleted
     ? "text-success"
+    : isFailed
+    ? "text-danger"
     : isInProgress
     ? "text-primary"
     : "text-text-muted";
 
-  const subtitleColor = isCompleted ? "text-success/80" : "text-primary/80";
+  const subtitleColor = isCompleted ? "text-success/80" : isFailed ? "text-danger/80" : "text-primary/80";
 
   const dateObj = station.completedAt ? new Date(station.completedAt) : null;
   const timeStr = dateObj
@@ -193,6 +207,8 @@ const StationCard = ({ station, isLast }) => {
               <p className={`text-[11px] mt-1 font-medium ${subtitleColor}`}>
                 {isCompleted
                   ? `Previous station - completed`
+                  : isFailed
+                  ? `Station completed with fail result`
                   : `In progress - ${timeStr || "started"}`}
               </p>
             )}
@@ -428,10 +444,12 @@ const GlobalPopup = ({
     stations.slice(-1)[0]?.stationName ||
     "System Node";
 
-  // FIX 3: Count by station.status === "COMPLETED" not qualityCheck
-  const passCount = stations.filter(
-    (s) => s.status === "COMPLETED"
-  ).length;
+  // Count pass from quality/operation state, not just station card status.
+  const passCount = stations.filter((s) => {
+    const quality = String(s.qualityCheck || "").toUpperCase();
+    const operation = String(s.operation || "").toUpperCase();
+    return quality === "PASS" || operation === "PASS";
+  }).length;
   const totalCount = stations.length || "?";
 
   const allPassed =
@@ -449,8 +467,16 @@ const GlobalPopup = ({
   const operationState = resolveOperationState(popup);
   const rejectionState = resolveRejectionState(popup, operationState);
 
+  const reasonUpper = String(popup?.reason || popup?.qrReason || "")
+    .trim()
+    .toUpperCase();
+  const needsResetByReason =
+    reasonUpper === "DUPLICATE_SCAN" ||
+    reasonUpper === "RESET_REQUIRED_AFTER_PLC_COMM_ERROR" ||
+    reasonUpper.startsWith("PLC_TIMEOUT");
+
   const canReset =
-    (operationState === "COMM" || operationState === "FAIL") &&
+    (operationState === "COMM" || operationState === "FAIL" || needsResetByReason) &&
     Boolean(partId) &&
     Boolean(stationNo) &&
     typeof onResetOperation === "function";

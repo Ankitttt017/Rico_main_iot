@@ -50,6 +50,21 @@ function normalizeFrameMode(value, fallback = "AUTO") {
   return fallback;
 }
 
+function isRetryableSlmpAttemptError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  if (!message) return false;
+  return (
+    message.includes("invalid slmp") ||
+    message.includes("slmp end code") ||
+    message.includes("timeout") ||
+    message.includes("econnreset") ||
+    message.includes("econnrefused") ||
+    message.includes("ehostunreach") ||
+    message.includes("socket hang up") ||
+    message.includes("write after end")
+  );
+}
+
 function getFrameModeCandidates(machine = {}) {
   let snapshotMode = null;
   try {
@@ -470,7 +485,7 @@ async function handshake({ ip, port, partId, stationNo, machine }) {
       });
     } catch (error) {
       lastError = error;
-      if (!/timeout|invalid slmp/i.test(String(error?.message || ""))) {
+      if (!isRetryableSlmpAttemptError(error)) {
         throw error;
       }
     }
@@ -507,7 +522,7 @@ async function probe({ ip, port, machine, timeoutMs }) {
       });
     } catch (error) {
       lastError = error;
-      if (!/timeout|invalid slmp/i.test(String(error?.message || ""))) {
+      if (!isRetryableSlmpAttemptError(error)) {
         throw error;
       }
     }
@@ -557,7 +572,7 @@ async function reset({ ip, port, machine }) {
       });
     } catch (error) {
       lastError = error;
-      if (!/timeout|invalid slmp/i.test(String(error?.message || ""))) {
+      if (!isRetryableSlmpAttemptError(error)) {
         throw error;
       }
     }
@@ -637,7 +652,7 @@ async function sendCommand({ ip, port, command, machine, partId, stationNo }) {
       break;
     } catch (error) {
       lastError = error;
-      if (!/timeout|invalid slmp/i.test(String(error?.message || ""))) {
+      if (!isRetryableSlmpAttemptError(error)) {
         throw error;
       }
     }

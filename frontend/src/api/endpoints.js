@@ -9,6 +9,7 @@ export const ENDPOINTS = {
   machineTestPlc: "/machines/test-plc",
   machineResetPlc: "/machines/reset-plc",
   machinePlcCommand: "/machines/plc-command",
+  machineReadPlcValue: "/machines/read-plc-value",
   machineWritePlcValue: "/machines/write-plc-value",
   plcConfig: {
     ranges: "/plc-config/ranges",
@@ -40,6 +41,7 @@ export const ENDPOINTS = {
     resetInterlock: "/traceability/reset-interlock",
     resetStation: "/traceability/reset-station",
     resetOperation: "/traceability/reset-operation",
+    deletePart: "/traceability/delete-part",
     bypass: "/traceability/bypass",
   },
   qrFormatRules: "/qr-format-rules",
