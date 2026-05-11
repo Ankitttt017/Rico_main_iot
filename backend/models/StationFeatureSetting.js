@@ -46,6 +46,26 @@ const StationFeatureSetting = sequelize.define("StationFeatureSetting", {
     allowNull: false,
     defaultValue: false,
   },
+  config: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+    get() {
+      const rawValue = this.getDataValue('config');
+      if (!rawValue) return null;
+      try {
+        return JSON.parse(rawValue);
+      } catch (e) {
+        return null;
+      }
+    },
+    set(value) {
+      if (value) {
+        this.setDataValue('config', JSON.stringify(value));
+      } else {
+        this.setDataValue('config', null);
+      }
+    }
+  },
   updated_by: {
     type: DataTypes.INTEGER,
     allowNull: true,

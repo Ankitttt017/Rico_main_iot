@@ -25,10 +25,13 @@ function normalizeInputMap(rawSettings = {}) {
       return acc;
     }
 
+    // Preserve everything in the config object
     acc[stationNo] = {
+      ...rawValue,
       qr: rawValue.qr !== false,
       operation: rawValue.operation !== false,
       rejectionBin: rawValue.rejectionBin !== false,
+      qualityCheck: rawValue.qualityCheck === true,
       plcConfirmation: rawValue.plcConfirmation !== false,
       manualResult: rawValue.manualResult === true,
       plcPartCount: normalizePlcPartCount(rawValue.plcPartCount ?? rawValue.plc_part_count),
@@ -44,10 +47,16 @@ function rowsToMap(rows = []) {
     if (!stationNo) {
       return acc;
     }
+
+    // Start with values from the config JSON column if available
+    const config = row.config && typeof row.config === "object" ? row.config : {};
+
     acc[stationNo] = {
+      ...config,
       qr: Boolean(row.qr_enabled),
       operation: Boolean(row.operation_enabled),
       rejectionBin: Boolean(row.rejection_bin_enabled),
+      qualityCheck: config.qualityCheck === true,
       plcConfirmation: row.plc_confirmation_enabled !== false,
       manualResult: row.manual_result_enabled === true,
       plcPartCount: normalizePlcPartCount(row.plc_part_count),
@@ -78,19 +87,21 @@ exports.saveSettings = async (req, res) => {
     }
 
     await Promise.all(
-      stations.map((stationNo) =>
-        StationFeatureSetting.upsert({
+      stations.map((stationNo) => {
+        const data = payload[stationNo];
+        return StationFeatureSetting.upsert({
           station_no: stationNo,
-          qr_enabled: payload[stationNo].qr,
-          operation_enabled: payload[stationNo].operation,
-          rejection_bin_enabled: payload[stationNo].rejectionBin,
-          plc_confirmation_enabled: payload[stationNo].plcConfirmation,
-          manual_result_enabled: payload[stationNo].manualResult === true,
-          plc_part_count: payload[stationNo].plcPartCount,
-          final_packing_enabled: payload[stationNo].finalPacking === true,
+          qr_enabled: data.qr,
+          operation_enabled: data.operation,
+          rejection_bin_enabled: data.rejectionBin,
+          plc_confirmation_enabled: data.plcConfirmation,
+          manual_result_enabled: data.manualResult === true,
+          plc_part_count: data.plcPartCount,
+          final_packing_enabled: data.finalPacking === true,
+          config: data, // Store the full object in JSON column
           updated_by: req.user?.id || null,
-        })
-      )
+        });
+      })
     );
 
     const rows = await StationFeatureSetting.findAll({

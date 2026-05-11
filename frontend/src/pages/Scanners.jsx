@@ -12,7 +12,7 @@ import ConfirmModal from "../components/ConfirmModal";
 
 /* ─── constants ────────────────────────────────────────────── */
 const EMPTY_FORM = {
-  scannerName: "", scannerIp: "", scannerPort: "9001",
+  scannerName: "", scannerIp: "", scannerPort: "",
   mappedMachineId: "", isActive: true,
 };
 
@@ -50,7 +50,7 @@ const Scanners = () => {
     setForm({
       scannerName: scanner.scannerName || "",
       scannerIp: scanner.scannerIp || "",
-      scannerPort: String(scanner.scannerPort || "9001"),
+      scannerPort: scanner.scannerPort ? String(scanner.scannerPort) : "",
       mappedMachineId: String(scanner.mappedMachineId || ""),
       isActive: Boolean(scanner.isActive),
     });
@@ -263,7 +263,7 @@ const Scanners = () => {
                     </td>
                     <td className="px-5 py-4">
                       <p className="font-mono text-xs text-text-main">{scanner.scannerIp}</p>
-                      <p className="text-[10px] text-text-muted mt-0.5">Port: {scanner.scannerPort || "8000"}</p>
+                      <p className="text-[10px] text-text-muted mt-0.5">Port: {scanner.scannerPort || "N/A"}</p>
                     </td>
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-1.5">

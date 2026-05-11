@@ -42,7 +42,9 @@ const DS = `
     --db-ng:    239,68,68;
     --db-wip:   249,115,22;
     --db-idle:  148,163,184;
+    --font-db:  "Inter", "Sora", "Outfit", system-ui, sans-serif;
   }
+  .db-font { font-family: var(--font-db); }
   [data-theme="light"]{
     --db-bg-base:    248,246,243;
     --db-bg-card:    255,255,255;
@@ -157,8 +159,6 @@ const Badge = ({ variant="idle", label }) => {
   );
 };
 
-// ── Alarm Banner ──────────────────────────────────────────────────────────
-
 // ── KPI Card ─────────────────────────────────────────────────────────────
 const KpiCard = ({ label, value, icon:Icon, accent, sub }) => (
   <div style={{
@@ -171,13 +171,13 @@ const KpiCard = ({ label, value, icon:Icon, accent, sub }) => (
     <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between"}}>
       <p style={{fontSize:11,fontWeight:700,textTransform:"uppercase",
         letterSpacing:"0.07em",color:C.txt("muted"),lineHeight:1.3}}>{label}</p>
-      <div style={{width:30,height:30,borderRadius:8,
+      <div style={{width:26,height:26,borderRadius:8,
         background:`rgba(${accent?accent.replace(/rgba\(|,\d+\)|\)$/g,"").replace(/rgb\(|,\d+,\d+\)$/g,""):"var(--db-steel)"},0.1)`,
         display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-        <Icon size={14} color={accent||C.steel()}/>
+        <Icon size={13} color={accent||C.steel()}/>
       </div>
     </div>
-    <p style={{fontSize:30,fontWeight:800,color:C.txt("pri"),lineHeight:1,
+    <p style={{fontSize:28,fontWeight:800,color:C.txt("pri"),lineHeight:1,
       fontFamily:"'DM Mono',monospace",fontVariantNumeric:"tabular-nums"}}>{value}</p>
     {sub && <p style={{fontSize:11,color:C.txt("muted")}}>{sub}</p>}
   </div>
@@ -202,15 +202,15 @@ const MachineCard = ({ row, plcOnline=true, nowMs=0 }) => {
       onMouseEnter={e=>{e.currentTarget.style.borderColor=C.steel(0.5);e.currentTarget.style.boxShadow=SHADOW_MD;}}
       onMouseLeave={e=>{e.currentTarget.style.borderColor=C.bdr();e.currentTarget.style.boxShadow=SHADOW;}}
     >
-      {/* PLC dot */}
-      <div style={{position:"absolute",top:14,right:14,display:"flex",alignItems:"center",gap:5}}>
-        <span style={{fontSize:9,fontWeight:700,color:C.txt("muted"),textTransform:"uppercase",letterSpacing:"0.06em"}}>PLC</span>
-        <div style={{position:"relative",width:8,height:8}}>
-          <div style={{position:"absolute",inset:0,borderRadius:"50%",
-            background:plcOnline?C.ok():C.ng(),
-            animation:plcOnline?"dbPing 1.8s ease-out infinite":"none",opacity:0.5}}/>
-          <div style={{width:8,height:8,borderRadius:"50%",
-            background:plcOnline?C.ok():C.ng()}}/>
+      {/* PLC Status Icon */}
+      <div style={{position:"absolute",top:14,right:14,display:"flex",alignItems:"center",gap:6}}
+        title={plcOnline ? "PLC Connection Active" : "PLC Connection Down"}>
+        <span style={{fontSize:8,fontWeight:800,color:C.txt("muted"),textTransform:"uppercase",letterSpacing:"0.08em"}}>PLC</span>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"center",
+          width:22,height:22,borderRadius:6,
+          background:plcOnline?C.ok(0.1):C.ng(0.1),
+          border:`1px solid ${plcOnline?C.ok(0.2):C.ng(0.2)}`}}>
+          {plcOnline ? <Wifi size={11} color={C.ok()}/> : <WifiOff size={11} color={C.ng()}/>}
         </div>
       </div>
 
@@ -418,8 +418,6 @@ const Dashboard = () => {
     <div style={{display:"flex",flexDirection:"column",gap:20,paddingBottom:32,
       animation:"dbFadeIn 0.3s ease"}}>
 
-      {/* ── Alarms ── */}
-
       {/* ── Page Header ─────────────────────────────────────────────── */}
       <div style={{
         background:C.bg("card"),border:`1px solid ${C.bdr()}`,
@@ -430,7 +428,6 @@ const Dashboard = () => {
 
         <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",
           flexWrap:"wrap",gap:12}}>
-          {/* Title */}
           <div style={{display:"flex",alignItems:"center",gap:14}}>
             <div style={{width:46,height:46,borderRadius:13,
               background:`linear-gradient(135deg,${C.navy()},${C.steel(0.8)})`,
@@ -440,7 +437,7 @@ const Dashboard = () => {
             </div>
             <div>
               <h1 style={{fontSize:18,fontWeight:800,color:C.txt("pri"),
-                letterSpacing:"-0.02em",lineHeight:1.2}}>
+                letterSpacing:"-0.02em",lineHeight:1.2, fontFamily:"var(--font-outfit)"}}>
                 Production Overview
               </h1>
               <div style={{display:"flex",alignItems:"center",gap:8,marginTop:4}}>
@@ -456,7 +453,6 @@ const Dashboard = () => {
             </div>
           </div>
 
-          {/* Actions */}
           <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
             <button onClick={()=>setShowFilters(f=>!f)}
               style={{
@@ -492,15 +488,13 @@ const Dashboard = () => {
               {loading?"Updating…":"Refresh"}
             </button>
 
-            <button
-              onClick={handleExportReport}
+            <button onClick={handleExportReport}
               style={{
                 display:"inline-flex",alignItems:"center",gap:7,
                 height:38,padding:"0 16px",borderRadius:9,
                 fontSize:12,fontWeight:800,cursor:"pointer",
                 background:C.amber(),border:"none",
-                color:C.navy(),
-                boxShadow:`0 3px 12px ${C.amber(0.3)}`,
+                color:C.navy(),boxShadow:`0 3px 12px ${C.amber(0.3)}`,
                 transition:"filter 0.15s",
               }}
               onMouseEnter={e=>e.currentTarget.style.filter="brightness(1.06)"}
@@ -510,7 +504,6 @@ const Dashboard = () => {
           </div>
         </div>
 
-        {/* ── Filter bar ── */}
         {showFilters && (
           <div style={{
             marginTop:16,padding:"16px",borderRadius:12,
@@ -518,7 +511,6 @@ const Dashboard = () => {
             display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,
             animation:"dbFadeIn 0.2s ease",
           }}>
-            {/* Date filters */}
             {[
               { key:"dateFrom",  placeholder:"From date",     type:"date"   },
               { key:"dateTo",    placeholder:"To date",       type:"date"   },
@@ -533,12 +525,11 @@ const Dashboard = () => {
                   border:`1px solid ${C.bdr()}`,
                   borderRadius:8,fontSize:12,
                   color:C.txt("pri"),outline:"none",
-                  fontFamily:"'DM Sans',sans-serif",
+                  fontFamily:"var(--font-db)",
                 }}
               />
             ))}
 
-            {/* Machine dropdown */}
             <select
               value={filters.machineId}
               onChange={e=>setFilters(prev=>({...prev,machineId:e.target.value}))}
@@ -548,7 +539,7 @@ const Dashboard = () => {
                 border:`1px solid ${C.bdr()}`,
                 borderRadius:8,fontSize:12,
                 color:C.txt("pri"),outline:"none",
-                fontFamily:"'DM Sans',sans-serif",
+                fontFamily:"var(--font-db)",
                 minWidth:140,cursor:"pointer",
                 appearance:"auto",
               }}>
@@ -558,7 +549,6 @@ const Dashboard = () => {
               ))}
             </select>
 
-            {/* Part serial */}
             <input
               type="text"
               placeholder="Part serial"
@@ -570,11 +560,10 @@ const Dashboard = () => {
                 border:`1px solid ${C.bdr()}`,
                 borderRadius:8,fontSize:12,
                 color:C.txt("pri"),outline:"none",
-                fontFamily:"'DM Sans',sans-serif",
+                fontFamily:"var(--font-db)",
               }}
             />
 
-            {/* Status dropdown */}
             <select
               value={filters.status}
               onChange={e=>setFilters(prev=>({...prev,status:e.target.value}))}
@@ -584,7 +573,7 @@ const Dashboard = () => {
                 border:`1px solid ${C.bdr()}`,
                 borderRadius:8,fontSize:12,
                 color:C.txt("pri"),outline:"none",
-                fontFamily:"'DM Sans',sans-serif",
+                fontFamily:"var(--font-db)",
                 minWidth:120,cursor:"pointer",
                 appearance:"auto",
               }}>
@@ -595,7 +584,6 @@ const Dashboard = () => {
               <option value="INTERLOCKED">Interlocked</option>
             </select>
 
-            {/* Shift dropdown */}
             <select
               value={filters.shiftCode}
               onChange={e=>setFilters(prev=>({...prev,shiftCode:e.target.value}))}
@@ -605,7 +593,7 @@ const Dashboard = () => {
                 border:`1px solid ${C.bdr()}`,
                 borderRadius:8,fontSize:12,
                 color:C.txt("pri"),outline:"none",
-                fontFamily:"'DM Sans',sans-serif",
+                fontFamily:"var(--font-db)",
                 minWidth:120,cursor:"pointer",
                 appearance:"auto",
               }}>
@@ -632,7 +620,7 @@ const Dashboard = () => {
       {/* ── KPI Row ────────────────────────────────────────────────────── */}
       <div style={{display:"grid",
         gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:12}}>
-        <KpiCard label="Total Machines"   value={summary.machines.total}          icon={Cpu}          accent={C.steel()}  sub={`${summary.machines.active} active`}/>
+        <KpiCard label="Active Machines"  value={summary.machines.active}         icon={Cpu}          accent={C.steel()}  sub={`Out of ${summary.machines.total} total machines`}/>
         <KpiCard label="In Progress"      value={summary.parts.inProgress}         icon={Zap}          accent={C.wip()}    sub="Parts being processed"/>
         <KpiCard label="Completed (Pass)" value={summary.parts.completed}          icon={CheckCircle2} accent={C.ok()}     sub="Total OK this period"/>
         <KpiCard label="Failed (NG)"      value={summary.quality?.ng||0}           icon={XCircle}      accent={C.ng()}     sub="Requires attention"/>
@@ -671,13 +659,11 @@ const Dashboard = () => {
       {activeTab==="overview" && (
         <div style={{display:"flex",flexDirection:"column",gap:16}}>
 
-          {/* Row 1: donut + line chart */}
           <div style={{display:"grid",gridTemplateColumns:"300px 1fr",gap:16,
             flexWrap:"wrap"}}
             className="db-grid-responsive">
             <style>{`@media(max-width:900px){.db-grid-responsive{grid-template-columns:1fr!important}}`}</style>
 
-            {/* Pass/Fail donut */}
             <div style={{background:C.bg("card"),border:`1px solid ${C.bdr()}`,
               borderRadius:14,padding:20,boxShadow:SHADOW}}>
               <SectionHead title="Pass / Fail Split"/>
@@ -719,7 +705,6 @@ const Dashboard = () => {
               </div>
             </div>
 
-            {/* Hourly production line chart */}
             <div style={{background:C.bg("card"),border:`1px solid ${C.bdr()}`,
               borderRadius:14,padding:20,boxShadow:SHADOW}}>
               <SectionHead title="Hourly Production"
@@ -768,12 +753,10 @@ const Dashboard = () => {
             </div>
           </div>
 
-          {/* Row 2: shift breakdown + recent scans */}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}
             className="db-grid-2">
             <style>{`@media(max-width:800px){.db-grid-2{grid-template-columns:1fr!important}}`}</style>
 
-            {/* Shift bar chart */}
             <div style={{background:C.bg("card"),border:`1px solid ${C.bdr()}`,
               borderRadius:14,padding:20,boxShadow:SHADOW}}>
               <SectionHead title="Production by Shift"/>
@@ -793,7 +776,6 @@ const Dashboard = () => {
               </div>
             </div>
 
-            {/* Recent scans */}
             <div style={{background:C.bg("card"),border:`1px solid ${C.bdr()}`,
               borderRadius:14,overflow:"hidden",boxShadow:SHADOW}}>
               <div style={{padding:"14px 16px",borderBottom:`1px solid ${C.bdr()}`,
@@ -832,26 +814,22 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* ── TAB: Machine KPIs ──────────────────────────────────────────── */}
       {activeTab==="machines" && (
-        <div>
-          <div style={{display:"grid",
-            gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:14}}>
-            {(report?.machineCards||[]).length===0 ? (
-              <div style={{padding:"48px 24px",textAlign:"center",
-                color:C.txt("muted"),fontSize:13}}>
-                <Cpu size={28} color={C.txt("muted")} style={{margin:"0 auto 12px"}}/>
-                <p>No machine data available</p>
-              </div>
-            ) : (report?.machineCards||[]).map(row=>(
-              <MachineCard key={row.machineId} row={row}
-                plcOnline={plcMap[row.machineId]!==false} nowMs={nowMs}/>
-            ))}
-          </div>
+        <div style={{display:"grid",
+          gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:14}}>
+          {(report?.machineCards||[]).length===0 ? (
+            <div style={{padding:"48px 24px",textAlign:"center",
+              color:C.txt("muted"),fontSize:13}}>
+              <Cpu size={28} color={C.txt("muted")} style={{margin:"0 auto 12px"}}/>
+              <p>No machine data available</p>
+            </div>
+          ) : (report?.machineCards||[]).map(row=>(
+            <MachineCard key={row.machineId} row={row}
+              plcOnline={plcMap[row.machineId]!==false} nowMs={nowMs}/>
+          ))}
         </div>
       )}
 
-      {/* ── TAB: OEE Analysis ──────────────────────────────────────────── */}
       {activeTab==="oee" && (
         <div style={{display:"grid",
           gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:14}}>
@@ -864,7 +842,6 @@ const Dashboard = () => {
           ) : oeeData.map((row,i)=>(
             <div key={i} style={{background:C.bg("card"),border:`1px solid ${C.bdr()}`,
               borderRadius:14,padding:20,boxShadow:SHADOW}}>
-              {/* Header */}
               <div style={{display:"flex",alignItems:"flex-start",
                 justifyContent:"space-between",marginBottom:16}}>
                 <div>
@@ -880,7 +857,6 @@ const Dashboard = () => {
                 </div>
               </div>
 
-              {/* Gauges */}
               <div style={{display:"flex",alignItems:"center",
                 justifyContent:"space-around",marginBottom:16}}>
                 <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:6}}>
@@ -903,7 +879,6 @@ const Dashboard = () => {
                 </div>
               </div>
 
-              {/* Footer stats */}
               <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,
                 paddingTop:12,borderTop:`1px solid ${C.bdr()}`}}>
                 {[
@@ -924,11 +899,9 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* ── TAB: Production History ─────────────────────────────────────── */}
       {activeTab==="history" && (
         <div style={{background:C.bg("card"),border:`1px solid ${C.bdr()}`,
           borderRadius:14,overflow:"hidden",boxShadow:SHADOW}}>
-          {/* Table header */}
           <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.bdr()}`,
             background:C.bg("surf"),display:"flex",
             alignItems:"center",justifyContent:"space-between"}}>
@@ -948,67 +921,36 @@ const Dashboard = () => {
           </div>
 
           <div style={{overflowX:"auto"}}>
-            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+            <table style={{width:"100%",borderCollapse:"collapse"}}>
               <thead>
                 <tr style={{background:C.bg("surf"),borderBottom:`1px solid ${C.bdr()}`}}>
-                  {["Part Serial","Machine","Station","Result","Timestamp"].map(h=>(
-                    <th key={h} style={{padding:"10px 16px",textAlign:"left",
-                      fontSize:10,fontWeight:800,textTransform:"uppercase",
-                      letterSpacing:"0.08em",color:C.txt("muted"),whiteSpace:"nowrap"}}>
-                      {h}
-                    </th>
+                  {["Time","Part ID","Station","Op","Result"].map(h=>(
+                    <th key={h} style={{padding:"10px 16px",textAlign:"left",fontSize:10,
+                      fontWeight:800,color:C.txt("muted"),textTransform:"uppercase",
+                      letterSpacing:"0.08em"}}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {(report?.partJourney||[]).length===0 ? (
-                  <tr><td colSpan={5}>
-                    <div style={{padding:"48px 24px",textAlign:"center",
-                      color:C.txt("muted"),fontSize:12}}>
-                      No records found
-                    </div>
-                  </td></tr>
-                ) : (report?.partJourney||[]).slice(0,50).map((row,i)=>(
-                  <tr key={i} style={{
-                    borderBottom:`1px solid ${C.bdr()}`,
-                    background:i%2===1?C.bg("surf"):"transparent",
-                    transition:"background 0.1s",
-                  }}
-                    onMouseEnter={e=>e.currentTarget.style.background=C.steel(0.05)}
-                    onMouseLeave={e=>e.currentTarget.style.background=i%2===1?C.bg("surf"):"transparent"}
-                  >
-                    <td style={{padding:"10px 16px"}}>
-                      <span style={{fontFamily:"'DM Mono',monospace",fontSize:11,
-                        fontWeight:700,color:C.txt("pri")}}>
-                        {row.part_id||"—"}
-                      </span>
+                  <tr><td colSpan="5" style={{padding:40,textAlign:"center",color:C.txt("muted")}}>No data found</td></tr>
+                ) : (report?.partJourney||[]).map((row,i)=>(
+                  <tr key={i} style={{borderBottom:`1px solid ${C.bdr(0.1)}`,
+                    background:i%2===1?C.bg("surf"):"transparent"}}>
+                    <td style={{padding:"10px 16px",fontSize:11,color:C.txt("sec"),fontFamily:"'DM Mono',monospace"}}>
+                      {new Date(row.createdAt).toLocaleTimeString()}
+                    </td>
+                    <td style={{padding:"10px 16px",fontSize:11,fontWeight:700,color:C.txt("pri")}}>
+                      {row.part_id}
+                    </td>
+                    <td style={{padding:"10px 16px",fontSize:11,color:C.txt("sec")}}>
+                      {row.station_no}
+                    </td>
+                    <td style={{padding:"10px 16px",fontSize:11,color:C.txt("muted")}}>
+                      {row.operation_no}
                     </td>
                     <td style={{padding:"10px 16px"}}>
-                      <p style={{fontSize:12,fontWeight:600,color:C.txt("pri"),marginBottom:2}}>
-                        {row.machine_name||"—"}
-                      </p>
-                      <span style={{fontSize:10,color:C.txt("muted"),
-                        fontFamily:"'DM Mono',monospace"}}>
-                        {row.station||"—"}
-                      </span>
-                    </td>
-                    <td style={{padding:"10px 16px"}}>
-                      <span style={{fontFamily:"'DM Mono',monospace",fontSize:11,
-                        color:C.txt("sec")}}>
-                        {row.station||"—"}
-                      </span>
-                    </td>
-                    <td style={{padding:"10px 16px"}}>
-                      <Badge
-                        variant={row.status==="OK"?"ok":row.status==="NG"?"ng":"wip"}
-                        label={row.status==="OK"?"Pass":row.status==="NG"?"Fail":"In Progress"}
-                      />
-                    </td>
-                    <td style={{padding:"10px 16px"}}>
-                      <span style={{fontSize:11,color:C.txt("muted"),
-                        fontFamily:"'DM Mono',monospace"}}>
-                        {row.createdAt ? new Date(row.createdAt).toLocaleString() : "—"}
-                      </span>
+                      <Badge variant={row.result==="OK"?"ok":row.result==="NG"?"ng":"wip"} label={row.result}/>
                     </td>
                   </tr>
                 ))}
@@ -1017,10 +959,8 @@ const Dashboard = () => {
           </div>
         </div>
       )}
-
     </div>
   );
 };
 
 export default Dashboard;
-

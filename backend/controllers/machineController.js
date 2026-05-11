@@ -1,5 +1,6 @@
 const { Sequelize } = require("sequelize");
 const Machine = require("../models/Machine");
+const MachineRuntimeState = require("../models/MachineRuntimeState");
 const plcService = require("../services/plcCommunicationService");
 const {
   readModbusRegisters,
@@ -124,37 +125,45 @@ function normalizeSpcConfig(value) {
   const source = value && typeof value === "object" ? value : {};
   return {
     enabled: source.enabled === true,
-    mode: String(source.mode || "IP_PUSH").trim().toUpperCase() === "PLC_REGISTER" ? "PLC_REGISTER" : "IP_PUSH",
-    appliesTo: source.appliesTo || "ALL",
+    mode: String(source.mode || "IP_PUSH").trim().toUpperCase(),
+    activeProtocols: Array.isArray(source.activeProtocols) ? source.activeProtocols : [String(source.mode || "IP_PUSH").toUpperCase()],
+    priority: Array.isArray(source.priority) ? source.priority : ["HTTP_API", "PLC_REGISTER", "IP_PUSH", "FOLDER", "FTP_FILE"],
+    
+    // Core acquisition settings
     sourceIp: toText(source.sourceIp) || null,
     sourcePort: toInt(source.sourcePort),
     payloadResultKey: toText(source.payloadResultKey || "RESULT") || "RESULT",
-    payloadResultNgValues: Array.isArray(source.payloadResultNgValues)
-      ? source.payloadResultNgValues
-      : String(source.payloadResultNgValues || "")
-          .split(/[,\n;|]/)
-          .map((entry) => toText(entry).toUpperCase())
-          .filter(Boolean),
-    qualityPayloadKeys: Array.isArray(source.qualityPayloadKeys)
-      ? source.qualityPayloadKeys
-      : String(source.qualityPayloadKeys || "")
-          .split(/[,\n;|]/)
-          .map((entry) => toText(entry))
-          .filter(Boolean),
+    
+    // Reliability Engine (Requirement 5)
+    retryCount: toInt(source.retryCount) ?? 3,
+    retryDelayMs: toInt(source.retryDelayMs) ?? 1000,
+    timeoutMs: toInt(source.timeoutMs) ?? 5000,
+
+    // Dynamic Register Mapping (Requirement 21)
+    dynamicRegisters: Array.isArray(source.dynamicRegisters) ? source.dynamicRegisters.map(r => ({
+      name: toText(r.name) || "PARAM",
+      register: toInt(r.register),
+      device: toText(r.device || "D").toUpperCase(),
+      type: toText(r.type || "INT16").toUpperCase(),
+      scale: parseFloat(r.scale) || 1.0,
+      unit: toText(r.unit) || ""
+    })) : [],
+
+    // Folder Watcher Config (Requirement 1)
+    folderConfig: {
+      path: toText(source.folderConfig?.path) || "",
+      pattern: toText(source.folderConfig?.pattern) || "*.*",
+      parser: toText(source.folderConfig?.parser || "JSON").toUpperCase(),
+      deleteAfterRead: source.folderConfig?.deleteAfterRead !== false
+    },
+
+    // Legacy/Standard fields (maintained for compatibility)
+    payloadResultNgValues: Array.isArray(source.payloadResultNgValues) ? source.payloadResultNgValues : String(source.payloadResultNgValues || "").split(/[,\n;|]/).map(e => toText(e).toUpperCase()).filter(Boolean),
+    qualityPayloadKeys: Array.isArray(source.qualityPayloadKeys) ? source.qualityPayloadKeys : String(source.qualityPayloadKeys || "").split(/[,\n;|]/).map(e => toText(e)).filter(Boolean),
     plcResultRegister: toInt(source.plcResultRegister),
     plcResultDevice: toText(source.plcResultDevice || "D").toUpperCase() || "D",
-    plcResultOkValues: Array.isArray(source.plcResultOkValues)
-      ? source.plcResultOkValues
-      : String(source.plcResultOkValues || "")
-          .split(/[,\n;|]/)
-          .map((entry) => toText(entry).toUpperCase())
-          .filter(Boolean),
-    plcResultNgValues: Array.isArray(source.plcResultNgValues)
-      ? source.plcResultNgValues
-      : String(source.plcResultNgValues || "")
-          .split(/[,\n;|]/)
-          .map((entry) => toText(entry).toUpperCase())
-          .filter(Boolean),
+    plcResultOkValues: Array.isArray(source.plcResultOkValues) ? source.plcResultOkValues : String(source.plcResultOkValues || "").split(/[,\n;|]/).map(e => toText(e).toUpperCase()).filter(Boolean),
+    plcResultNgValues: Array.isArray(source.plcResultNgValues) ? source.plcResultNgValues : String(source.plcResultNgValues || "").split(/[,\n;|]/).map(e => toText(e).toUpperCase()).filter(Boolean),
     plcAckEnabled: source.plcAckEnabled !== false,
     plcAckRegister: toInt(source.plcAckRegister),
     plcAckDevice: toText(source.plcAckDevice || "D").toUpperCase() || "D",
@@ -368,6 +377,121 @@ function normalizePayload(body = {}, existing = null) {
   return payload;
 }
 
+function parsePlcSnapshotFromPayload(payload = {}) {
+  try {
+    const parsed = payload?.plc_registers ? JSON.parse(payload.plc_registers) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (_error) {
+    return {};
+  }
+}
+
+function validateIndustrialMachinePayload(payload = {}) {
+  const errors = [];
+  const parsed = parsePlcSnapshotFromPayload(payload);
+  const coreRegisterMap = new Map();
+
+  const registerFields = [
+    ["startRegister", "START"],
+    ["statusRegister", "RUNNING"],
+    ["blockRegister", "BLOCK_INTERLOCK"],
+    ["endOkRegister", "END_OK"],
+    ["endNgRegister", "END_NG"],
+    ["resetRegister", "RESET"],
+    ["heartbeatRegister", "CONFIRMATION"],
+    ["partRegister", "PART_HASH"],
+    ["stationRegister", "STATION_HASH"],
+    ["bypassRegister", "BYPASS"],
+  ];
+
+  for (const [field, label] of registerFields) {
+    const register = toInt(parsed?.[field]);
+    if (register === null) continue;
+    if (!coreRegisterMap.has(register)) {
+      coreRegisterMap.set(register, new Set());
+    }
+    coreRegisterMap.get(register).add(label);
+  }
+
+  const handshakeMap = Array.isArray(parsed?.handshakeMap) ? parsed.handshakeMap : [];
+  for (const row of handshakeMap) {
+    const register = toInt(row?.register);
+    const signal = toText(row?.signal || row?.label || "HANDSHAKE");
+    if (register === null) continue;
+    if (!coreRegisterMap.has(register)) {
+      coreRegisterMap.set(register, new Set());
+    }
+    coreRegisterMap.get(register).add(`HANDSHAKE:${signal}`);
+  }
+
+  for (const [register, labels] of coreRegisterMap.entries()) {
+    const entries = Array.from(labels);
+    if (entries.length <= 1) {
+      continue;
+    }
+
+    // Check if we have actual conflicts (e.g. START and RESET on same register)
+    const normalized = entries.map(l => {
+      let s = l.replace("HANDSHAKE:", "").toUpperCase()
+        .replace(/[^A-Z0-9]/g, "_") // Replace spaces, slashes, etc. with underscores
+        .replace(/_+/g, "_")        // Collapse multiple underscores
+        .trim();
+      
+      if (s.includes("START") || s === "TRIGGER") return "START";
+      if (s.includes("RUNNING") || s === "STARTED") return "RUNNING";
+      if (s.includes("BLOCK") || s.includes("INTERLOCK")) return "BLOCK_INTERLOCK";
+      if (s.includes("END_OK") || s.includes("OK_END")) return "END_OK";
+      if (s.includes("END_NG") || s.includes("NG_END")) return "END_NG";
+      if (s.includes("RESET")) return "RESET";
+      if (s.includes("CONFIRM") || s.includes("ACK")) return "CONFIRMATION";
+      if (s.includes("BYPASS")) return "BYPASS";
+      return s;
+    });
+
+    const uniqueLogical = new Set(normalized);
+    
+    // Group signals into "Compatible Families" to allow single-register mapping (Point 22)
+    const families = {
+      CONTROL: ["START", "INTERLOCK", "BLOCK_INTERLOCK", "START_SENT", "WAITING_ACK"],
+      FEEDBACK: ["RUNNING", "END_OK", "END_NG", "COMPLETE", "WAITING_END"],
+      HEARTBEAT: ["CONFIRMATION", "HEARTBEAT", "ACK"],
+      BYPASS: ["BYPASS"],
+      REJECTION: ["REJECTION", "BIN_OPEN", "BIN_STATUS"]
+    };
+
+    const detectedFamilies = new Set();
+    uniqueLogical.forEach(s => {
+      let found = false;
+      for (const [fam, members] of Object.entries(families)) {
+        if (members.includes(s)) {
+          detectedFamilies.add(fam);
+          found = true;
+          break;
+        }
+      }
+      if (!found) detectedFamilies.add(`RAW_${s}`); // Standalone signals count as their own family
+    });
+
+    // If multiple distinct families are detected on one register, it's a conflict.
+    // But if they are all from the same family (e.g. START and BLOCK), it's allowed.
+    if (detectedFamilies.size > 1) {
+      errors.push(`Register ${register} has incompatible signal families: ${Array.from(detectedFamilies).join(", ")} (${entries.join(", ")})`);
+    }
+  }
+
+  if (!payload.machine_name) {
+    errors.push("Machine name is required.");
+  }
+  if (!payload.operation_no) {
+    errors.push("Operation number is required.");
+  }
+  if (payload.sequence_no === null || payload.sequence_no === undefined) {
+    errors.push("Sequence number is required.");
+  }
+
+  return errors;
+}
+
 function sequelizeErrorToHttp(error) {
   if (error?.name === "SequelizeUniqueConstraintError") {
     const rawDetails = (error.errors || []).map((entry) => entry.path).filter(Boolean);
@@ -520,6 +644,13 @@ exports.createMachine = async (req, res) => {
     if (!payload.machine_name || !payload.operation_no || payload.sequence_no === null) {
       return res.status(400).json({ error: "machineName, operationNo and sequenceNo are required" });
     }
+    const validationErrors = validateIndustrialMachinePayload(payload);
+    if (validationErrors.length > 0) {
+      return res.status(400).json({
+        error: "Invalid machine PLC mapping",
+        details: validationErrors,
+      });
+    }
 
     payload.machine_number = await ensureUniqueMachineNumber(buildMachineNumberSeed(req.body));
     let created = null;
@@ -553,6 +684,13 @@ exports.updateMachine = async (req, res) => {
     if (!payload.machine_name || !payload.operation_no || payload.sequence_no === null) {
       return res.status(400).json({ error: "machineName, operationNo and sequenceNo are required" });
     }
+    const validationErrors = validateIndustrialMachinePayload(payload);
+    if (validationErrors.length > 0) {
+      return res.status(400).json({
+        error: "Invalid machine PLC mapping",
+        details: validationErrors,
+      });
+    }
 
     const requestedMachineNumber = toText(req.body.machineNumber || req.body.machine_number);
     payload.machine_number = requestedMachineNumber
@@ -583,6 +721,11 @@ exports.deleteMachine = async (req, res) => {
     if (!id) return res.status(400).json({ error: "Invalid machine id" });
     const row = await Machine.findByPk(id);
     if (!row) return res.status(404).json({ error: "Machine not found" });
+
+    // Clean up dependent MachineRuntimeState record(s) first
+    await MachineRuntimeState.destroy({ where: { machine_id: id } });
+
+    // Now safe to delete the machine
     await row.destroy();
     res.status(204).send();
   } catch (error) {
@@ -875,6 +1018,75 @@ exports.readPlcValue = async (req, res) => {
         details: String(error?.message || ""),
       });
     }
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.testConnection = async (req, res) => {
+  try {
+    const { mode, sourceIp, sourcePort, endpoint, folderConfig } = req.body;
+    const protocolMode = String(mode || "IP_PUSH").trim().toUpperCase();
+
+    if (protocolMode === "IP_PUSH") {
+      if (!sourceIp) return res.status(400).json({ error: "Source IP required for IP_PUSH test" });
+      const { exec } = require("child_process");
+      return new Promise((resolve) => {
+        exec(`ping -n 1 -w 2000 ${sourceIp}`, (error, stdout) => {
+          if (error || stdout.includes("Destination host unreachable") || stdout.includes("Request timed out")) {
+            resolve(res.status(502).json({ error: "IP Unreachable", details: "Ping failed or timed out" }));
+          } else {
+            resolve(res.json({ success: true, message: "IP Reachable (Ping Success)" }));
+          }
+        });
+      });
+    }
+
+    if (protocolMode === "PLC_REGISTER") {
+      if (!sourceIp || !sourcePort) return res.status(400).json({ error: "IP and Port required for PLC connection test" });
+      const net = require("net");
+      const client = new net.Socket();
+      return new Promise((resolve) => {
+        client.setTimeout(3000);
+        client.connect(Number(sourcePort), sourceIp, () => {
+          client.destroy();
+          resolve(res.json({ success: true, message: "PLC Reachable" }));
+        });
+        client.on("error", (err) => {
+          client.destroy();
+          resolve(res.status(502).json({ error: "PLC Unreachable", details: err.message }));
+        });
+        client.on("timeout", () => {
+          client.destroy();
+          resolve(res.status(504).json({ error: "PLC Connection Timeout" }));
+        });
+      });
+    }
+
+    if (protocolMode === "HTTP_API") {
+      if (!endpoint) return res.status(400).json({ error: "Endpoint URL required" });
+      const axios = require("axios");
+      try {
+        await axios.get(endpoint, { timeout: 3000 });
+        return res.json({ success: true, message: "HTTP API Reachable" });
+      } catch (err) {
+        return res.status(502).json({ error: "HTTP API Unreachable", details: err.message });
+      }
+    }
+
+    if (protocolMode === "FOLDER") {
+      if (!folderConfig?.path) return res.status(400).json({ error: "Folder path required" });
+      const fs = require("fs");
+      try {
+        await fs.promises.access(folderConfig.path, fs.constants.R_OK);
+        return res.json({ success: true, message: "Folder Reachable" });
+      } catch (err) {
+        return res.status(502).json({ error: "Folder Unreachable", details: err.message });
+      }
+    }
+
+    // IP_PUSH and FTP_FILE defaults
+    return res.json({ success: true, message: `${protocolMode} connection simulated (Test not fully implemented for this mode)` });
+  } catch (error) {
     res.status(500).json({ error: error.message });
   }
 };

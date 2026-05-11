@@ -70,4 +70,13 @@ export const ENDPOINTS = {
     resolve: (id) => `/alarms/${encodeURIComponent(id)}/resolve`,
     resolveAll: "/alarms/resolve-all",
   },
+  industrial: {
+    health: "/industrial/health",
+    metrics: "/industrial/metrics",
+    watchdog: "/industrial/watchdog",
+    sockets: "/industrial/sockets",
+    queues: "/industrial/queues",
+    timelineByOperation: (operationId) => `/industrial/timeline/${encodeURIComponent(operationId)}`,
+    timelines: "/industrial/timelines",
+  },
 };

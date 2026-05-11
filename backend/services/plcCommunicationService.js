@@ -3,6 +3,8 @@ const tcpTextService = require("./plcProtocols/tcpTextService");
 const modbusService = require("./plcProtocols/modbusService");
 const slmpService = require("./plcProtocols/slmpService");
 const { toBoundedInt, sleep } = require("./plcProtocols/utils");
+const plcLatchManager = require("./plcLatchManager");
+
 
 class PlcService {
   constructor() {
@@ -262,13 +264,35 @@ class PlcService {
     if (!ip || !port) throw new Error("PLC IP and port are required");
     const normalizedProtocol = this.normalizeProtocol(protocol || machine?.plc_protocol);
     const service = this.getProtocolService(normalizedProtocol);
+    const machineId = machine?.id ? Number(machine.id) : null;
 
     if (this.shouldSimulate(machine)) {
       this.logPlc("SIM", "PLC command simulated", { protocol: normalizedProtocol, command });
       return { protocol: normalizedProtocol, command: String(command || "").trim().toUpperCase(), simulated: true };
     }
     if (!service.sendCommand) throw new Error(`sendCommand not supported for protocol ${normalizedProtocol}`);
-    return service.sendCommand({ ip, port, command, machine, partId, stationNo, protocol: normalizedProtocol });
+
+    const normalizedCommand = String(command || "").trim().toUpperCase();
+
+    // ─── LATCH GUARD ─────────────────────────────────────────────────────
+    // Block any external RESET or RESET_OPERATION commands while the handshake
+    // latch is active. The reset is exclusively managed by cycleFinalizationService
+    // which releases the latch before issuing the reset via resetPlcState().
+    // This prevents watchdog/API triggered resets from pulsing the output.
+    if (machineId && plcLatchManager.isLatched(machineId)) {
+      const isResetCmd = normalizedCommand.includes("RESET");
+      if (isResetCmd) {
+        const latchState = plcLatchManager.getLatchState(machineId);
+        throw new Error(
+          `LATCH_ACTIVE: Cannot issue ${normalizedCommand} while handshake output is held ` +
+          `(machine ${machineId}, latch token: ${latchState?.cycleToken || "unknown"}). ` +
+          `Wait for cycle finalization.`
+        );
+      }
+    }
+
+    const writeResult = await service.sendCommand({ ip, port, command: normalizedCommand, machine, partId, stationNo, protocol: normalizedProtocol });
+    return writeResult;
   }
 }
 

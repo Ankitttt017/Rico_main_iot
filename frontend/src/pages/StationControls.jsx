@@ -10,7 +10,15 @@ import {
   normalizeStationKey,
   saveStationFeatureSettings,
 } from "../utils/stationSettings";
-
+const T = {
+  blue: "#3b82f6",
+  violet: "#8b5cf6",
+  teal: "#14b8a6",
+  rose: "#f43f5e",
+  emerald: "#10b981",
+  sky: "#0ea5e9",
+  navy: "#0f172a",
+};
 /* -- Toggle component --------------------------------------- */
 const Toggle = ({ checked, onChange, color = "blue" }) => {
   const colorMap = {
@@ -33,27 +41,27 @@ const Toggle = ({ checked, onChange, color = "blue" }) => {
         position: "relative",
         display: "inline-flex",
         alignItems: "center",
-        width: 44,
-        height: 24,
+        width: 36,
+        height: 18,
         borderRadius: 999,
         border: "none",
         cursor: "pointer",
         padding: 0,
         transition: "background 0.22s ease, box-shadow 0.22s ease",
         background: checked ? c.on : "rgba(148,163,184,0.18)",
-        boxShadow: checked ? `0 0 0 3px ${c.glow}` : "none",
+        boxShadow: checked ? `0 0 0 2px ${c.glow}` : "none",
         flexShrink: 0,
       }}
     >
       <span
         style={{
           position: "absolute",
-          left: checked ? 22 : 2,
-          width: 20,
-          height: 20,
+          left: checked ? 19 : 2,
+          width: 14,
+          height: 14,
           borderRadius: "50%",
           background: "#fff",
-          boxShadow: "0 1px 4px rgba(0,0,0,0.22)",
+          boxShadow: "0 1px 3px rgba(0,0,0,0.22)",
           transition: "left 0.22s cubic-bezier(.4,0,.2,1)",
         }}
       />
@@ -65,45 +73,87 @@ const Toggle = ({ checked, onChange, color = "blue" }) => {
 const FEATURE_COLS = [
   {
     key: "qr",
-    label: "QR Check",
+    label: "QR Scan",
     desc: "Barcode / QR scan validation",
     color: "blue",
     type: "toggle",
   },
   {
     key: "operation",
-    label: "OP Validation",
+    label: "OP Val",
     desc: "Operation sequence check",
     color: "violet",
     type: "toggle",
   },
   {
-    key: "plcConfirmation",
-    label: "PLC Handshake",
-    desc: "SLMP read/write cycle",
+    key: "qualityCheck",
+    label: "Quality",
+    desc: "Enable quality validation steps",
     color: "teal",
     type: "toggle",
   },
   {
+    key: "plcConfirmation",
+    label: "PLC Handshake",
+    desc: "Wait for PLC end confirmation",
+    color: "teal",
+    type: "toggle",
+  },
+  {
+    key: "manualResult",
+    label: "Manual Res",
+    desc: "Operator manual OK/NG result",
+    color: "emerald",
+    type: "toggle",
+  },
+  {
     key: "rejectionBin",
-    label: "Rework Bin",
+    label: "Rejection",
     desc: "Rejection bin routing",
     color: "rose",
     type: "toggle",
   },
   {
-    key: "manualResult",
-    label: "Result",
-    desc: "Result input required for station",
-    color: "emerald",
+    key: "rejectionBinStatus",
+    label: "Bin Full",
+    desc: "Read bin-full feedback",
+    color: "rose",
     type: "toggle",
   },
   {
-    key: "plcPartCount",
-    label: "Pcs / Cycle",
-    desc: "Parts per PLC trigger",
+    key: "rework",
+    label: "Rework",
+    desc: "Allow reworked part scanning",
     color: "sky",
-    type: "number",
+    type: "toggle",
+  },
+  {
+    key: "labelPrint",
+    label: "Label",
+    desc: "Trigger label printing",
+    color: "violet",
+    type: "toggle",
+  },
+  {
+    key: "camera",
+    label: "Camera",
+    desc: "Vision system integration",
+    color: "violet",
+    type: "toggle",
+  },
+  {
+    key: "torque",
+    label: "Torque",
+    desc: "Torque/force measurement",
+    color: "teal",
+    type: "toggle",
+  },
+  {
+    key: "partPresence",
+    label: "Presence",
+    desc: "Part seated verification",
+    color: "blue",
+    type: "toggle",
   },
   {
     key: "finalPacking",
@@ -111,6 +161,13 @@ const FEATURE_COLS = [
     desc: "End-of-line packing gate",
     color: "emerald",
     type: "toggle",
+  },
+  {
+    key: "plcPartCount",
+    label: "Pcs/Cycle",
+    desc: "Parts per PLC trigger",
+    color: "sky",
+    type: "number",
   },
 ];
 
@@ -245,7 +302,7 @@ const StationControl = () => {
   }, [normalizedSettings, stationKeys]);
 
   return (
-    <div className="space-y-6 rise-in text-slate-900">
+    <div className="space-y-6 rise-in text-slate-900" style={{ fontFamily: "var(--font-outfit)" }}>
       <GlobalPopup popup={popup} onClose={() => setPopup(null)} />
 
       {/* -- Header -- */}
@@ -321,11 +378,6 @@ const StationControl = () => {
                       Station
                     </span>
                   </th>
-                  <th style={{ padding: "12px 10px", width: 110, textAlign: "center" }}>
-                    <span style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", color: "rgba(15,23,42,0.75)" }}>
-                      Quality
-                    </span>
-                  </th>
                   <th style={{ padding: "12px 10px", width: 130, textAlign: "center" }}>
                     <span style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", color: "rgba(15,23,42,0.75)" }}>
                       Bypass
@@ -352,7 +404,7 @@ const StationControl = () => {
               </thead>
 
               <tbody>
-                {stationRows.map((row, idx) => {
+                 {stationRows.map((row, idx) => {
                   const config = normalizedSettings[row.stationNo] || DEFAULT_STATION_FEATURES;
                   const isEven = idx % 2 === 1;
 
@@ -360,93 +412,70 @@ const StationControl = () => {
                     <tr
                       key={row.stationNo}
                       style={{
-                        background: isEven ? "rgba(15,23,42,0.03)" : "transparent",
-                        borderBottom: "1px solid rgba(15,23,42,0.08)",
+                        background: isEven ? "rgba(15,23,42,0.02)" : "transparent",
+                        borderBottom: "1px solid rgba(15,23,42,0.06)",
                         transition: "background 0.15s",
                       }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(59,130,246,0.04)"; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = isEven ? "rgba(15,23,42,0.03)" : "transparent"; }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(59,130,246,0.03)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = isEven ? "rgba(15,23,42,0.02)" : "transparent"; }}
                     >
                       {/* Station ID cell */}
-                      <td style={{ padding: "14px 20px" }}>
-                        <p style={{ fontFamily: "monospace", fontWeight: 900, fontSize: 13, color: "#0f172a", letterSpacing: "0.04em", margin: 0 }}>
-                          {row.stationNo}
-                        </p>
-                        <p style={{ fontSize: 9, color: "rgba(51,65,85,0.8)", margin: "2px 0 0", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                          SEQ {String(row.sequenceNo).padStart(2, "0")}
-                          {row.lineNames[0] && row.lineNames[0] !== "-" ? `  |  ${row.lineNames[0]}` : ""}
-                        </p>
-                        <p
-                          style={{ fontSize: 9, color: "rgba(51,65,85,0.72)", margin: "4px 0 0", fontWeight: 600 }}
-                          title={row.machines.map((machine) => machine.machineName).join(", ")}
-                        >
-                          {row.machines.length} machine{row.machines.length !== 1 ? "s" : ""} mapped
-                        </p>
-                      </td>
-                      <td style={{ padding: "14px 10px", textAlign: "center" }}>
-                        <span
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            minWidth: 62,
-                            height: 24,
-                            borderRadius: 999,
-                            fontSize: 10,
-                            fontWeight: 800,
-                            letterSpacing: "0.06em",
-                            textTransform: "uppercase",
-                            color: row.hasSpc ? "#065f46" : "rgba(51,65,85,0.9)",
-                            background: row.hasSpc ? "rgba(16,185,129,0.14)" : "rgba(148,163,184,0.15)",
-                            border: row.hasSpc ? "1px solid rgba(16,185,129,0.34)" : "1px solid rgba(148,163,184,0.30)",
-                          }}
-                        >
-                          {row.hasSpc ? "Enabled" : "No"}
-                        </span>
-                      </td>
-                      <td style={{ padding: "14px 10px", textAlign: "center" }}>
+                      <td style={{ padding: "12px 20px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <div style={{ width: 4, height: 24, borderRadius: 2, background: T.blue }} />
+                          <div>
+                            <p style={{ fontFamily: "monospace", fontWeight: 900, fontSize: 13, color: "#0f172a", letterSpacing: "0.02em", margin: 0 }}>
+                              {row.stationNo}
+                            </p>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
+                              <span style={{ fontSize: 9, color: "rgba(51,65,85,0.6)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                                SEQ {String(row.sequenceNo).padStart(2, "0")}
+                              </span>
+                              {row.lineNames[0] && row.lineNames[0] !== "-" && (
+                                <span style={{ fontSize: 9, color: "rgba(59,130,246,0.7)", fontWeight: 800, textTransform: "uppercase" }}>
+                                  • {row.lineNames[0]}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        </td>
+                        <td style={{ padding: "12px 10px", textAlign: "center" }}>
                         {row.bypassedCount > 0 ? (
-                          <span
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              minWidth: 94,
-                              height: 24,
-                              borderRadius: 999,
-                              fontSize: 10,
-                              fontWeight: 800,
-                              letterSpacing: "0.06em",
-                              textTransform: "uppercase",
-                              color: "#b45309",
-                              background: "rgba(245,158,11,0.16)",
-                              border: "1px solid rgba(245,158,11,0.35)",
-                            }}
-                            title={row.machines
-                              .filter((machine) => machine.machineBypassEnabled)
-                              .map((machine) => `${machine.machineName}${machine.machineBypassReason ? ` (${machine.machineBypassReason})` : ""}`)
-                              .join(", ")}
-                          >
-                            {row.bypassedCount === row.machines.length
-                              ? "Bypassed"
-                              : `${row.bypassedCount}/${row.machines.length}`}
-                          </span>
+                          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                            <span
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                minWidth: 70,
+                                height: 20,
+                                borderRadius: 6,
+                                fontSize: 9,
+                                fontWeight: 800,
+                                textTransform: "uppercase",
+                                color: "#b45309",
+                                background: "rgba(245,158,11,0.12)",
+                                border: "1px solid rgba(245,158,11,0.25)",
+                              }}
+                              title={row.machines
+                                .filter((machine) => machine.machineBypassEnabled)
+                                .map((machine) => `${machine.machineName}${machine.machineBypassReason ? ` (${machine.machineBypassReason})` : ""}`)
+                                .join(", ")}
+                            >
+                              {row.bypassedCount === row.machines.length
+                                ? "Bypassed"
+                                : `${row.bypassedCount}/${row.machines.length}`}
+                            </span>
+                          </div>
                         ) : (
                           <span
                             style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              minWidth: 94,
-                              height: 24,
-                              borderRadius: 999,
-                              fontSize: 10,
-                              fontWeight: 800,
-                              letterSpacing: "0.06em",
+                              fontSize: 9,
+                              fontWeight: 700,
+                              color: "rgba(148,163,184,0.8)",
                               textTransform: "uppercase",
-                              color: "rgba(51,65,85,0.9)",
-                              background: "rgba(148,163,184,0.15)",
-                              border: "1px solid rgba(148,163,184,0.30)",
+                              letterSpacing: "0.05em"
                             }}
                           >
                             Normal
@@ -456,7 +485,7 @@ const StationControl = () => {
 
                       {/* Feature cells */}
                       {FEATURE_COLS.map((col) => (
-                        <td key={col.key} style={{ padding: "14px 16px", textAlign: "center" }}>
+                        <td key={col.key} style={{ padding: "12px 16px", textAlign: "center" }}>
                           {col.type === "toggle" ? (
                             <div style={{ display: "flex", justifyContent: "center" }}>
                               <Toggle
@@ -466,30 +495,28 @@ const StationControl = () => {
                               />
                             </div>
                           ) : (
-                            /* number input for plcPartCount */
-                            <input
-                              type="number"
-                              min={1}
-                              max={99}
-                              value={config[col.key] || 1}
-                              onChange={(e) => updateField(row.stationNo, col.key, Number(e.target.value))}
-                              style={{
-                                width: 52,
-                                height: 28,
-                                borderRadius: 7,
-                                border: "1px solid rgba(14,165,233,0.25)",
-                                background: "rgba(14,165,233,0.06)",
-                                color: "#0f172a",
-                                fontFamily: "monospace",
-                                fontWeight: 800,
-                                fontSize: 13,
-                                textAlign: "center",
-                                outline: "none",
-                                cursor: "text",
-                              }}
-                              onFocus={(e) => { e.currentTarget.style.borderColor = "rgba(14,165,233,0.6)"; e.currentTarget.style.boxShadow = "0 0 0 3px rgba(14,165,233,0.12)"; }}
-                              onBlur={(e) => { e.currentTarget.style.borderColor = "rgba(14,165,233,0.25)"; e.currentTarget.style.boxShadow = "none"; }}
-                            />
+                            <div style={{ display: "flex", justifyContent: "center" }}>
+                              <input
+                                type="number"
+                                min={1}
+                                max={20}
+                                value={config[col.key] || 1}
+                                onChange={(e) => updateField(row.stationNo, col.key, Number(e.target.value))}
+                                style={{
+                                  width: 44,
+                                  height: 24,
+                                  borderRadius: 6,
+                                  border: "1px solid rgba(15,23,42,0.1)",
+                                  background: "rgba(15,23,42,0.03)",
+                                  color: "#0f172a",
+                                  fontFamily: "var(--font-outfit)",
+                                  fontWeight: 800,
+                                  fontSize: 12,
+                                  textAlign: "center",
+                                  outline: "none",
+                                }}
+                              />
+                            </div>
                           )}
                         </td>
                       ))}

@@ -6,10 +6,21 @@ export const DEFAULT_STATION_FEATURES = {
   operation: true,
   bypass: false,
   rejectionBin: true,
+  rejectionBinStatus: false,
+  qualityCheck: false,
   plcConfirmation: true,
   manualResult: false,
   plcPartCount: 1,
   finalPacking: false,
+  rework: false,
+  labelPrint: false,
+  labelPrintRegister: null,
+  camera: false,
+  cameraResultRegister: null,
+  torque: false,
+  torqueRegister: null,
+  partPresence: false,
+  partPresenceRegister: null,
 };
 
 function isObject(value) {
@@ -22,6 +33,12 @@ function normalizePlcPartCount(value) {
     return 1;
   }
   return Math.min(Math.max(Math.trunc(parsed), 1), 20);
+}
+
+function toNullableNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.trunc(n) : null;
 }
 
 export function normalizeStationKey(value) {
@@ -46,10 +63,21 @@ function normalizeFeatureMap(rawMap) {
       operation: rawValue.operation !== false,
       bypass: rawValue.bypass === true || rawValue.bypassEnabled === true,
       rejectionBin: rawValue.rejectionBin !== false,
+      rejectionBinStatus: rawValue.rejectionBinStatus === true,
+      qualityCheck: rawValue.qualityCheck === true,
       plcConfirmation: rawValue.plcConfirmation !== false,
       manualResult: rawValue.manualResult === true,
       plcPartCount: normalizePlcPartCount(rawValue.plcPartCount ?? rawValue.plc_part_count),
       finalPacking: rawValue.finalPacking === true,
+      rework: rawValue.rework === true,
+      labelPrint: rawValue.labelPrint === true,
+      labelPrintRegister: toNullableNumber(rawValue.labelPrintRegister),
+      camera: rawValue.camera === true,
+      cameraResultRegister: toNullableNumber(rawValue.cameraResultRegister),
+      torque: rawValue.torque === true,
+      torqueRegister: toNullableNumber(rawValue.torqueRegister),
+      partPresence: rawValue.partPresence === true,
+      partPresenceRegister: toNullableNumber(rawValue.partPresenceRegister),
     };
     return acc;
   }, {});
@@ -126,10 +154,21 @@ export function getStationFeatures(stationNo, settings = {}) {
     operation: stationSettings.operation !== false,
     bypass: stationSettings.bypass === true || stationSettings.bypassEnabled === true,
     rejectionBin: stationSettings.rejectionBin !== false,
+    rejectionBinStatus: stationSettings.rejectionBinStatus === true,
+    qualityCheck: stationSettings.qualityCheck === true,
     plcConfirmation: stationSettings.plcConfirmation !== false,
     manualResult: stationSettings.manualResult === true,
     plcPartCount: normalizePlcPartCount(stationSettings.plcPartCount ?? stationSettings.plc_part_count),
     finalPacking: stationSettings.finalPacking === true,
+    rework: stationSettings.rework === true,
+    labelPrint: stationSettings.labelPrint === true,
+    labelPrintRegister: toNullableNumber(stationSettings.labelPrintRegister),
+    camera: stationSettings.camera === true,
+    cameraResultRegister: toNullableNumber(stationSettings.cameraResultRegister),
+    torque: stationSettings.torque === true,
+    torqueRegister: toNullableNumber(stationSettings.torqueRegister),
+    partPresence: stationSettings.partPresence === true,
+    partPresenceRegister: toNullableNumber(stationSettings.partPresenceRegister),
   };
 }
 

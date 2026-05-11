@@ -155,14 +155,8 @@ function normalizeDecisionState(value) {
   return "";
 }
 function mapBlockReasonToPlcStatus(payload = {}) {
-  const reason = String(payload.reason || payload.qrReason || "").trim().toUpperCase();
-  if (!reason) return "WAIT";
-  if (reason === "DUPLICATE_SCAN") return "FAILED";
-  if (reason === "RESET_REQUIRED_AFTER_PLC_COMM_ERROR") return "PLC_COMM_ERROR";
-  if (reason.startsWith("PLC_TIMEOUT")) return "PLC_COMM_ERROR";
-  if (reason === "MACHINE_RUNNING") return "WAIT";
-  if (reason === "PART_INTERLOCKED") return "INTERLOCKED";
-  return "WAIT";
+  const explicit = String(payload.plcStatus || payload.operationStatus || payload.status || "").trim().toUpperCase();
+  return explicit || "WAIT";
 }
 function isResetLikePayload(payload={}) {
   const status=String(payload.status||payload.plcStatus||payload.plc_status||"").trim().toUpperCase();
@@ -172,19 +166,22 @@ function isResetLikePayload(payload={}) {
 }
 function getOperationVariant(status) {
   const s=String(status||"").trim().toUpperCase();
-  if (s==="ENDED_OK"||s==="PASSED")           return "ok";
-  if (["ENDED_NG","INTERLOCKED","FAILED"].includes(s)) return "ng";
-  if (["PLC_COMM_ERROR","COMM_ERROR"].includes(s))     return "wip";
-  if (["STARTED","IN_PROGRESS"].includes(s)) return "wip";
+  if (["ENDED_OK", "PASSED", "COMPLETED", "COMPLETED_OK"].includes(s)) return "ok";
+  if (["ENDED_NG", "COMPLETED_NG", "FAILED", "NG", "INTERLOCKED", "BLOCKED"].includes(s)) return "ng";
+  if (["RUNNING", "STARTED", "IN_PROGRESS"].includes(s)) return "ok";
+  if (["WAITING_RUNNING", "WAITING_END", "START_SENT", "VALIDATED", "SCANNED", "WAITING_ACK", "ACK_RECEIVED"].includes(s)) return "wip";
+  if (["PLC_COMM_ERROR", "COMM_ERROR", "PLC_TIMEOUT", "TIMEOUT", "PLC_ERROR", "ACK_TIMEOUT", "RUNNING_TIMEOUT", "END_TIMEOUT", "RESET_TIMEOUT"].includes(s)) return "ng";
   return "idle";
 }
 function getOperationLabel(status) {
   const s=String(status||"").trim().toUpperCase();
-  if (s==="ENDED_OK"||s==="PASSED")           return "Pass";
-  if (["ENDED_NG","INTERLOCKED","FAILED"].includes(s)) return "Fail";
-  if (["PLC_COMM_ERROR","COMM_ERROR"].includes(s))     return "Comm Error";
-  if (["STARTED","IN_PROGRESS"].includes(s)) return "Running";
-  return "Waiting";
+  if (["ENDED_OK", "PASSED", "COMPLETED", "COMPLETED_OK"].includes(s)) return "Pass";
+  if (["ENDED_NG", "COMPLETED_NG", "FAILED", "NG", "INTERLOCKED", "BLOCKED"].includes(s)) return "Fail";
+  if (["RUNNING", "STARTED", "IN_PROGRESS"].includes(s)) return "Running";
+  if (["WAITING_RUNNING", "WAITING_END", "START_SENT", "VALIDATED", "SCANNED", "WAITING_ACK", "ACK_RECEIVED"].includes(s)) return "In Progress";
+  if (["PLC_COMM_ERROR", "COMM_ERROR", "PLC_TIMEOUT", "TIMEOUT", "PLC_ERROR", "ACK_TIMEOUT", "RUNNING_TIMEOUT", "END_TIMEOUT", "RESET_TIMEOUT"].includes(s)) return "Error";
+  if (s === "RECOVERING" || s === "RESETTING") return "Resetting";
+  return "Idle";
 }
 function fmtTime(v) { if(!v) return "—"; const d=new Date(v); return isNaN(d)?"—":d.toLocaleTimeString(); }
 function fmtDT(v)   { if(!v) return "—"; const d=new Date(v); return isNaN(d)?"—":d.toLocaleString(); }
@@ -451,7 +448,17 @@ const OperatorView = () => {
   const producedCount  = Number(qualitySummary.processedCount||0);
   const progressPct    = Math.min(100,Math.round((producedCount/expectedCount)*100));
   const qualityPct     = Number(qualitySummary.accuracy||0);
-  const machineMode    = liveState?.machine?.isRunning || liveState?.current ? "Running" : liveState?.lastEvent ? "Idle" : "Waiting";
+  const backendMachineState = String(liveState?.machineState?.state || "").trim().toUpperCase();
+  const machineMode    =
+    ["RUNNING"].includes(backendMachineState)
+      ? "Running"
+      : ["WAITING_RUNNING","WAITING_END","START_SENT","VALIDATED","SCANNED","MACHINE_BUSY","RECOVERING","RESETTING"].includes(backendMachineState)
+      ? "Waiting"
+      : ["PLC_TIMEOUT","PLC_ERROR","INTERLOCKED"].includes(backendMachineState)
+      ? "Error"
+      : liveState?.lastEvent
+      ? "Idle"
+      : "Waiting";
   const machineClock   = formatElapsed(liveState?.current?.createdAt||liveState?.lastEvent?.createdAt,clockTick);
 
   const currentContext  = liveState?.current||stationStats?.current||liveState?.lastEvent||stationStats?.lastEvent||null;
@@ -463,8 +470,9 @@ const OperatorView = () => {
   const scannerConfigured = String(scannerHealth?.status||"").toUpperCase()!=="NOT_CONFIGURED";
   const scannerConnected  = Boolean(scannerHealth?.connected);
 
-  const opVariant = useMemo(()=>getOperationVariant(currentContext?.plcStatus),[currentContext?.plcStatus]);
-  const opLabel   = useMemo(()=>getOperationLabel(currentContext?.plcStatus),[currentContext?.plcStatus]);
+  const opStatusSource = liveState?.machineState?.state || currentContext?.plcStatus;
+  const opVariant = useMemo(()=>getOperationVariant(opStatusSource),[opStatusSource]);
+  const opLabel   = useMemo(()=>getOperationLabel(opStatusSource),[opStatusSource]);
 
   const quickResetPartId = useMemo(
     ()=>normalizePartId(currentContext?.partId || popup?.partId || popup?.part_id),
@@ -522,6 +530,12 @@ const OperatorView = () => {
     try {
       const [live,stats]=await Promise.all([traceabilityApi.liveState(id),traceabilityApi.machineStats(id)]);
       setLiveState(live||null); setStationStats(stats||null);
+      if (live?.stationSettings) {
+        setStationSettings(prev => ({
+          ...prev,
+          [String(live.machine?.stationNo || "").trim().toUpperCase()]: live.stationSettings
+        }));
+      }
     } catch(e){ if (showLoader) setPopup({type:"ERROR",title:"Station Data Error",message:e.response?.data?.error||"Unable to load machine telemetry"}); }
     finally { setLoadingStats(false); setRefreshing(false); }
   },[]);
@@ -678,16 +692,8 @@ const OperatorView = () => {
     setQrSignal(null); setQrFeed([]);
   },[selectedMachineId]);
 
-  useEffect(()=>{
-    if (qrSignal||!currentContext?.partId) return;
-    const s=String(currentContext?.plcStatus||"").trim().toUpperCase();
-    if (!["ENDED_OK","ENDED_NG"].includes(s)) return;
-    const isPass = s === "ENDED_OK";
-    const inferred={id:`${Date.now()}-inferred`,label:isPass?"QR PASS":"QR FAIL",variant:isPass?"ok":"ng",partId:normalizePartId(currentContext.partId),stationNo:String(selectedStation||"").trim().toUpperCase(),decision:isPass?"ALLOW":"BLOCK",reason:isPass?"QR_VALIDATED":"SCAN_RESULT_NG",message:"Restored from station state",timestamp:currentContext.createdAt||new Date().toISOString()};
-    setQrSignal(inferred); setQrFeed(prev=>prev.length?prev:[inferred]);
-    const mk=String(selectedMachineIdRef.current||"");
-    if (mk){ try{ const c=JSON.parse(localStorage.getItem(QR_STORAGE_KEY)||"{}"); c[mk]=inferred; localStorage.setItem(QR_STORAGE_KEY,JSON.stringify(c)); }catch{} }
-  },[currentContext?.partId,currentContext?.plcStatus,currentContext?.createdAt,selectedStation,qrSignal]);
+  // Do not infer QR PASS/FAIL from PLC status.
+  // Backend scan + PLC pipeline is the single source of truth.
 
   // ─────────────────────────────────────────────────────────────────────
   //  RENDER
@@ -1183,6 +1189,21 @@ const OperatorView = () => {
                       fontFamily:"'DM Mono',monospace",flexShrink:0}}>
                       {fmtTime(entry.timestamp)}
                     </span>
+                    <button
+                      onClick={() => openResetConfirm(entry.partId, entry.stationNo)}
+                      title="Reset this part"
+                      style={{
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        width: 24, height: 24, borderRadius: 6,
+                        background: C.bg("input"), border: `1px solid ${C.bdr()}`,
+                        color: C.txt("sec"), cursor: "pointer", flexShrink: 0,
+                        transition: "all 0.2s"
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = C.bg("surf"); e.currentTarget.style.color = C.ng(); }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = C.bg("input"); e.currentTarget.style.color = C.txt("sec"); }}
+                    >
+                      <RefreshCw size={12} />
+                    </button>
                   </div>
                 ))}
               </div>
@@ -1245,4 +1266,3 @@ const OperatorView = () => {
 };
 
 export default OperatorView;
-

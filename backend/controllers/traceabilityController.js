@@ -7,7 +7,10 @@ const ProductionLog = require("../models/ProductionLog");
 const ReworkLog = require("../models/ReworkLog");
 const Shift = require("../models/Shift");
 const { saveScan } = require("../services/scanService");
-const { executePlcHandshake, getPlcCircuitSnapshot } = require("../services/plcCommunicationService");
+const { getPlcCircuitSnapshot } = require("../services/plcCommunicationService");
+const plcHandshakeEngine = require("../services/plcHandshakeEngine");
+const scannerConnectionManager = require("../services/scannerConnectionManager");
+const plcConnectionManager = require("../services/plcConnectionManager");
 const {
   readModbusRegisters,
   readSlmpRegisters,
@@ -20,6 +23,8 @@ const { getScannerHealthSnapshot } = require("../services/scannerHealthService")
 const { getScannerConnectionSnapshot } = require("../services/scannerConnectionService");
 const { emitRealtime } = require("../services/realtimeService");
 const { tryAcquireMachineLock, clearMachineLock } = require("../services/machineLockService");
+const { finalizeCycleAfterPlc } = require("../services/cycleFinalizationService");
+const { TIMELINE_EVENTS, recordTimelineEvent } = require("../services/operationTimelineService");
 const {
   getStationFeatureConfig,
   isPlcConfirmationEnabled,
@@ -43,6 +48,7 @@ const IO_PLC_DISCONNECT_FAILURE_THRESHOLD = Math.max(
   1
 );
 const ioSnapshotCache = new Map();
+const ioSnapshotInFlight = new Map();
 const ioPlcConnectionStability = new Map();
 
 function normalizeStation(value) {
@@ -283,11 +289,12 @@ function parseMachineHandshakeMap(machine) {
       .map((row) => {
         const parsedRegister = parseRegisterToken(row?.register ?? row?.registerNo ?? row?.address, null);
         return {
-        signal: String(row?.signal || row?.label || "").trim(),
-        register: parsedRegister.register,
-        direction: normalizeHandshakeDirectionToSignalDirection(row?.direction),
-        meaning: String(row?.meaning || row?.purpose || row?.description || "").trim() || null,
-      };
+          signal: String(row?.signal || row?.label || "").trim(),
+          register: parsedRegister.register,
+          device: parsedRegister.device,
+          direction: normalizeHandshakeDirectionToSignalDirection(row?.direction),
+          meaning: String(row?.meaning || row?.purpose || row?.description || "").trim() || null,
+        };
       })
       .filter((row) => row.signal && row.register !== null);
   } catch (_error) {
@@ -332,71 +339,42 @@ function getDefaultIoSignals(machine) {
   ];
 }
 
-function appendCustomHandshakeSignals(machine, rows = []) {
-  const output = Array.isArray(rows) ? [...rows] : [];
-  const existingKeys = new Set(output.map((row) => toUpper(row?.key)));
-  const handshakeRows = parseMachineHandshakeMap(machine);
-  for (const row of handshakeRows) {
-    const signalToken = toUpper(row.signal).replace(/[^A-Z0-9]+/g, "_");
-    if (!signalToken) {
-      continue;
-    }
-    const key = `HS_${signalToken}`;
-    if (existingKeys.has(key)) continue;
-    existingKeys.add(key);
-    output.push({
-      key,
-      label: row.signal,
-      register: row.register,
-      device: null,
-      direction: row.direction,
-      writable: row.direction !== "PLC -> PC",
-      description: row.meaning || "Configured handshake signal",
-    });
-  }
-  return output;
-}
-
 function parseMachineSignalMap(machine) {
-  const raw = machine?.plc_signal_map;
-  if (!raw) {
-    return appendCustomHandshakeSignals(machine, getDefaultIoSignals(machine));
-  }
+  const normalized = [];
+  const seen = new Set();
+  const seenRegisters = new Set();
 
+  const addSignal = (row, deduplicateRegister = false) => {
+    if (seen.has(row.key)) return;
+    const regNo = toIntegerOrNull(row.register);
+    if (deduplicateRegister && regNo !== null && seenRegisters.has(regNo)) return;
+    seen.add(row.key);
+    if (regNo !== null) seenRegisters.add(regNo);
+    normalized.push(row);
+  };
+
+  // 1. Core Map (plc_signal_map)
+  const raw = machine?.plc_signal_map;
   let parsed = raw;
   if (typeof raw === "string") {
-    try {
-      parsed = JSON.parse(raw);
-    } catch (_error) {
-      return appendCustomHandshakeSignals(machine, getDefaultIoSignals(machine));
-    }
+    try { parsed = JSON.parse(raw); } catch (e) {}
   }
-
   const source = Array.isArray(parsed)
     ? parsed
     : parsed && typeof parsed === "object"
     ? Object.entries(parsed).map(([key, value]) => ({ key, ...(value || {}) }))
     : [];
-  if (source.length === 0) {
-    return appendCustomHandshakeSignals(machine, getDefaultIoSignals(machine));
-  }
 
-  const normalized = [];
-  const seen = new Set();
   for (const row of source) {
     const key = toUpper(row?.key || row?.signal || row?.name);
-    if (!key || seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-
+    if (!key) continue;
     const direction = normalizeSignalDirection(
       row?.direction,
       ["TRIGGER", "RESET"].includes(key) ? "PC -> PLC" : "PLC -> PC"
     );
     const explicitDevice = String(row?.device || "").trim().toUpperCase() || null;
     const parsedRegister = parseRegisterToken(row?.register ?? row?.registerNo ?? row?.address, explicitDevice);
-    normalized.push({
+    addSignal({
       key,
       label: String(row?.label || key).trim() || key,
       register: parsedRegister.register,
@@ -407,18 +385,31 @@ function parseMachineSignalMap(machine) {
     });
   }
 
-  if (normalized.length === 0) {
-    return appendCustomHandshakeSignals(machine, getDefaultIoSignals(machine));
+  // 2. Handshake Map (plc_handshake_map)
+  const handshakeRows = parseMachineHandshakeMap(machine);
+  for (const row of handshakeRows) {
+    const signalToken = toUpper(row.signal).replace(/[^A-Z0-9]+/g, "_");
+    if (!signalToken) continue;
+    const key = `HS_${signalToken}`;
+    addSignal({
+      key,
+      label: row.signal,
+      register: row.register,
+      device: row.device || null,
+      direction: row.direction,
+      writable: row.direction !== "PLC -> PC",
+      description: row.meaning || "Configured handshake signal",
+    });
   }
 
-  // Ensure core handshake signals always exist even if custom map omitted them.
+  // 3. Fallback Defaults (getDefaultIoSignals)
+  // Ensure core signals exist, but do not override custom mappings!
   const defaults = getDefaultIoSignals(machine);
   for (const def of defaults) {
-    if (!seen.has(def.key)) {
-      normalized.push(def);
-    }
+    addSignal(def, true);
   }
-  return appendCustomHandshakeSignals(machine, normalized);
+
+  return normalized;
 }
 
 function buildIoSignalRows(machine, registerValues, latestPlcStatus) {
@@ -608,6 +599,33 @@ async function getLatestOperationLog(partId, stationNo) {
     },
     order: [["createdAt", "DESC"]],
   });
+}
+
+async function safeRecordTimeline({
+  operationId,
+  partId,
+  machineId,
+  stationNo,
+  eventType,
+  eventData = {},
+  durationFromStartMs = null,
+}) {
+  if (!operationId || !eventType) {
+    return;
+  }
+  try {
+    await recordTimelineEvent({
+      operationId,
+      partId: partId || null,
+      machineId: machineId || null,
+      stationNo: stationNo || null,
+      eventType,
+      eventData,
+      durationFromStartMs,
+    });
+  } catch (_error) {
+    // Timeline persistence is best-effort; never break cycle flow.
+  }
 }
 
 function emitOperatorPopup(type, payload) {
@@ -1087,19 +1105,31 @@ async function markOperationCommunicationError({ operationLogId, partId, station
 }
 
 async function startPlcFlow({ operationLogId, partId, stationNo, machine, userId, releaseLock = true }) {
-  const plcIp = machine.plc_ip || machine.machine_ip;
-  const plcPort = machine.plc_port || machine.machine_port;
-
+  let plcCycleCompleted = false;
   try {
-    await executePlcHandshake({
-      ip: plcIp,
-      port: plcPort,
+    await safeRecordTimeline({
+      operationId: operationLogId,
+      partId,
+      machineId: machine.id,
+      stationNo,
+      eventType: TIMELINE_EVENTS.START_SENT,
+      eventData: { source: "traceabilityController.startPlcFlow" },
+    });
+
+    await plcHandshakeEngine.executeCycle({
+      machine,
       partId,
       stationNo,
-      machineId: machine.id,
-      machine,
-      onAckStart: async () => {
+      operationLogId,
+      onStarted: async () => {
         await markOperationStarted(operationLogId, machine.id);
+        await safeRecordTimeline({
+          operationId: operationLogId,
+          partId,
+          machineId: machine.id,
+          stationNo,
+          eventType: TIMELINE_EVENTS.RUNNING,
+        });
         emitOperatorPopup("INFO", {
           partId,
           stationNo,
@@ -1112,13 +1142,21 @@ async function startPlcFlow({ operationLogId, partId, stationNo, machine, userId
         });
         emitRealtime("dashboard_refresh", { reason: "PLC_START_ACK" });
       },
-      onAckEndOk: async () => {
+      onEndedOk: async () => {
         await markOperationEndedOk({
           operationLogId,
           partId,
           stationNo,
           machineId: machine.id,
           userId,
+        });
+        plcCycleCompleted = true;
+        await safeRecordTimeline({
+          operationId: operationLogId,
+          partId,
+          machineId: machine.id,
+          stationNo,
+          eventType: TIMELINE_EVENTS.COMPLETED_OK,
         });
         emitOperatorPopup("SUCCESS", {
           partId,
@@ -1132,7 +1170,7 @@ async function startPlcFlow({ operationLogId, partId, stationNo, machine, userId
         });
         emitRealtime("dashboard_refresh", { reason: "PLC_END_OK" });
       },
-      onAckEndNg: async () => {
+      onEndedNg: async () => {
         await markOperationEndedNg({
           operationLogId,
           partId,
@@ -1140,6 +1178,14 @@ async function startPlcFlow({ operationLogId, partId, stationNo, machine, userId
           machineId: machine.id,
           userId,
           reason: "PLC_END_NG",
+        });
+        plcCycleCompleted = true;
+        await safeRecordTimeline({
+          operationId: operationLogId,
+          partId,
+          machineId: machine.id,
+          stationNo,
+          eventType: TIMELINE_EVENTS.COMPLETED_NG,
         });
         emitOperatorPopup("ERROR", {
           partId,
@@ -1153,13 +1199,23 @@ async function startPlcFlow({ operationLogId, partId, stationNo, machine, userId
         });
         emitRealtime("dashboard_refresh", { reason: "PLC_END_NG" });
       },
-      onFailure: async (error) => {
+      onError: async (error) => {
         await markOperationCommunicationError({
           operationLogId,
           partId,
           stationNo,
           machineId: machine.id,
           reason: `PLC_TIMEOUT_${String(error.message || "").slice(0, 120)}`,
+        });
+        await safeRecordTimeline({
+          operationId: operationLogId,
+          partId,
+          machineId: machine.id,
+          stationNo,
+          eventType: String(error?.message || "").toUpperCase().includes("TIMEOUT")
+            ? TIMELINE_EVENTS.PLC_TIMEOUT
+            : TIMELINE_EVENTS.PLC_ERROR,
+          eventData: { error: String(error?.message || "PLC communication failure") },
         });
         emitOperatorPopup("WARNING", {
           partId,
@@ -1176,7 +1232,25 @@ async function startPlcFlow({ operationLogId, partId, stationNo, machine, userId
     });
   } finally {
     if (releaseLock) {
-      await clearMachineLock(machine.id);
+      if (plcCycleCompleted) {
+        const finalize = await finalizeCycleAfterPlc({ machine });
+        if (!finalize.success) {
+          emitOperatorPopup("WARNING", {
+            partId,
+            stationNo,
+            machineId: machine.id,
+            machineName: machine.machine_name,
+            status: "RECOVERING",
+            plcStatus: "RECOVERING",
+            qrResult: "PASS",
+            reason: finalize.reason || "RESET_VALIDATION_FAILED",
+            message: "Cycle ended but reset validation failed. Manual recovery may be required.",
+          });
+        }
+      } else {
+        await clearMachineLock(machine.id);
+        await plcHandshakeEngine.markIdle(machine.id);
+      }
     }
   }
 }
@@ -1201,7 +1275,20 @@ async function startPlcBatchFlow({ batchItems, stationNo, machine, userId }) {
       }
     }
   } finally {
-    await clearMachineLock(machine.id);
+    const finalize = await finalizeCycleAfterPlc({ machine });
+    if (!finalize.success) {
+      emitOperatorPopup("WARNING", {
+        partId: batchItems[batchItems.length - 1]?.partId || null,
+        stationNo,
+        machineId: machine.id,
+        machineName: machine.machine_name,
+        status: "RECOVERING",
+        plcStatus: "RECOVERING",
+        qrResult: "PASS",
+        reason: finalize.reason || "RESET_VALIDATION_FAILED",
+        message: "Batch ended but reset validation failed. Manual recovery may be required.",
+      });
+    }
   }
 }
 
@@ -1215,6 +1302,8 @@ async function handleStationPlcFlow({
   requiredPlcPartCount,
 }) {
   if (response.decision !== "ALLOW" || !response.operationLogId) {
+    // If it was a global rejection, saveScan might have already returned ALLOW.
+    // We double check the operationLogId exists.
     return;
   }
 
@@ -1379,17 +1468,23 @@ exports.getPlcHealth = async (req, res) => {
     const health = machineId ? getPlcHealthSnapshot(machineId) : getPlcHealthSnapshot();
     const circuits = getPlcCircuitSnapshot();
 
+    const queue = plcConnectionManager.getQueueSnapshot();
     if (machineId) {
       const machineCircuit = circuits.find((entry) => entry.key === `machine:${machineId}`) || null;
+      const machine = await Machine.findByPk(machineId);
+      const endpointKey = machine ? `${String(machine.plc_ip || machine.machine_ip || "").trim()}:${Number(machine.plc_port || machine.machine_port || 0)}` : null;
+      const queueEntry = endpointKey ? queue.find((q) => q.endpointKey === endpointKey) || null : null;
       return res.json({
         health: health || null,
         circuit: machineCircuit,
+        queue: queueEntry,
       });
     }
 
     res.json({
       health,
       circuits,
+      queue,
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1452,7 +1547,11 @@ exports.getLiveMachineState = async (req, res) => {
     const lastEvent = logs[0] || null;
     const plcHealth = getPlcHealthSnapshot(machine.id);
     const plcCircuit = getPlcCircuitSnapshot().find((entry) => entry.key === `machine:${machine.id}`) || null;
-    const scannerHealth = await buildScannerHealth(scanner, machine.id);
+    const scannerHealth = scannerConnectionManager.getStableSnapshot({ 
+      machineId: machine.id, 
+      scannerIp: scanner?.scanner_ip 
+    }) || (await buildScannerHealth(scanner, machine.id));
+    const machineState = plcHandshakeEngine.getState(machine.id);
 
     res.json({
       machine: {
@@ -1475,6 +1574,7 @@ exports.getLiveMachineState = async (req, res) => {
       },
       plcHealth: plcHealth || null,
       plcCircuit,
+      plcQueue: plcConnectionManager.getQueueSnapshot(),
       scanner: scanner
         ? {
             id: scanner.id,
@@ -1485,6 +1585,7 @@ exports.getLiveMachineState = async (req, res) => {
           }
         : null,
       scannerHealth,
+      machineState,
       current: current
         ? {
             operationLogId: current.id,
@@ -1519,6 +1620,7 @@ exports.getLiveMachineState = async (req, res) => {
         bypassReason: row.bypass_reason,
         createdAt: row.createdAt,
       })),
+      stationSettings: await getStationFeatureConfig(stationNo).catch(() => null),
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1564,6 +1666,20 @@ exports.getIoSnapshot = async (req, res) => {
         });
       }
     }
+
+    if (!bypassCache && ioSnapshotInFlight.has(cacheKey)) {
+      const sharedPayload = await ioSnapshotInFlight.get(cacheKey);
+      return res.json({
+        ...sharedPayload,
+        monitorPolicy: {
+          ...(sharedPayload.monitorPolicy || {}),
+          servedFromCache: false,
+          inFlightShared: true,
+        },
+      });
+    }
+
+    const snapshotPromise = (async () => {
 
     const stationNo = getMachineOperationStage(machine);
     const [latestLog, scanner] = await Promise.all([
@@ -1734,7 +1850,9 @@ exports.getIoSnapshot = async (req, res) => {
     const rows = buildIoSignalRows(machine, registerValues, latestPlcStatus);
     const plcHealth = getPlcHealthSnapshot(machine.id) || null;
     const plcCircuit = getPlcCircuitSnapshot().find((entry) => entry.key === `machine:${machine.id}`) || null;
-    const scannerHealth = await buildScannerHealth(scanner, machine.id);
+    const scannerHealth = scannerConnectionManager.getStableSnapshot({ machineId: machine.id })
+      || (await buildScannerHealth(scanner, machine.id));
+    const machineState = plcHandshakeEngine.getState(machine.id);
 
     const payload = {
       snapshotAt: checkedAt,
@@ -1759,6 +1877,7 @@ exports.getIoSnapshot = async (req, res) => {
       plcConnection,
       plcHealth,
       plcCircuit,
+      plcQueue: plcConnectionManager.getQueueSnapshot(),
       scanner: scanner
         ? {
             id: scanner.id,
@@ -1769,6 +1888,7 @@ exports.getIoSnapshot = async (req, res) => {
           }
         : null,
       scannerHealth,
+      machineState,
       latestOperation: latestLog
         ? {
             operationLogId: latestLog.id,
@@ -1789,8 +1909,18 @@ exports.getIoSnapshot = async (req, res) => {
         cacheAgeMs: 0,
       },
     };
+    return payload;
+    })();
+
+    ioSnapshotInFlight.set(cacheKey, snapshotPromise);
+    snapshotPromise.finally(() => {
+      if (ioSnapshotInFlight.get(cacheKey) === snapshotPromise) {
+        ioSnapshotInFlight.delete(cacheKey);
+      }
+    });
+    const payload = await snapshotPromise;
     ioSnapshotCache.set(cacheKey, { payload, savedAtMs: Date.now() });
-    res.json(payload);
+    return res.json(payload);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -2276,6 +2406,30 @@ exports.processScan = async (req, res) => {
       skipDuplicateValidation: machineBypassEnabled,
       skipSequenceValidation: machineBypassEnabled,
     });
+    if (response?.decision === "ALLOW" && response?.operationLogId) {
+      await safeRecordTimeline({
+        operationId: response.operationLogId,
+        partId: normalizedPartId,
+        machineId: machine.id,
+        stationNo: normalizedStation,
+        eventType: TIMELINE_EVENTS.SCANNED,
+        eventData: {
+          resultSource,
+          machineBypassEnabled,
+        },
+      });
+      await safeRecordTimeline({
+        operationId: response.operationLogId,
+        partId: normalizedPartId,
+        machineId: machine.id,
+        stationNo: normalizedStation,
+        eventType: TIMELINE_EVENTS.VALIDATED,
+        eventData: {
+          stationFeatures,
+          spcMode: spcConfig.mode,
+        },
+      });
+    }
     const qualityAck = await sendQualityCheckAckToPlc(machine, spcConfig, finalResult).catch((error) => ({
       ok: false,
       error: error.message,
@@ -2435,6 +2589,30 @@ exports.verifyScanForOperator = async (req, res) => {
       skipDuplicateValidation: machineBypassEnabled,
       skipSequenceValidation: machineBypassEnabled,
     });
+    if (response?.decision === "ALLOW" && response?.operationLogId) {
+      await safeRecordTimeline({
+        operationId: response.operationLogId,
+        partId: normalizedPartId,
+        machineId: machine.id,
+        stationNo,
+        eventType: TIMELINE_EVENTS.SCANNED,
+        eventData: {
+          resultSource,
+          machineBypassEnabled,
+        },
+      });
+      await safeRecordTimeline({
+        operationId: response.operationLogId,
+        partId: normalizedPartId,
+        machineId: machine.id,
+        stationNo,
+        eventType: TIMELINE_EVENTS.VALIDATED,
+        eventData: {
+          stationFeatures,
+          spcMode: spcConfig.mode,
+        },
+      });
+    }
     const qualityAck = await sendQualityCheckAckToPlc(machine, spcConfig, finalResult).catch((error) => ({
       ok: false,
       error: error.message,

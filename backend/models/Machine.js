@@ -170,6 +170,51 @@ const Machine = sequelize.define("Machine", {
     type: DataTypes.DATE,
     allowNull: true,
   },
+  // Hardening Fields
+  routing_strategy: {
+    type: DataTypes.ENUM("LEAST_BUSY", "ROUND_ROBIN", "PRIORITY_ORDER", "FIRST_AVAILABLE", "MANUAL_SELECTION"),
+    defaultValue: "FIRST_AVAILABLE",
+  },
+  capabilities: {
+    type: DataTypes.TEXT, // Store as JSON or comma-separated
+    allowNull: true,
+  },
+  config_version: {
+    type: DataTypes.INTEGER,
+    defaultValue: 1,
+  },
+  stagger_delay_ms: {
+    type: DataTypes.INTEGER,
+    defaultValue: 0,
+  },
+  debounce_polls: {
+    type: DataTypes.INTEGER,
+    defaultValue: 2,
+  },
+  start_hold_ms: {
+    type: DataTypes.INTEGER,
+    defaultValue: 500,
+  },
+  reset_hold_ms: {
+    type: DataTypes.INTEGER,
+    defaultValue: 1000,
+  },
+  block_hold_ms: {
+    type: DataTypes.INTEGER,
+    defaultValue: 500,
+  },
+  ack_hold_ms: {
+    type: DataTypes.INTEGER,
+    defaultValue: 200,
+  },
+  polling_interval_ms: {
+    type: DataTypes.INTEGER,
+    defaultValue: 300,
+  },
+  scan_cycle_timing: {
+    type: DataTypes.STRING,
+    defaultValue: "STANDARD", // FAST, SLOW, NOISY
+  }
 });
 
 module.exports = Machine;

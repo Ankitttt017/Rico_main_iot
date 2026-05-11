@@ -155,20 +155,20 @@ function formatDate(v) {
 }
 function getStationMeta(status) {
   const s=String(status||"PENDING").toUpperCase();
-  if (["PASSED","ENDED_OK","COMPLETED"].includes(s))    return {variant:"ok",  label:"Pass",       icon:CheckCircle2};
-  if (["FAILED","INTERLOCKED","ENDED_NG","NG"].includes(s)) return {variant:"ng",  label:"Fail",       icon:XCircle};
-  if (["COMM_ERROR","PLC_COMM_ERROR"].includes(s))       return {variant:"wip", label:"Comm Error", icon:AlertTriangle};
-  if (["IN_PROGRESS","STARTED","REWORK"].includes(s)) return {variant:"wip",label:"In Progress",icon:Clock3};
+  if (["PASSED","ENDED_OK","COMPLETED","COMPLETED_OK"].includes(s))    return {variant:"ok",  label:"Pass",       icon:CheckCircle2};
+  if (["FAILED","INTERLOCKED","ENDED_NG","NG","COMPLETED_NG"].includes(s)) return {variant:"ng",  label:"Fail",       icon:XCircle};
+  if (["COMM_ERROR","PLC_COMM_ERROR","PLC_TIMEOUT","TIMEOUT","PLC_ERROR","ACK_TIMEOUT","RUNNING_TIMEOUT","END_TIMEOUT","RESET_TIMEOUT"].includes(s)) return {variant:"ng", label:"Error", icon:AlertTriangle};
+  if (["RUNNING","IN_PROGRESS","STARTED","REWORK","WAITING_RUNNING","WAITING_END","START_SENT","VALIDATED","SCANNED","WAITING_ACK","ACK_RECEIVED"].includes(s)) return {variant:"wip",label:"In Progress",icon:Clock3};
   return {variant:"idle",label:"Waiting",icon:Clock3};
 }
 function getPartMeta(status) {
   const s=String(status||"").trim().toUpperCase();
-  if (s==="COMPLETED")                          return {label:"Pass",        variant:"ok"  };
-  if (["NG","INTERLOCKED","FAILED"].includes(s)) return {label:"Fail",        variant:"ng"  };
-  if (["IN_PROGRESS","REWORK"].includes(s))      return {label:"In Progress", variant:"wip" };
+  if (["COMPLETED", "PASSED", "COMPLETED_OK"].includes(s)) return {label:"Pass", variant:"ok"};
+  if (["NG", "INTERLOCKED", "FAILED", "COMPLETED_NG", "ENDED_NG"].includes(s)) return {label:"Fail", variant:"ng"};
+  if (["IN_PROGRESS", "REWORK", "RUNNING", "STARTED", "SCANNED", "VALIDATED", "START_SENT", "WAITING_ACK", "ACK_RECEIVED", "WAITING_RUNNING", "WAITING_END"].includes(s)) return {label:"In Progress", variant:"wip"};
+  if (["PLC_COMM_ERROR", "COMM_ERROR", "PLC_TIMEOUT", "PLC_ERROR"].includes(s)) return {label:"Error", variant:"ng"};
   return {label:"Waiting",variant:"idle"};
 }
-
 // ── Mini QR code SVG generator (no external lib needed) ───────────────────
 // Generates a simple visual QR-like pattern from the part ID string
 function generateQrPattern(text, size=80) {
@@ -521,14 +521,14 @@ const ComponentJourney = () => {
   },[refreshJourneyNow]);
 
   const patchPartFromRealtime = useCallback((payload={})=>{
-  const rPartId=normalizePartId(payload.partId||payload.part_id);
-  if (!rPartId) return;
-  const rStatus=String(payload.currentStatus||payload.partStatus||payload.status||"").trim().toUpperCase();
-  const resolved=["COMPLETED","IN_PROGRESS","NG","INTERLOCKED","REWORK"].includes(rStatus)?rStatus
-      :rStatus==="ENDED_OK"?"COMPLETED"
-      :rStatus==="STARTED"?"IN_PROGRESS"
+    const rPartId=normalizePartId(payload.partId||payload.part_id);
+    if (!rPartId) return;
+    const rStatus=String(payload.currentStatus||payload.partStatus||payload.status||"").trim().toUpperCase();
+    const resolved=["COMPLETED","IN_PROGRESS","NG","INTERLOCKED","REWORK"].includes(rStatus)?rStatus
+      :rStatus==="ENDED_OK" || rStatus==="COMPLETED_OK"?"COMPLETED"
+      :rStatus==="STARTED" || rStatus==="RUNNING" || rStatus.startsWith("WAITING") || rStatus === "ACK_RECEIVED" || rStatus === "START_SENT"?"IN_PROGRESS"
       :rStatus==="PENDING"?"PENDING"
-      :rStatus==="ENDED_NG"?"NG":"";
+      :rStatus==="ENDED_NG" || rStatus==="COMPLETED_NG"?"NG":"";
     const rStation=String(payload.stationNo||payload.station_no||"").trim().toUpperCase();
     const rTimestamp=payload.timestamp||new Date().toISOString();
     setParts(prev=>{
@@ -1135,4 +1135,3 @@ const ComponentJourney = () => {
 };
 
 export default ComponentJourney;
-

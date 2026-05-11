@@ -418,8 +418,8 @@ const PlcTestModal = ({ plc, onClose }) => {
     const t0 = Date.now();
     let parsedWriteValue = null;
     try {
-      const timeoutMs = Math.max(toIntOrNull(plc?.plcTestTimeoutMs) || 8000, 1000);
-      const retryCount = Math.max(toIntOrNull(plc?.plcTestRetryCount) || 3, 1);
+      const timeoutMs = Math.min(Math.max(toIntOrNull(plc?.plcTestTimeoutMs) || 5000, 1000), 8000);
+      const retryCount = Math.max(toIntOrNull(plc?.plcTestRetryCount) || 2, 1);
       parsedWriteValue = toIntOrNull(testVal);
       if (parsedWriteValue === null) {
         throw new Error("Enter a valid numeric test value");
@@ -461,8 +461,8 @@ const PlcTestModal = ({ plc, onClose }) => {
           retryCount,
         };
       }
-      writeRes = await machineApi.writePlcValue(writeReq, { timeout: 30000 });
-      const res = await machineApi.testPlc(payload, { timeout: 30000 });
+      writeRes = await machineApi.writePlcValue(writeReq, { timeout: 15000 });
+      const res = await machineApi.testPlc(payload, { timeout: 15000 });
       const readValue = res?.probe?.statusValue;
       const readOk = Number.isFinite(Number(readValue)) ? Number(readValue) === parsedWriteValue : false;
       setResult({
@@ -1052,6 +1052,7 @@ const IoMonitor = () => {
   const plcTransportConnected = Boolean(snapshot?.plcConnection?.transportConnected);
   const plcReadConnected = Boolean(snapshot?.plcConnection?.readConnected);
   const plcConnected     = Boolean(snapshot?.plcConnection?.connected ?? plcTransportConnected);
+  const queueRows        = Array.isArray(snapshot?.plcQueue) ? snapshot.plcQueue : [];
   const protocol         = (snapshot?.plc?.protocol||selectedMachine?.plcProtocol||"Modbus TCP").toUpperCase();
   const plcIp            = snapshot?.plc?.ip||selectedMachine?.plcIp||"—";
   const plcPort          = snapshot?.plc?.port||selectedMachine?.plcPort||"—";
@@ -1148,6 +1149,7 @@ const IoMonitor = () => {
               {label:"Connected",      value:plcList.filter(p=>p.connected===true).length,                     color:C.ok(),    icon:Wifi  },
               {label:"Offline",        value:plcList.filter(p=>p.connected===false).length,                    color:C.ng(),    icon:WifiOff},
               {label:"Status Unknown", value:plcList.filter(p=>p.connected===null).length,                     color:C.amber(), icon:AlertCircle},
+              {label:"Queued Ops",     value:queueRows.reduce((acc,row)=>acc+Number(row.queued||0),0),         color:C.steel(), icon:Clock},
             ].map((s,i)=>(
               <div key={i} style={{background:C.bg("card"),border:`1px solid ${C.bdr()}`,
                 borderLeft:`3px solid ${s.color}`,borderRadius:12,

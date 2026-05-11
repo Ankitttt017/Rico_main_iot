@@ -34,6 +34,10 @@ const OperationLog = sequelize.define("OperationLog", {
     type: DataTypes.STRING,
     allowNull: true,
   },
+  cycle_token: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
 });
 
 module.exports = OperationLog;

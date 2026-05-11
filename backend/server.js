@@ -51,13 +51,18 @@ require("./models/RoleAccessSetting");
 require("./models/PlcRegisterRange");
 require("./models/ScannerConnection");
 const { getPartRoom, setSocketServer } = require("./services/realtimeService");
-const { startPlcHealthMonitor } = require("./services/plcHealthService");
 const { resetAllMachineLocks } = require("./services/machineLockService");
 const scannerService = require("./services/scannerConnectionService");
 const { startAlarmMonitor } = require("./services/alarmService");
 const { ensureMachineQrScannerUniqueness } = require("./services/machineSchemaService");
+const { runStartupRecovery } = require("./services/startupRecoveryService");
+const {
+  initializeIndustrialServices,
+  shutdownIndustrialServices,
+  getStartupStatus,
+} = require("./services/industrialStartupManager");
 
-require("./tcp/tcpServer");
+const { startTcpServer, shutdownTcpServer } = require("./tcp/tcpServer");
 require("./models/AuditLog"); // UPGRADE 5 — auto-sync AuditLog table
 require("./models/Alarm");    // UPGRADE 6 — auto-sync Alarms table
 
@@ -200,6 +205,73 @@ async function runStartupDbTask(label, taskFn) {
   }
 }
 
+let statusEmitterTimerRef = null;
+let shuttingDown = false;
+
+function stopStatusEmitter() {
+  if (statusEmitterTimerRef) {
+    clearTimeout(statusEmitterTimerRef);
+    statusEmitterTimerRef = null;
+  }
+}
+
+function scheduleStatusEmitter() {
+  stopStatusEmitter();
+  statusEmitterTimerRef = setTimeout(async () => {
+    try {
+      const [machines, scanners] = await Promise.all([
+        Machine.findAll({ order: [["sequence_no", "ASC"]] }),
+        Scanner.findAll({ where: { is_active: true } }),
+      ]);
+      io.emit(
+        "machine_status",
+        machines.map((machine) => ({
+          ...machine.toJSON(),
+        }))
+      );
+      io.emit(
+        "scanner_status",
+        scanners.map((scanner) => scanner.toJSON())
+      );
+    } catch (error) {
+      console.error("Socket status emitter error:", error);
+    } finally {
+      if (!shuttingDown) {
+        scheduleStatusEmitter();
+      }
+    }
+  }, 5000);
+}
+
+async function performGracefulShutdown(signal = "SIGTERM") {
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
+  console.log(`[Shutdown] Received ${signal}. Stopping industrial services...`);
+
+  stopStatusEmitter();
+
+  try {
+    await shutdownIndustrialServices();
+    await shutdownTcpServer();
+  } catch (error) {
+    console.error("[Shutdown] industrial service shutdown failed:", error.message);
+  }
+
+  await new Promise((resolve) => {
+    server.close(() => resolve());
+  });
+
+  try {
+    await sequelize.close();
+  } catch (_error) {
+    // noop
+  }
+
+  process.exit(0);
+}
+
 async function startServer() {
   try {
     await sequelize.authenticate();
@@ -217,35 +289,28 @@ async function startServer() {
     await runStartupDbTask("ensureMachineQrScannerUniqueness", () => ensureMachineQrScannerUniqueness());
     await runStartupDbTask("resetAllMachineLocks", () => resetAllMachineLocks());
     await runStartupDbTask("resetAllScannerConnectionStates", () => scannerService.resetAllScannerConnectionStates());
+    await runStartupDbTask("runStartupRecovery", () => runStartupRecovery());
     await runStartupDbTask("ensureDefaultAdminUser", () => ensureDefaultAdminUser());
     await runStartupDbTask("ensureDefaultShifts", () => ensureDefaultShifts());
+    await initializeIndustrialServices();
+    startTcpServer();
 
     server.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
-      startPlcHealthMonitor();
       startAlarmMonitor();
+      scheduleStatusEmitter();
+      const startup = getStartupStatus();
+      console.log(`[Startup] Industrial services initialized: ${startup.serviceCount}`);
+    });
 
-      // Start the status update interval after sync
-      setInterval(async () => {
-        try {
-          const [machines, scanners] = await Promise.all([
-            Machine.findAll({ order: [["sequence_no", "ASC"]] }),
-            Scanner.findAll({ where: { is_active: true } }),
-          ]);
-          io.emit(
-            "machine_status",
-            machines.map((machine) => ({
-              ...machine.toJSON(),
-            }))
-          );
-          io.emit(
-            "scanner_status",
-            scanners.map((scanner) => scanner.toJSON())
-          );
-        } catch (error) {
-          console.error("Socket error:", error);
-        }
-      }, 5000);
+    process.once("SIGINT", () => {
+      performGracefulShutdown("SIGINT");
+    });
+    process.once("SIGTERM", () => {
+      performGracefulShutdown("SIGTERM");
+    });
+    process.once("SIGHUP", () => {
+      performGracefulShutdown("SIGHUP");
     });
   } catch (error) {
     console.error("Failed to start server:", error);

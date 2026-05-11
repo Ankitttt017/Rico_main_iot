@@ -7,6 +7,7 @@ const router = express.Router();
 router.get("/", verifyToken, machineController.getMachines);
 router.get("/:id", verifyToken, machineController.getMachineById);
 router.post("/test-plc", verifyToken, isAdminOrEngineerStrict, machineController.testPlc);
+router.post("/test-connection", verifyToken, isAdminOrEngineerStrict, machineController.testConnection);
 router.post("/reset-plc", verifyToken, isAdminOrEngineerStrict, machineController.resetPlc);
 router.post("/plc-command", verifyToken, isAdminOrEngineerStrict, machineController.sendPlcCommand);
 router.post("/read-plc-value", verifyToken, isAdminOrEngineerStrict, machineController.readPlcValue);

@@ -1,14 +1,18 @@
 // UPGRADE 1 COMPLETE — 32-bit Part/Station hash via dual-word SLMP writeWords
 const { sleep, withTimeout, hashToRegisterValue, split32To16 } = require("./utils");
 const { withSocket } = require("./socketPool");
+const plcLatchManager = require("../plcLatchManager");
+
 
 const DEFAULT_CONNECT_TIMEOUT_MS = Number(process.env.PLC_CONNECT_TIMEOUT_MS || 2000);
-const DEFAULT_START_ACK_TIMEOUT_MS = Number(process.env.PLC_START_ACK_TIMEOUT_MS || 3000);
+const DEFAULT_START_ACK_TIMEOUT_MS = Number(process.env.PLC_START_ACK_TIMEOUT_MS || 10000);
 const DEFAULT_END_ACK_TIMEOUT_MS = Number(process.env.PLC_END_ACK_TIMEOUT_MS || 120000);
 const DEFAULT_SLMP_POLL_INTERVAL_MS = Number(process.env.PLC_SLMP_POLL_INTERVAL_MS || 150);
 const DEFAULT_SLMP_FRAME_MODE = String(process.env.PLC_SLMP_FRAME_MODE || "AUTO")
   .trim()
   .toUpperCase();
+const DEFAULT_SIGNAL_HOLD_MS = Math.max(Number(process.env.PLC_SIGNAL_HOLD_MS || 700), 100);
+const STRICT_START_ACK_REQUIRED = String(process.env.PLC_STRICT_START_ACK_REQUIRED || "true").trim().toLowerCase() !== "false";
 
 const DEVICE_CODES = {
   D: 0xa8,
@@ -87,6 +91,69 @@ function getFrameModeCandidates(machine = {}) {
   if (selected === "ASCII") return ["ASCII", "BINARY"];
   if (selected === "BINARY") return ["BINARY", "ASCII"];
   return ["ASCII", "BINARY"];
+}
+
+function resolveTimingConfig(machine = {}) {
+  let snapshot = {};
+  try {
+    snapshot = typeof machine?.plc_registers === "string" ? JSON.parse(machine.plc_registers) : machine?.plc_registers || {};
+  } catch (_error) {
+    snapshot = {};
+  }
+  return {
+    signalHoldMs: Math.max(Number(snapshot?.signalHoldMs || snapshot?.plcSignalHoldMs || DEFAULT_SIGNAL_HOLD_MS), 100),
+    pollIntervalMs: Math.max(Number(snapshot?.pollIntervalMs || snapshot?.plcPollIntervalMs || 50), 50),
+    startAckTimeoutMs: Math.max(Number(snapshot?.startAckTimeoutMs || machine?.plc_start_ack_timeout_ms || DEFAULT_START_ACK_TIMEOUT_MS), 300),
+    endAckTimeoutMs: Math.max(Number(snapshot?.endAckTimeoutMs || machine?.plc_end_ack_timeout_ms || DEFAULT_END_ACK_TIMEOUT_MS), 1000),
+  };
+}
+
+function parseMachineSnapshot(machine = {}) {
+  try {
+    return typeof machine?.plc_registers === "string" ? JSON.parse(machine.plc_registers) : machine?.plc_registers || {};
+  } catch (_error) {
+    return {};
+  }
+}
+
+function resolveAckConfig(machine = {}) {
+  const snapshot = parseMachineSnapshot(machine);
+  const confirmation = snapshot?.confirmationSignal || snapshot?.confirmation || {};
+  const register = Number(
+    confirmation?.register ??
+    snapshot?.confirmationRegister ??
+    machine?.plc_heartbeat_register
+  );
+  const value = Number(confirmation?.value ?? snapshot?.confirmationValue ?? 1);
+  return {
+    enabled: Number.isFinite(register) && Number.isFinite(value),
+    register: Number.isFinite(register) ? Math.trunc(register) : null,
+    value: Number.isFinite(value) ? Math.trunc(value) : null,
+  };
+}
+
+function resolveBinAckConfig(machine = {}) {
+  let signalMap = [];
+  try {
+    signalMap = typeof machine?.plc_signal_map === "string" ? JSON.parse(machine.plc_signal_map) : machine?.plc_signal_map || [];
+  } catch (e) { signalMap = []; }
+  
+  if (!Array.isArray(signalMap)) signalMap = [];
+
+  const found = signalMap.find(row => {
+    const s = String(row.signal || row.label || "").toUpperCase();
+    return s.includes("BIN") && (s.includes("ACK") || s.includes("DEP") || s.includes("KEEP") || s.includes("PLACE"));
+  });
+
+  if (found && Number.isFinite(Number(found.register))) {
+    return {
+      enabled: true,
+      register: Number(found.register),
+      value: Number(found.value ?? 1),
+      label: found.signal || found.label || "BIN_ACK"
+    };
+  }
+  return { enabled: false };
 }
 
 function parseSignalMap(raw) {
@@ -331,6 +398,7 @@ async function writeWords(socket, { device, address, values, timeoutMs, frameMod
 }
 
 async function handshake({ ip, port, partId, stationNo, machine }) {
+  const timing = resolveTimingConfig(machine);
   const startRegister = Number(machine?.plc_start_register);
   const statusRegister = Number(machine?.plc_status_register);
   const partRegister =
@@ -349,6 +417,7 @@ async function handshake({ ip, port, partId, stationNo, machine }) {
   const startedValue = Number(machine?.plc_started_value ?? 2);
   const endOkValue = Number(machine?.plc_end_ok_value ?? 3);
   const endNgValue = Number(machine?.plc_end_ng_value ?? 4);
+  const ack = resolveAckConfig(machine);
 
   if (!Number.isFinite(startRegister) || !Number.isFinite(statusRegister)) {
     throw new Error("SLMP registers missing (plc_start_register/plc_status_register)");
@@ -366,8 +435,9 @@ async function handshake({ ip, port, partId, stationNo, machine }) {
         const deviceStation = resolveDevice(machine, "STATION_HASH");
         const deviceReset = resolveDevice(machine, "RESET");
 
-        const waitForStatus = async (acceptedValues, timeoutMs) => {
+        const waitForStatus = async (acceptedValues, timeoutMs, transitionFrom = null) => {
           const deadline = Date.now() + timeoutMs;
+          let lastValue = null;
           while (Date.now() < deadline) {
             const values = await readWords(socket, {
               device: deviceStatus,
@@ -377,80 +447,174 @@ async function handshake({ ip, port, partId, stationNo, machine }) {
               frameMode,
             });
             const status = values[0];
-            if (acceptedValues.includes(status)) {
-              return status;
+            console.log(`[PLC:SLMP:VERBOSE] [${new Date().toISOString()}] Register ${statusRegister} READ = ${status} (expected: ${acceptedValues.join(",")}${transitionFrom !== null ? ` via transition from ${transitionFrom}` : ""})`);
+            
+            if (transitionFrom !== null) {
+              if (lastValue === transitionFrom && acceptedValues.includes(status)) {
+                return status;
+              }
+            } else {
+              if (acceptedValues.includes(status)) {
+                return status;
+              }
             }
-            await sleep(DEFAULT_SLMP_POLL_INTERVAL_MS);
+            
+            lastValue = status;
+            await sleep(timing.pollIntervalMs);
           }
-          throw new Error(`PLC SLMP status timeout (${acceptedValues.join(",")})`);
+          throw new Error(`PLC SLMP status timeout (expected: ${acceptedValues.join(",")}${transitionFrom !== null ? ` via transition from ${transitionFrom}` : ""})`);
         };
 
-        let startCommandActive = false;
+        let isLatchOwner = false;
         try {
-          if (partRegister !== null) {
-            const hash32p = hashToRegisterValue(partId);
-            const [phigh, plow] = split32To16(hash32p);
-            console.log(
-              `[PLC:SLMP] PART_ID_HASH hash32=${hash32p} dev=${devicePart} reg[${partRegister}]=0x${phigh.toString(16).padStart(4,'0')} (high) reg[${partRegister+1}]=0x${plow.toString(16).padStart(4,'0')} (low)`
-            );
+          if (!plcLatchManager.isLatched(machine?.id)) {
+            if (partRegister !== null) {
+              const hash32p = hashToRegisterValue(partId);
+              const [phigh, plow] = split32To16(hash32p);
+              console.log(
+                `[PLC:SLMP] PART_ID_HASH hash32=${hash32p} dev=${devicePart} (High: 0x${phigh.toString(16).padStart(4,'0')}, Low: 0x${plow.toString(16).padStart(4,'0')})`
+              );
+              await writeWords(socket, {
+                device: devicePart,
+                address: partRegister,
+                values: [phigh, plow],
+                timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
+                frameMode,
+              });
+            }
+            if (stationRegister !== null) {
+              const hash32s = hashToRegisterValue(stationNo);
+              const [shigh, slow] = split32To16(hash32s);
+              console.log(
+                `[PLC:SLMP] STATION_HASH hash32=${hash32s} dev=${deviceStation} reg[${stationRegister}]=0x${shigh.toString(16).padStart(4,'0')} (high) reg[${stationRegister+1}]=0x${slow.toString(16).padStart(4,'0')} (low)`
+              );
+              await writeWords(socket, {
+                device: deviceStation,
+                address: stationRegister,
+                values: [shigh, slow],
+                timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
+                frameMode,
+              });
+            }
+
             await writeWords(socket, {
-              device: devicePart,
-              address: partRegister,
-              values: [phigh, plow],
+              device: deviceStart,
+              address: startRegister,
+              values: [startValue],
               timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
               frameMode,
             });
-          }
-          if (stationRegister !== null) {
-            const hash32s = hashToRegisterValue(stationNo);
-            const [shigh, slow] = split32To16(hash32s);
-            console.log(
-              `[PLC:SLMP] STATION_HASH hash32=${hash32s} dev=${deviceStation} reg[${stationRegister}]=0x${shigh.toString(16).padStart(4,'0')} (high) reg[${stationRegister+1}]=0x${slow.toString(16).padStart(4,'0')} (low)`
-            );
-            await writeWords(socket, {
-              device: deviceStation,
-              address: stationRegister,
-              values: [shigh, slow],
-              timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
-              frameMode,
+
+            // ─── LATCH ACQUIRED ──────────────────────────────────────────────────────
+            plcLatchManager.acquireLatch(machine?.id, {
+              startRegister,
+              blockRegister: null,
+              activeValue: startValue,
+              cycleToken: `${machine?.id}:${partId}:${Date.now()}`,
+              stationNo,
+              partId,
             });
+            isLatchOwner = true;
+          } else {
+            console.log(`[PLC:SLMP] Handshake resumed for latched machine ${machine?.id} — skipping START rewrite`);
           }
 
-          await writeWords(socket, {
-            device: deviceStart,
-            address: startRegister,
-            values: [startValue],
-            timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
-            frameMode,
-          });
-          startCommandActive = true;
+          if (ack.enabled) {
+            const ackDevice = resolveDevice(machine, "CONFIRMATION");
+            const ackDeadline = Date.now() + timing.startAckTimeoutMs;
+            let ackReceived = false;
+            while (Date.now() < ackDeadline) {
+              const ackValues = await readWords(socket, {
+                device: ackDevice,
+                address: ack.register,
+                count: 1,
+                timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
+                frameMode,
+              });
+              if (ackValues[0] === ack.value) {
+                ackReceived = true;
+                break;
+              }
+              await sleep(timing.pollIntervalMs);
+            }
+            if (!ackReceived && STRICT_START_ACK_REQUIRED) {
+              throw new Error(`PLC START ACK timeout (register ${ack.register} expected ${ack.value})`);
+            }
+          }
 
-          let firstStatus = await waitForStatus([startedValue, endOkValue, endNgValue], DEFAULT_START_ACK_TIMEOUT_MS);
+          // HOLD is fallback safety only, not primary synchronization.
+          await sleep(timing.signalHoldMs);
+
+          let firstStatus;
+          if (plcLatchManager.hasSeenRunning(machine?.id)) {
+            firstStatus = startedValue;
+          } else {
+            try {
+              firstStatus = await waitForStatus([startedValue], timing.startAckTimeoutMs);
+            } catch (e) {
+              const currentValues = await readWords(socket, {
+                device: deviceStatus,
+                address: statusRegister,
+                count: 1,
+                timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
+                frameMode,
+              });
+              firstStatus = currentValues[0];
+              if (![startedValue, endOkValue, endNgValue].includes(firstStatus)) {
+                throw e;
+              }
+            }
+          }
+          
+          if (firstStatus === startedValue || firstStatus === endOkValue || firstStatus === endNgValue) {
+            plcLatchManager.markRunningSeen(machine?.id);
+          }
+          
           const startAck = { type: "ACK_START", partId, protocol: "SLMP", value: firstStatus, frameMode };
 
           let finalStatus = firstStatus;
-          if (firstStatus !== endOkValue && firstStatus !== endNgValue) {
-            finalStatus = await waitForStatus([endOkValue, endNgValue], DEFAULT_END_ACK_TIMEOUT_MS);
+          if (firstStatus !== endOkValue && finalStatus !== endNgValue) {
+            finalStatus = await waitForStatus([endOkValue, endNgValue], timing.endAckTimeoutMs, startedValue);
           }
 
-          await writeWords(socket, {
-            device: deviceStart,
-            address: startRegister,
-            values: [0],
-            timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
-            frameMode,
-          });
-          startCommandActive = false;
-
-          if (resetRegister !== null) {
-            await writeWords(socket, {
-              device: deviceReset,
-              address: resetRegister,
-              values: [0],
-              timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
-              frameMode,
-            });
+          // Point 21: Optional Bin Acknowledgement for NG Parts
+          if (finalStatus === endNgValue) {
+            const bin = resolveBinAckConfig(machine);
+            if (bin.enabled) {
+              const ackDevice = resolveDevice(machine, "BIN_ACK");
+              console.log(`[PLC:SLMP] WAITING_BIN_ACK on dev=${ackDevice} reg=${bin.register} (expected ${bin.value})`);
+              const binDeadline = Date.now() + timing.endAckTimeoutMs;
+              let binAckReceived = false;
+              while (Date.now() < binDeadline) {
+                const values = await readWords(socket, {
+                  device: ackDevice,
+                  address: bin.register,
+                  count: 1,
+                  timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
+                  frameMode,
+                });
+                if (values[0] === bin.value) {
+                  binAckReceived = true;
+                  break;
+                }
+                await sleep(timing.pollIntervalMs);
+              }
+              if (!binAckReceived) {
+                console.warn(`[PLC:SLMP] BIN_ACK timeout for register ${bin.register}`);
+              } else {
+                console.log(`[PLC:SLMP] BIN_ACK received on register ${bin.register}`);
+              }
+            }
           }
+
+          // ─── REGISTER STABILITY HOLD ─────────────────────────────────────────
+          // CRITICAL: Do NOT clear the START register here.
+          // The status register must remain at its final value (endOkValue / endNgValue)
+          // until cycleFinalizationService sends the dedicated reset command.
+          // Clearing it prematurely causes the 1→0 flicker visible in the PLC monitor.
+          // The reset sequence (write resetRegister=9, startRegister=0) is exclusively
+          // handled by plcService.resetPlcState() called from cycleFinalizationService.
+          startCommandActive = false; // Mark as intentionally NOT cleared here.
 
           const endAck = {
             type: finalStatus === endOkValue ? "ACK_END_OK" : "ACK_END_NG",
@@ -467,8 +631,11 @@ async function handshake({ ip, port, partId, stationNo, machine }) {
             protocol: "SLMP",
             frameMode,
           };
-        } finally {
-          if (startCommandActive) {
+        } catch (error) {
+          const isTimeout = String(error?.message || "").toUpperCase().includes("TIMEOUT");
+          if (!isTimeout && isLatchOwner) {
+            console.warn(`[PLC:SLMP] Handshake HARD aborted — clearing START register ${startRegister} due to error: ${error.message}`);
+            plcLatchManager.releaseLatch(machine?.id, "HANDSHAKE_ABORT_ERROR");
             try {
               await writeWords(socket, {
                 device: deviceStart,
@@ -477,10 +644,9 @@ async function handshake({ ip, port, partId, stationNo, machine }) {
                 timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
                 frameMode,
               });
-            } catch (_error) {
-              // noop
-            }
+            } catch (_e) {}
           }
+          throw error;
         }
       });
     } catch (error) {
