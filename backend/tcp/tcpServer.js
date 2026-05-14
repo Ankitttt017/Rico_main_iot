@@ -739,8 +739,12 @@ async function handleStationPlcFlow({
   partId,
   requiredPlcPartCount,
 }) {
-  if (scanResult.decision !== "ALLOW" || !scanResult.operationLogId) {
-    return;
+  const isValid = scanResult.decision === "ALLOW" || scanResult.valid === true;
+  if (!isValid) {
+    // Section 1, 2 & 3: Signal Interlock to PLC and transition FSM, but KEEP scanner socket open.
+    await plcHandshakeEngine.signalInterlock(machine.id, scanResult.reason || "VALIDATION_FAILED");
+    console.warn(`[PLC:BLOCK_SENT] machineId=${machine.id} reason=${scanResult.reason}`);
+    return; // Do NOT disconnect scanner; do NOT proceed with machine cycle
   }
 
   // Direct mode: No WAITING_PLC_END block anymore
@@ -828,12 +832,26 @@ server.on("connection", (socket) => {
   const scannerIp = normalizeIp(socket.remoteAddress || "");
   activeSockets.add(socket);
   
-  socket.on("close", () => {
+  socket.on("close", (hadError) => {
     activeSockets.delete(socket);
+    if (!disconnectedHandled) {
+      disconnectedHandled = true;
+      scannerService.markScannerDisconnected({ scannerIp });
+    }
+    console.log(`Scanner Disconnected: ${scannerIp} (hadError: ${hadError})`);
   });
   
-  socket.on("error", () => {
+  socket.on("error", (error) => {
     activeSockets.delete(socket);
+    console.warn(`[TCP:SCANNER_SOCKET_ERROR] ${scannerIp}:`, error.message);
+  });
+
+  socket.setKeepAlive(true, 10000); // 10s keep-alive probes for persistent industrial sockets
+  socket.setTimeout(86400000); // 24 hours inactivity timeout
+  
+  socket.on("timeout", () => {
+    // Industrial Rule: Do NOT disconnect scanners during idle periods
+    console.warn(`[TCP:SCANNER_IDLE] ${scannerIp} - Idle for extended period. Maintaining connection.`);
   });
 
   let activeScanner = null;
@@ -1147,24 +1165,30 @@ server.on("connection", (socket) => {
       });
       safeSocketWrite(`${scanResult.decision}\n`);
 
-      const operationStatus = scanResult.operationStatus || (scanResult.decision === "ALLOW" ? "PENDING" : "WAIT");
-      const popupType =
-        scanResult.decision === "ALLOW" && operationStatus === "ENDED_OK" ? "SUCCESS" : mapScanDecisionToPopupType(scanResult);
+      const operationStatus = scanResult.operationStatus || (scanResult.decision === "ALLOW" ? "PENDING" : "BLOCKED");
+      const isBlocked = scanResult.decision === "BLOCK";
+      
+      let popupType = mapScanDecisionToPopupType(scanResult);
+      let popupMessage = scanResult.message || scanResult.reason || "Scan processed";
+      
+      if (isBlocked) {
+        popupType = "ERROR"; // Must be ERROR to trigger frontend formatScanErrorMessage rules
+        popupMessage = scanResult.message || `BLOCKED - ${scanResult.reason || "Interlocked"}`;
+      }
+
       emitRealtime("operator_popup", {
         type: popupType,
-        message: scanResult.message || scanResult.reason || "Scan processed",
+        message: popupMessage,
         partId,
         stationNo,
         machineId: machine.id,
         machineName: machine.machine_name,
         scannerName: scanner.scanner_name,
         scannerIp,
-        status: operationStatus,
-        plcStatus: operationStatus,
+        status: isBlocked ? "BLOCKED" : operationStatus,
+        plcStatus: isBlocked ? "BLOCKED" : operationStatus,
         qrResult: scanResult.decision === "ALLOW" ? "PASS" : "FAIL",
         reason: scanResult.reason || null,
-        expectedStation: scanResult.expectedStation || null,
-        qrReason: scanResult.reason || null,
         timestamp: new Date().toISOString(),
       });
 

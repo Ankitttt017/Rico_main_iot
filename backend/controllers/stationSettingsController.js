@@ -87,17 +87,21 @@ exports.saveSettings = async (req, res) => {
     await Promise.all(
       stations.map((stationNo) => {
         const data = payload[stationNo];
-        return StationFeatureSetting.upsert({
+        
+        // Sanitize data to ensure only valid fields are passed to Sequelize
+        const updateData = {
           station_no: stationNo,
-          qr_enabled: data.qr,
-          operation_enabled: data.operation,
-          rejection_bin_enabled: data.rejectionBin,
+          qr_enabled: Boolean(data.qr),
+          operation_enabled: Boolean(data.operation),
+          rejection_bin_enabled: Boolean(data.rejectionBin),
           manual_result_enabled: data.manualResult === true,
-          plc_part_count: data.plcPartCount,
+          plc_part_count: normalizePlcPartCount(data.plcPartCount ?? data.plc_part_count),
           final_packing_enabled: data.finalPacking === true,
-          config: data, // Store the full object in JSON column
+          config: data, // JSON column handles the full object
           updated_by: req.user?.id || null,
-        });
+        };
+
+        return StationFeatureSetting.upsert(updateData);
       })
     );
 

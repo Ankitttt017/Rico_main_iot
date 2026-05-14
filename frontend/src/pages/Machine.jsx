@@ -351,8 +351,8 @@ function createEmptyForm() {
     endOkValue: "3", endNgValue: "4", blockValue: "2", resetValue: "9",
   };
   return {
-    machineName: "", lineName: "", sequenceNo: "", operationNo: "", cycleTimeSec: "0",
-    loadingTimeSec: "0", dailyTargetQty: "0", plcIp: "", plcPort: "", plcProtocol: "TCP_TEXT",
+    machineName: "", lineName: "", sequenceNo: "", operationNo: "", cycleTime: "0",
+    loadingTime: "0", dailyTargetQty: "0", plcIp: "", plcPort: "", plcProtocol: "TCP_TEXT",
     plcRangeId: "", plcSlmpDevice: "D", plcSlmpFrameMode: "AUTO", status: "ACTIVE",
     plcConfig: { ...plcConfig, handshakeMap: buildDefaultHandshakeRows(plcConfig) },
     plcSignalMap: [], spcConfig: normalizeSpcConfigForForm({}),
@@ -386,7 +386,7 @@ function buildFormFromMachine(m) {
   return {
     machineName: m.machineName || "", lineName: m.lineName || "",
     sequenceNo: toFormValue(m.sequenceNo, ""), operationNo: m.operationNo || "",
-    cycleTimeSec: toFormValue(m.cycleTimeSec, "0"), loadingTimeSec: toFormValue(m.loadingTimeSec, "0"),
+    cycleTime: toFormValue(m.cycleTime, "0"), loadingTime: toFormValue(m.loadingTime, "0"),
     dailyTargetQty: toFormValue(m.dailyTargetQty, "0"),
     plcIp: m.plcIp || "", plcPort: toFormValue(m.plcPort, ""),
     plcProtocol: m.plcProtocol || "TCP_TEXT", plcRangeId: toFormValue(plcRangeId, ""),
@@ -513,8 +513,8 @@ function toSubmitPayload(f) {
   return {
     machineName: String(f.machineName || "").trim(), lineName: String(f.lineName || "").trim(),
     sequenceNo: toNullableNumber(f.sequenceNo), operationNo: String(f.operationNo || "").trim().toUpperCase(),
-    cycleTimeSec: Math.max(toNullableNumber(f.cycleTimeSec) ?? 0, 0),
-    loadingTimeSec: Math.max(toNullableNumber(f.loadingTimeSec) ?? 0, 0),
+    cycleTime: Math.max(toNullableNumber(f.cycleTime) ?? 0, 0),
+    loadingTime: Math.max(toNullableNumber(f.loadingTime) ?? 0, 0),
     dailyTargetQty: Math.max(toNullableNumber(f.dailyTargetQty) ?? 0, 0),
     plcIp, plcPort, plcProtocol: f.plcProtocol, plcRangeId,
     plcStatusRegister: plcConfig.statusRegister ?? plcConfig.runningRegister,
@@ -1121,7 +1121,17 @@ const MachinePage = () => {
 
   const applyStandardTuning = () => setFormData(p => ({
     ...p, plcConfig: (() => {
-      const nextCfg = { ...(p.plcConfig || {}), startValue: "1", startedValue: "2", endOkValue: "3", endNgValue: "4", blockValue: "2", resetValue: "9" };
+      // Standardized Industrial Mapping (Section 1.3)
+      // START=1, RUNNING=1, END_OK=2, END_NG=2 (on R2062), RESET=1, BYPASS=1
+      const nextCfg = { 
+        ...(p.plcConfig || {}), 
+        startValue: "1", 
+        startedValue: "1", 
+        endOkValue: "2", 
+        endNgValue: "2", 
+        blockValue: "2", 
+        resetValue: "1" 
+      };
       return { ...nextCfg, handshakeMap: syncStandardHandshakeRowsWithCore(normalizeHandshakeRows(nextCfg.handshakeMap, nextCfg), nextCfg) };
     })()
   }));
@@ -1377,7 +1387,7 @@ const MachinePage = () => {
                       </td>
                       <td style={{ padding: "12px 16px" }}>
                         <p style={{ fontWeight: 700, color: T.text, margin: 0 }}>{m.dailyTargetQty || 0}</p>
-                        <p style={{ fontSize: 10, color: T.textMuted, margin: "2px 0 0" }}>CT {Number(m.cycleTimeSec || 0)}s / LT {Number(m.loadingTimeSec || 0)}s</p>
+                        <p style={{ fontSize: 10, color: T.textMuted, margin: "2px 0 0" }}>CT {Number(m.cycleTime || 0)}s / LT {Number(m.loadingTime || 0)}s</p>
                       </td>
                       <td style={{ padding: "12px 16px" }}><StatusBadge status={m.status} /></td>
                       <td style={{ padding: "12px 16px" }}><BypassBadge enabled={isBypassEnabled} reason={m.machineBypassReason} /></td>
@@ -1456,8 +1466,8 @@ const MachinePage = () => {
                     </div>
                   </div>
                   <div><Label>Daily Target</Label><FieldInput type="number" value={formData.dailyTargetQty} onChange={e => updateField("dailyTargetQty", e.target.value)} placeholder="480" mono /></div>
-                  <div><Label>Cycle Time (sec)</Label><FieldInput type="number" value={formData.cycleTimeSec} onChange={e => updateField("cycleTimeSec", e.target.value)} placeholder="45" mono /></div>
-                  <div><Label>Loading Time (sec)</Label><FieldInput type="number" value={formData.loadingTimeSec} onChange={e => updateField("loadingTimeSec", e.target.value)} placeholder="15" mono /></div>
+                  <div><Label>Cycle Time (sec)</Label><FieldInput type="number" value={formData.cycleTime} onChange={e => updateField("cycleTime", e.target.value)} placeholder="45" mono /></div>
+                  <div><Label>Loading Time (sec)</Label><FieldInput type="number" value={formData.loadingTime} onChange={e => updateField("loadingTime", e.target.value)} placeholder="15" mono /></div>
                 </div>
               )}
 
@@ -1524,6 +1534,8 @@ const MachinePage = () => {
               {/* ─── MAPPING & TUNING ─────────────────────────── */}
               {activeTab === "tuning" && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+
+                 
 
                   {/* ── Toolbar ─────────────────────────────── */}
                   <div style={{ background: T.bgCard, border: `1px solid ${T.borderLight}`, borderRadius: 12, padding: "14px 16px" }}>

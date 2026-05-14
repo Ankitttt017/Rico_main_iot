@@ -2,6 +2,7 @@ const Machine = require("../models/Machine");
 const plcCommunicationService = require("./plcCommunicationService");
 const plcSnapshotService = require("./plcSnapshotService");
 const plcStateMachineService = require("./plcStateMachineService");
+const { logPlc, logWarn } = require("./industrialLogger");
 const { emitRealtime } = require("./realtimeService");
 const { readSlmpRegisters, readModbusRegisters } = require("./plcIoService");
 
@@ -126,81 +127,76 @@ class PlcPollingService {
       const port = machine.plc_port || machine.machine_port;
       const protocol = String(machine.plc_protocol || "TCP_TEXT").trim().toUpperCase();
 
-      // Build register list from machine config for batch read
-      const registerMap = {}; // register -> signal name
       const toInt = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.trunc(n) : null; };
-      const startReg = toInt(machine.plc_start_register);
-      const statusReg = toInt(machine.plc_status_register);
+
+      // Section 6: Dynamic Register Mappings
+      const runningReg = toInt(machine.plc_running_register);
+      const endOkReg = toInt(machine.plc_end_ok_register);
+      const endNgReg = toInt(machine.plc_end_ng_register);
       const resetReg = toInt(machine.plc_reset_register);
-      const stationReg = toInt(machine.plc_station_register);
-      if (startReg !== null) registerMap[startReg] = "START";
-      if (statusReg !== null) registerMap[statusReg] = "RUNNING";
-      if (resetReg !== null) registerMap[resetReg] = "RESET";
-      if (stationReg !== null) registerMap[stationReg] = "STATION";
+      const bypassReg = toInt(machine.plc_bypass_register);
+      const startReg = toInt(machine.plc_start_register);
 
-      const registers = Object.keys(registerMap).map(Number);
-      if (registers.length === 0) return null;
+      const registers = [];
+      if (runningReg !== null) registers.push(runningReg);
+      if (endOkReg !== null) registers.push(endOkReg);
+      if (endNgReg !== null) registers.push(endNgReg);
+      if (resetReg !== null) registers.push(resetReg);
+      if (bypassReg !== null) registers.push(bypassReg);
+      if (startReg !== null) registers.push(startReg);
 
-      const pollStartTime = Date.now();
+      if (!registers.length) return null;
+
       let values = {};
       if (protocol === "SLMP") {
-        const defaultDevice = String(machine.plc_slmp_device || "D").trim().toUpperCase() || "D";
-
-        // Extract configured frame mode from the JSON payload if the top-level column is missing
-        let frameMode = machine.plc_slmp_frame_mode || "AUTO";
-        if ((!frameMode || frameMode === "AUTO") && machine.plc_registers) {
-          try {
-            const parsed = typeof machine.plc_registers === "string" ? JSON.parse(machine.plc_registers) : machine.plc_registers;
-            const nestedMode = parsed?.slmpFrameMode || parsed?.slmpFrame || parsed?.frameMode;
-            if (nestedMode) frameMode = String(nestedMode).toUpperCase();
-          } catch (e) { }
-        }
-
         const result = await readSlmpRegisters({
           ip, port,
-          registers: registers.map((r) => ({ register: r, device: defaultDevice })),
-          defaultDevice,
+          registers: registers.map((r) => ({ register: r, device: String(machine.plc_slmp_device || "D").trim().toUpperCase() || "D" })),
+          defaultDevice: String(machine.plc_slmp_device || "D").trim().toUpperCase() || "D",
           timeoutMs: 1000,
-          frameMode,
+          frameMode: String(machine.plc_slmp_frame_mode || "AUTO").trim().toUpperCase() || "AUTO"
         });
         values = result?.values || {};
       } else if (protocol === "MODBUS_TCP" || protocol === "MODBUS") {
         const result = await readModbusRegisters({
           ip, port,
-          unitId: toInt(machine.plc_unit_id) || 1,
+          unitId: Number(machine.plc_unit_id) || 1,
           registers,
-          timeoutMs: 1000,
+          timeoutMs: 1000
         });
         values = result?.values || {};
       } else {
-        // TCP_TEXT: fall back to probe
         const service = plcCommunicationService.getProtocolService(protocol);
         const probe = await service.probe({ ip, port, machine, timeoutMs: 1000 });
         return probe.signals || probe.data || null;
       }
 
-      const pollDuration = Date.now() - pollStartTime;
-      if (pollDuration > 500) {
-        console.warn(`[PollingService] Slow poll for machine ${machine.id}: ${pollDuration}ms (protocol: ${protocol})`);
+      // Default Values for Industrial Signals (Rule 6)
+      const runningValue = Number(machine.plc_running_value ?? 1);
+      const endOkValue = Number(machine.plc_end_ok_value ?? 2);
+      const endNgValue = Number(machine.plc_end_ng_value ?? 2);
+      const bypassValue = Number(machine.plc_bypass_value ?? 1);
+
+      const signals = {};
+      if (runningReg !== null && values[runningReg] !== undefined) {
+        signals.RUNNING = Number(values[runningReg]) === runningValue;
+      }
+      if (endOkReg !== null && values[endOkReg] !== undefined) {
+        signals.END_OK = Number(values[endOkReg]) === endOkValue;
+      }
+      if (endNgReg !== null && values[endNgReg] !== undefined) {
+        signals.END_NG = Number(values[endNgReg]) === endNgValue;
+      }
+      if (bypassReg !== null && values[bypassReg] !== undefined) {
+        signals.BYPASS = Number(values[bypassReg]) === bypassValue;
+      }
+      if (resetReg !== null && values[resetReg] !== undefined) {
+        signals.RESET = Number(values[resetReg]) > 0;
+      }
+      if (startReg !== null && values[startReg] !== undefined) {
+        signals.START = Number(values[startReg]) > 0;
       }
 
-      // Map register values back to signal names
-      const signals = {};
-      const endOkValue = Number(machine.plc_end_ok_value ?? 3);
-      const endNgValue = Number(machine.plc_end_ng_value ?? 4);
-      const startedValue = Number(machine.plc_started_value ?? 2);
-      for (const [reg, name] of Object.entries(registerMap)) {
-        const v = values[Number(reg)];
-        if (v === undefined || v === null) continue;
-        signals[name] = v;
-      }
-      // Derive logical flags from status register value
-      if (statusReg !== null && values[statusReg] !== undefined) {
-        const sv = values[statusReg];
-        signals.RUNNING = sv === startedValue;
-        signals.END_OK = sv === endOkValue;
-        signals.END_NG = sv === endNgValue;
-      }
       signals.TIMESTAMP = Date.now();
       return signals;
     } catch (error) {
@@ -255,31 +251,66 @@ class PlcPollingService {
       try {
         await plcStateMachineService.transition(machine.id, target);
       } catch (error) {
-        console.warn(`[PollingService] driveStateMachine transition suppressed ${state} -> ${target} for machine ${machine.id}: ${error.message}`);
+        logWarn("FSM_TRANSITION_FAILED", { machineId: machine.id, state, target, error: error.message });
       }
     };
 
     // Transition Logic based on signals
-    if (state === plcStateMachineService.states.START_SENT && signals.RUNNING) {
+    if ((state === plcStateMachineService.states.START_SENT || state === plcStateMachineService.states.WAITING_RUNNING) && signals.RUNNING) {
+      logPlc(machine.id, "FSM_SIGNAL", { state, signal: "RUNNING", next: "RUNNING" });
       await safeTransition(plcStateMachineService.states.RUNNING);
-    } else if (state === plcStateMachineService.states.WAITING_RUNNING && signals.RUNNING) {
-      await safeTransition(plcStateMachineService.states.RUNNING);
+      emitRealtime("operator_popup", {
+        type: "INFO",
+        machineId: machine.id,
+        machineName: machine.machine_name,
+        partId: machine.running_part_id, // Added partId for journey resolution
+        stationNo: machine.operation_no,
+        status: "RUNNING",
+        plcStatus: "RUNNING",
+        message: "IN PROCESS - Machine Cycle Running",
+        timestamp: new Date().toISOString()
+      });
     } else if (state === plcStateMachineService.states.RUNNING && !signals.RUNNING) {
+      logPlc(machine.id, "FSM_SIGNAL", { state, signal: "RUNNING_LOST", next: "WAITING_END" });
       await safeTransition(plcStateMachineService.states.WAITING_END);
     } else if (state === plcStateMachineService.states.WAITING_END) {
       if (signals.END_OK) {
+        logPlc(machine.id, "FSM_SIGNAL", { state, signal: "END_OK", next: "COMPLETED_OK" });
         await safeTransition(plcStateMachineService.states.COMPLETED_OK);
+        emitRealtime("operator_popup", {
+          type: "SUCCESS",
+          machineId: machine.id,
+          machineName: machine.machine_name,
+          status: "PASSED",
+          plcStatus: "ENDED_OK",
+          message: "PASSED - Cycle Completed Successfully",
+          timestamp: new Date().toISOString()
+        });
       } else if (signals.END_NG) {
+        logPlc(machine.id, "FSM_SIGNAL", { state, signal: "END_NG", next: "COMPLETED_NG" });
         await safeTransition(plcStateMachineService.states.COMPLETED_NG);
+        emitRealtime("operator_popup", {
+          type: "ERROR",
+          machineId: machine.id,
+          machineName: machine.machine_name,
+          status: "FAILED",
+          plcStatus: "ENDED_NG",
+          message: "FAILED - Cycle Completed NG",
+          timestamp: new Date().toISOString()
+        });
       }
     } else if (signals.RESET && state !== plcStateMachineService.states.RESETTING) {
+      logPlc(machine.id, "FSM_SIGNAL", { state, signal: "RESET_DETECTED", next: "RESETTING" });
       await safeTransition(plcStateMachineService.states.RESETTING);
     }
 
-    // Auto-idle after completion
-    if ([plcStateMachineService.states.COMPLETED_OK, plcStateMachineService.states.COMPLETED_NG].includes(state)) {
+    // Auto-idle after completion or validation block (Rule 3)
+    const isTerminal = [plcStateMachineService.states.COMPLETED_OK, plcStateMachineService.states.COMPLETED_NG].includes(state);
+    const isBlocked = [plcStateMachineService.states.BLOCKED, plcStateMachineService.states.INTERLOCKED].includes(state);
+
+    if (isTerminal || isBlocked) {
       // Delay slightly or wait for PLC to clear signals
-      if (!signals.END_OK && !signals.END_NG) {
+      if (!signals.END_OK && !signals.END_NG && !signals.START) {
         await safeTransition(plcStateMachineService.states.IDLE);
       }
     }

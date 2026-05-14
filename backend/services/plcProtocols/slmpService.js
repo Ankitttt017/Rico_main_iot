@@ -165,7 +165,7 @@ function parseSignalMap(raw) {
 
 function resolveDevice(machine, signalKey) {
   const fallback = normalizeDevice(process.env.PLC_SLMP_DEVICE || "D", "D");
-  
+
   let resolved = fallback;
   let source = "ENV_FALLBACK";
 
@@ -408,17 +408,16 @@ async function handshake({ ip, port, partId, stationNo, machine }) {
       ? null
       : Number(machine.plc_reset_register);
   const startValue = Number(machine?.plc_start_value ?? 1);
-  const startedValue = Number(machine?.plc_started_value ?? 2);
-  const endOkValue = Number(machine?.plc_end_ok_value ?? 3);
-  const endNgValue = Number(machine?.plc_end_ng_value ?? 4);
+  const startedValue = Number(machine?.plc_started_value ?? 1); // RUNNING = 1
+  const endOkValue = Number(machine?.plc_end_ok_value ?? 2);    // END_OK = 2
+  const endNgValue = Number(machine?.plc_end_ng_value ?? 2);    // END_NG = 2 (if different register)
   const resetValue = Number(machine?.plc_reset_value ?? 1);
-  
-  // Resolve advanced register mappings from JSON snapshot
-  const snapshot = parseMachineSnapshot(machine);
-  const endOkRegister = Number(snapshot?.endOkRegister ?? statusRegister);
-  const endNgRegister = Number(snapshot?.endNgRegister ?? statusRegister);
-  const deviceEndOk = endOkRegister !== statusRegister ? resolveDevice(machine, "END_OK") : resolveDevice(machine, "STATUS");
-  const deviceEndNg = endNgRegister !== statusRegister ? resolveDevice(machine, "END_NG") : resolveDevice(machine, "STATUS");
+
+  // Resolve advanced register mappings with priority to top-level columns
+  const endOkRegister = Number(machine?.plc_end_ok_register ?? statusRegister);
+  const endNgRegister = Number(machine?.plc_end_ng_register ?? statusRegister);
+  const deviceEndOk = machine?.plc_end_ok_register ? resolveDevice(machine, "END_OK") : resolveDevice(machine, "STATUS");
+  const deviceEndNg = machine?.plc_end_ng_register ? resolveDevice(machine, "END_NG") : resolveDevice(machine, "STATUS");
 
 
   if (!Number.isFinite(startRegister) || !Number.isFinite(statusRegister)) {
@@ -431,109 +430,109 @@ async function handshake({ ip, port, partId, stationNo, machine }) {
   for (const frameMode of frameModes) {
     try {
       return await withSocket({ ip, port, timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS }, async (socket) => {
-          const deviceStart = resolveDevice(machine, "TRIGGER");
-          const devicePart = resolveDevice(machine, "PART_ID");
-          const deviceStation = resolveDevice(machine, "STATION_ID");
-          const deviceRunning = resolveDevice(machine, "RUNNING");
-          const deviceEndOk = resolveDevice(machine, "END_OK");
-          const deviceEndNg = resolveDevice(machine, "END_NG");
-          const deviceReset = resolveDevice(machine, "RESET");
-          const deviceStatus = resolveDevice(machine, "STATUS");
+        const deviceStart = resolveDevice(machine, "TRIGGER");
+        const devicePart = resolveDevice(machine, "PART_ID");
+        const deviceStation = resolveDevice(machine, "STATION_ID");
+        const deviceRunning = resolveDevice(machine, "RUNNING");
+        const deviceEndOk = resolveDevice(machine, "END_OK");
+        const deviceEndNg = resolveDevice(machine, "END_NG");
+        const deviceReset = resolveDevice(machine, "RESET");
+        const deviceStatus = resolveDevice(machine, "STATUS");
 
-          console.log(`[PLC:REGISTER_RESOLVE] signal=START input=${machine.plc_start_register} resolve=${deviceStart}${startRegister}`);
-          console.log(`[PLC:REGISTER_RESOLVE] signal=STATUS input=${machine.plc_status_register} resolve=${deviceStatus}${statusRegister}`);
+        console.log(`[PLC:REGISTER_RESOLVE] signal=START input=${machine.plc_start_register} resolve=${deviceStart}${startRegister}`);
+        console.log(`[PLC:REGISTER_RESOLVE] signal=STATUS input=${machine.plc_status_register} resolve=${deviceStatus}${statusRegister}`);
 
-          console.log(`[PLC:CONFIG_LOADED] machineId=${machine.id} protocol=SLMP`);
-          console.log(`[PLC:HANDSHAKE_MODE] DIRECT_HANDSHAKE`);
-          console.log(`[PLC:SIGNALS_OK] START=${deviceStart}${startRegister} RUNNING=${deviceStatus}${statusRegister} RESET=${deviceReset}${resetRegister}`);
-          console.log(`[PLC:TIMEOUTS] connect=${DEFAULT_CONNECT_TIMEOUT_MS}ms startAck=${timing.startAckTimeoutMs}ms endAck=${timing.endAckTimeoutMs}ms poll=${timing.pollIntervalMs}ms hold=${timing.signalHoldMs}ms`);
+        console.log(`[PLC:CONFIG_LOADED] machineId=${machine.id} protocol=SLMP`);
+        console.log(`[PLC:HANDSHAKE_MODE] DIRECT_HANDSHAKE`);
+        console.log(`[PLC:SIGNALS_OK] START=${deviceStart}${startRegister} RUNNING=${deviceStatus}${statusRegister} RESET=${deviceReset}${resetRegister}`);
+        console.log(`[PLC:TIMEOUTS] connect=${DEFAULT_CONNECT_TIMEOUT_MS}ms startAck=${timing.startAckTimeoutMs}ms endAck=${timing.endAckTimeoutMs}ms poll=${timing.pollIntervalMs}ms hold=${timing.signalHoldMs}ms`);
 
-          const waitForStatus = async (acceptedValues, timeoutMs, label = "STATUS") => {
-            const deadline = Date.now() + timeoutMs;
-            while (Date.now() < deadline) {
-              const values = await readWords(socket, {
-                device: deviceStatus || "D",
-                address: statusRegister,
-                count: 1,
-                timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
-                frameMode,
-              });
-              const status = values[0];
-              console.log(`[PLC:POLL_${label}] ${deviceStatus}${statusRegister}=${status}`);
-              
-              if (acceptedValues.includes(status)) {
-                return status;
-              }
-              await sleep(timing.pollIntervalMs);
+        const waitForStatus = async (acceptedValues, timeoutMs, label = "STATUS") => {
+          const deadline = Date.now() + timeoutMs;
+          while (Date.now() < deadline) {
+            const values = await readWords(socket, {
+              device: deviceStatus || "D",
+              address: statusRegister,
+              count: 1,
+              timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
+              frameMode,
+            });
+            const status = values[0];
+            console.log(`[PLC:POLL_${label}] ${deviceStatus}${statusRegister}=${status}`);
+
+            if (acceptedValues.includes(status)) {
+              return status;
             }
-            throw new Error(`PLC SLMP ${label} timeout (expected ${acceptedValues.join(",")})`);
-          };
+            await sleep(timing.pollIntervalMs);
+          }
+          throw new Error(`PLC SLMP ${label} timeout (expected ${acceptedValues.join(",")})`);
+        };
 
-          let startCommandActive = false;
-          try {
-            if (partRegister !== null) {
-              const hash32p = hashToRegisterValue(partId);
-              const [phigh, plow] = split32To16(hash32p);
-              console.log(
-                `[PLC:SLMP] PART_ID_HASH hash32=${hash32p} dev=${devicePart} (High: 0x${phigh.toString(16).padStart(4, '0')}, Low: 0x${plow.toString(16).padStart(4, '0')})`
-              );
-              await writeWords(socket, {
-                device: devicePart,
-                address: partRegister,
-                values: [phigh, plow],
-                timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
-                frameMode,
-              });
-            }
-            if (stationRegister !== null) {
-              const hash32s = hashToRegisterValue(stationNo);
-              const [shigh, slow] = split32To16(hash32s);
-              console.log(
-                `[PLC:SLMP] STATION_HASH hash32=${hash32s} dev=${deviceStation} reg[${stationRegister}]=0x${shigh.toString(16).padStart(4, '0')} (high) reg[${stationRegister + 1}]=0x${slow.toString(16).padStart(4, '0')} (low)`
-              );
-              await writeWords(socket, {
-                device: deviceStation,
-                address: stationRegister,
-                values: [shigh, slow],
-                timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
-                frameMode,
-              });
-            }
+        let startCommandActive = false;
+        try {
+          if (partRegister !== null) {
+            const hash32p = hashToRegisterValue(partId);
+            const [phigh, plow] = split32To16(hash32p);
+            console.log(
+              `[PLC:SLMP] PART_ID_HASH hash32=${hash32p} dev=${devicePart} (High: 0x${phigh.toString(16).padStart(4, '0')}, Low: 0x${plow.toString(16).padStart(4, '0')})`
+            );
+            await writeWords(socket, {
+              device: devicePart,
+              address: partRegister,
+              values: [phigh, plow],
+              timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
+              frameMode,
+            });
+          }
+          if (stationRegister !== null) {
+            const hash32s = hashToRegisterValue(stationNo);
+            const [shigh, slow] = split32To16(hash32s);
+            console.log(
+              `[PLC:SLMP] STATION_HASH hash32=${hash32s} dev=${deviceStation} reg[${stationRegister}]=0x${shigh.toString(16).padStart(4, '0')} (high) reg[${stationRegister + 1}]=0x${slow.toString(16).padStart(4, '0')} (low)`
+            );
+            await writeWords(socket, {
+              device: deviceStation,
+              address: stationRegister,
+              values: [shigh, slow],
+              timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
+              frameMode,
+            });
+          }
 
-            // STEP 2 — Verify START Write Path
-            const currentStart = await readWords(socket, {
+          // STEP 2 — Verify START Write Path
+          const currentStart = await readWords(socket, {
+            device: deviceStart,
+            address: startRegister,
+            count: 1,
+            timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
+            frameMode,
+          });
+
+          if (currentStart[0] !== startValue) {
+            console.log(`[PLC:WRITE_ATTEMPT] register=${deviceStart}${startRegister} value=${startValue}`);
+            await writeWords(socket, {
+              device: deviceStart,
+              address: startRegister,
+              values: [startValue],
+              timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
+              frameMode,
+            });
+            console.log(`[PLC:WRITE_SUCCESS] register=${deviceStart}${startRegister} value=${startValue}`);
+
+            // Immediate Read Back for Verification
+            const verifyStart = await readWords(socket, {
               device: deviceStart,
               address: startRegister,
               count: 1,
               timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
               frameMode,
             });
+            console.log(`[PLC:VERIFY_START] actualValue=${verifyStart[0]}`);
+          } else {
+            console.log(`[PLC:WRITE_SKIPPED] register=${deviceStart}${startRegister} already active (value=${currentStart[0]})`);
+          }
 
-            if (currentStart[0] !== startValue) {
-              console.log(`[PLC:WRITE_ATTEMPT] register=${deviceStart}${startRegister} value=${startValue}`);
-              await writeWords(socket, {
-                device: deviceStart,
-                address: startRegister,
-                values: [startValue],
-                timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
-                frameMode,
-              });
-              console.log(`[PLC:WRITE_SUCCESS] register=${deviceStart}${startRegister} value=${startValue}`);
-              
-              // Immediate Read Back for Verification
-              const verifyStart = await readWords(socket, {
-                device: deviceStart,
-                address: startRegister,
-                count: 1,
-                timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
-                frameMode,
-              });
-              console.log(`[PLC:VERIFY_START] actualValue=${verifyStart[0]}`);
-            } else {
-              console.log(`[PLC:WRITE_SKIPPED] register=${deviceStart}${startRegister} already active (value=${currentStart[0]})`);
-            }
-
-            startCommandActive = true;
+          startCommandActive = true;
 
 
 
@@ -561,13 +560,13 @@ async function handshake({ ip, port, partId, stationNo, machine }) {
           if (firstStatus === startedValue) {
             console.log(`[PLC:RUNNING_DETECTED] machineId=${machine.id} value=${firstStatus}`);
             console.log(`[PLC:WAITING_END] machineId=${machine.id}`);
-            
+
             // Polling loop for END_OK (D2061) or END_NG (D2062)
             const endDeadline = Date.now() + timing.endAckTimeoutMs;
             let detected = false;
             while (Date.now() < endDeadline) {
               console.log(`[PLC:POLL_END] machineId=${machine.id} polling...`);
-              
+
               // Check OK Register (D2061)
               const okValues = await readWords(socket, {
                 device: deviceEndOk || "D",
@@ -576,7 +575,7 @@ async function handshake({ ip, port, partId, stationNo, machine }) {
                 timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
                 frameMode,
               });
-              
+
               if (okValues[0] === endOkValue) {
                 finalStatus = endOkValue;
                 finalAckType = "ACK_END_OK";
@@ -589,13 +588,13 @@ async function handshake({ ip, port, partId, stationNo, machine }) {
               const ngValues = await (endNgRegister === endOkRegister && deviceEndNg === deviceEndOk
                 ? Promise.resolve(okValues)
                 : readWords(socket, {
-                    device: deviceEndNg || "D",
-                    address: endNgRegister,
-                    count: 1,
-                    timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
-                    frameMode,
-                  }));
-              
+                  device: deviceEndNg || "D",
+                  address: endNgRegister,
+                  count: 1,
+                  timeoutMs: DEFAULT_CONNECT_TIMEOUT_MS,
+                  frameMode,
+                }));
+
               if (ngValues[0] === endNgValue) {
                 finalStatus = endNgValue;
                 finalAckType = "ACK_END_NG";

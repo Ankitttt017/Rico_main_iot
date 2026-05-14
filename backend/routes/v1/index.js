@@ -13,6 +13,7 @@ const roleAccessSettingsRoutes = require("./roleAccessSettingsRoutes");
 const partRoutes = require("./partRoutes"); // UPGRADE COMPLETE — Part Journey
 const alarmRoutes = require("./alarmRoutes");
 const industrialRoutes = require("./industrialRoutes");
+const reportRoutes = require("./reportRoutes");
 
 const router = express.Router();
 
@@ -27,6 +28,7 @@ router.use("/role-access-settings", roleAccessSettingsRoutes);
 router.use("/plc-config", plcConfigRoutes);
 router.use("/parts", partRoutes); // GET /api/parts/:partId/journey
 router.use("/alarms", alarmRoutes);
+router.use("/reports", reportRoutes);
 router.use(industrialRoutes);
 router.use(traceabilityRoutes);
 router.use(dashboardRoutes);

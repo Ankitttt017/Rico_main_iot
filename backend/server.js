@@ -54,7 +54,11 @@ const { getPartRoom, setSocketServer } = require("./services/realtimeService");
 const { resetAllMachineLocks } = require("./services/machineLockService");
 const scannerService = require("./services/scannerConnectionService");
 const { startAlarmMonitor } = require("./services/alarmService");
-const { ensureMachineQrScannerUniqueness } = require("./services/machineSchemaService");
+const {
+  ensureMachineQrScannerUniqueness,
+  ensurePerformanceColumnsExist,
+  ensureTraceabilityColumnsExist,
+} = require("./services/machineSchemaService");
 const { runStartupRecovery } = require("./services/startupRecoveryService");
 const {
   initializeIndustrialServices,
@@ -286,6 +290,8 @@ async function startServer() {
         throw syncError;
       }
     }
+    await runStartupDbTask("ensurePerformanceColumnsExist", () => ensurePerformanceColumnsExist());
+    await runStartupDbTask("ensureTraceabilityColumnsExist", () => ensureTraceabilityColumnsExist());
     await runStartupDbTask("ensureMachineQrScannerUniqueness", () => ensureMachineQrScannerUniqueness());
     await runStartupDbTask("resetAllMachineLocks", () => resetAllMachineLocks());
     await runStartupDbTask("resetAllScannerConnectionStates", () => scannerService.resetAllScannerConnectionStates());
@@ -317,5 +323,15 @@ async function startServer() {
     process.exit(1);
   }
 }
+
+// --- Industrial Runtime Protection ---
+process.on("uncaughtException", (error) => {
+  console.error("[CRITICAL:UNCAUGHT_EXCEPTION] Server survived an unexpected error:", error);
+  // Log details but DO NOT crash the process in production
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("[CRITICAL:UNHANDLED_REJECTION] Unhandled promise rejection at:", promise, "reason:", reason);
+});
 
 startServer();

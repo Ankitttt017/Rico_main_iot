@@ -24,6 +24,7 @@ import PlcConfiguration from "./pages/PlcConfiguration";
 import IoMonitor from "./pages/IoMonitor";
 import ReportConfiguration from "./pages/ReportConfiguration";
 import OrganizationStub from "./pages/OrganizationStub";
+import ReportsPage from "./pages/Reports/ReportsPage";
 import { getUserRole, isAuthenticated } from "./utils/authStorage";
 import { APP_ROUTES } from "./constants/routes";
 import { canAccessModule, getRoleAccessSettings } from "./utils/roleAccess";
@@ -179,6 +180,14 @@ function App() {
               element={
                 <ModuleRoute moduleKey="master_settings">
                   <ReportConfiguration />
+                </ModuleRoute>
+              }
+            />
+            <Route
+              path={APP_ROUTES.reports.slice(1)}
+              element={
+                <ModuleRoute moduleKey="dashboard">
+                  <ReportsPage />
                 </ModuleRoute>
               }
             />

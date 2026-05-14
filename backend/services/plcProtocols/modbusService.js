@@ -217,14 +217,13 @@ async function handshake({ ip, port, partId, stationNo, machine }) {
       ? null
       : normalizeModbusRegisterAddress(machine.plc_reset_register);
   const startValue = Number(machine?.plc_start_value ?? 1);
-  const startedValue = Number(machine?.plc_started_value ?? 2);
-  const endOkValue = Number(machine?.plc_end_ok_value ?? 3);
-  const endNgValue = Number(machine?.plc_end_ng_value ?? 4);
+  const startedValue = Number(machine?.plc_started_value ?? 1); // RUNNING = 1
+  const endOkValue = Number(machine?.plc_end_ok_value ?? 2);    // END_OK = 2
+  const endNgValue = Number(machine?.plc_end_ng_value ?? 2);    // END_NG = 2
   
-  // Resolve advanced register mappings from JSON snapshot
-  const snapshot = parseMachineSnapshot(machine);
-  const endOkRegister = snapshot?.endOkRegister ? normalizeModbusRegisterAddress(snapshot.endOkRegister) : statusRegister;
-  const endNgRegister = snapshot?.endNgRegister ? normalizeModbusRegisterAddress(snapshot.endNgRegister) : statusRegister;
+  // Resolve advanced register mappings with priority to top-level columns
+  const endOkRegister = machine?.plc_end_ok_register ? normalizeModbusRegisterAddress(machine.plc_end_ok_register) : statusRegister;
+  const endNgRegister = machine?.plc_end_ng_register ? normalizeModbusRegisterAddress(machine.plc_end_ng_register) : statusRegister;
 
   console.log(`[PLC:CONFIG_LOADED] machineId=${machine.id} protocol=MODBUS_TCP`);
   console.log(`[PLC:HANDSHAKE_MODE] ACK_DISABLED`);

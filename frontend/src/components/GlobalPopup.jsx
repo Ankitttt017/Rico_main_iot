@@ -15,48 +15,49 @@ import { getStationFeatures, getStationFeatureSettings } from "../utils/stationS
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:4000/api";
 
 // --- Resolver functions --------------------------------------------------------
+// --- Resolver functions --------------------------------------------------------
 function resolveQrState(popup = {}) {
-  const decision = String(
-    popup.qrResult ||
+  // Use explicit qrStatus from backend if available
+  const raw = String(
+    popup.qrStatus ||
+      popup.qrResult ||
       popup.qrDecision ||
       popup.decision ||
-      popup.outcome ||
-      popup.scanOutcome ||
-      popup.qrStatus ||
       ""
   )
     .trim()
     .toUpperCase();
-  if (["ALLOW", "PASS", "OK", "ACCEPT", "VALID"].includes(decision)) return "PASS";
-  if (["BLOCK", "FAIL", "NG", "REJECT", "INVALID"].includes(decision)) return "FAIL";
+    
+  if (["PASSED", "PASS", "ALLOW", "OK", "ACCEPT", "VALID"].includes(raw)) return "PASS";
+  if (["FAILED", "FAIL", "BLOCK", "NG", "REJECT", "INVALID"].includes(raw)) return "FAIL";
+  if (["DUPLICATE", "ALREADY_DONE"].includes(raw)) return "DUPLICATE";
+  if (["BLOCKED", "SEQUENCE_ERROR"].includes(raw)) return "BLOCKED";
+  if (["WAITING_SCAN", "WAITING", "IDLE"].includes(raw)) return "WAIT";
   return "WAIT";
 }
 
 function resolveOperationState(popup = {}) {
-  const status = String(
-    popup.plcStatus || popup.operationStatus || popup.status || ""
+  // Use explicit operationStatus from backend if available
+  const raw = String(
+    popup.operationStatus ||
+      popup.plcStatus ||
+      popup.status ||
+      ""
   )
     .trim()
     .toUpperCase();
     
-  // PRIORITY RULE: PASS > FAIL > RUN > WAIT
-  if (["ENDED_OK", "PASSED", "COMPLETED", "COMPLETED_OK", "PASS"].includes(status)) return "PASS";
-  if (["ENDED_NG", "COMPLETED_NG", "FAILED", "NG", "INTERLOCKED", "BLOCKED", "FAIL"].includes(status))
-    return "FAIL";
-    
-  // If RUNNING signal arrives → FORCE UI = IN PROCESS immediately
-  if (["RUNNING", "WAITING_END", "IN_PROGRESS", "IN PROCESS", "STARTED"].includes(status)) return "RUN";
+  // STRICT RULE: Only backend-confirmed states determine the operation result.
+  if (["PASSED", "PASS", "ENDED_OK", "COMPLETED", "COMPLETED_OK"].includes(raw)) return "PASS";
+  if (["FAILED", "FAIL", "ENDED_NG", "COMPLETED_NG", "NG"].includes(raw)) return "FAIL";
+  if (["RUNNING", "STARTED", "IN_PROGRESS", "IN PROCESS"].includes(raw)) return "RUN";
+  if (["WAITING_MACHINE", "START_SENT", "WAITING_RUNNING", "WAITING_PLC"].includes(raw)) return "WAIT_OP";
+  if (["WAITING", "OP_WAIT", "SCANNED", "VALIDATED", "PENDING"].includes(raw)) return "WAIT_OP";
+  if (["PLC_TIMEOUT", "TIMEOUT", "COMM_ERROR", "PLC_COMM_ERROR"].includes(raw)) return "COMM";
+  if (["INTERLOCKED"].includes(raw)) return "INTERLOCKED";
+  if (["BLOCKED"].includes(raw)) return "BLOCKED";
+  if (["RESETTING", "RECOVERING"].includes(raw)) return "RESETTING";
   
-  // WAITING_RUNNING / OP_WAIT → OP WAIT
-  if (["WAITING_RUNNING", "START_SENT", "OP_WAIT", "OP WAIT", "WAITING MACHINE START"].includes(status)) return "OP_WAIT";
-  
-  if (["SCANNED", "VALIDATED"].includes(status)) return "SCANNED";
-  
-  if (["RESETTING", "RECOVERING", "MACHINE_BUSY", "PENDING"].includes(status)) return "WAIT";
-  
-  if (["END_TIMEOUT", "RUNNING_TIMEOUT", "RESET_TIMEOUT", "CYCLE_TIMEOUT", "PLC_COMM_ERROR", "COMM_ERROR", "PLC_TIMEOUT", "TIMEOUT"].includes(status))
-    return "COMM";
-    
   return "IDLE";
 }
 
@@ -67,7 +68,6 @@ function resolveRejectionState(popup = {}, operationState) {
     .trim()
     .toUpperCase();
   if (["PASS", "FAIL", "PENDING"].includes(explicit)) return explicit;
-  if (operationState === "PASS" || operationState === "FAIL") return "PENDING";
   return "PENDING";
 }
 
@@ -76,17 +76,20 @@ export const StatusBadge = ({ status }) => {
   const statusMap = {
     PASS: { bg: "bg-success/15", text: "text-success", dot: "bg-success", label: "PASSED" },
     FAIL: { bg: "bg-danger/15", text: "text-danger", dot: "bg-danger", label: "FAILED" },
-    RUN: { bg: "bg-warning/15", text: "text-warning", dot: "bg-warning animate-pulse", label: "IN PROCESS" },
-    OP_WAIT: { bg: "bg-warning/10", text: "text-warning/80", dot: "bg-warning/60", label: "OP WAIT" },
+    DUPLICATE: { bg: "bg-amber-500/15", text: "text-amber-600", dot: "bg-amber-500", label: "DUPLICATE" },
+    BLOCKED: { bg: "bg-slate-500/15", text: "text-slate-600", dot: "bg-slate-500", label: "BLOCKED" },
+    RUN: { bg: "bg-warning/15", text: "text-warning", dot: "bg-warning animate-pulse", label: "OP RUNNING" },
+    WAIT_MACHINE: { bg: "bg-warning/10", text: "text-warning/80", dot: "bg-warning/60 animate-pulse", label: "WAITING MACHINE" },
+    WAIT_OP: { bg: "bg-primary/10", text: "text-primary/80", dot: "bg-primary/60", label: "OP WAIT" },
     SCANNED: { bg: "bg-primary/15", text: "text-primary", dot: "bg-primary", label: "SCANNED" },
     COMM: { bg: "bg-comm/15", text: "text-comm", dot: "bg-comm", label: "PLC FAULT" },
-    TIMEOUT: { bg: "bg-danger/15", text: "text-danger", dot: "bg-danger", label: "CYCLE TIMEOUT" },
+    INTERLOCKED: { bg: "bg-slate-500/15", text: "text-slate-600", dot: "bg-slate-500", label: "INTERLOCKED" },
+    RESETTING: { bg: "bg-amber-500/15", text: "text-amber-600", dot: "bg-amber-500 animate-spin", label: "RESETTING" },
     WAIT: { bg: "bg-bg-elevated", text: "text-text-muted", dot: "bg-border-strong", label: "WAITING" },
-    PENDING: { bg: "bg-bg-elevated", text: "text-text-muted", dot: "bg-border-strong", label: "PENDING" },
     IDLE: { bg: "bg-bg-elevated", text: "text-text-muted", dot: "bg-border-strong", label: "IDLE" },
   };
 
-  const theme = statusMap[status] || statusMap.WAIT;
+  const theme = statusMap[status] || statusMap.IDLE;
 
   return (
     <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold ${theme.bg} ${theme.text}`}>
@@ -466,11 +469,16 @@ const GlobalPopup = ({
         <div className="px-5 py-3 bg-bg-card border-t border-border/50 flex-shrink-0 space-y-2">
           {popup.message && (
             <div className={`p-2 rounded-lg border flex gap-1.5 items-start text-xs ${
-              liveOperationState === "FAIL" || liveQrState === "FAIL" ? "bg-danger/8 border-danger/20 text-danger" :
-              liveOperationState === "COMM" ? "bg-warning/8 border-warning/20 text-warning" :
+              liveOperationState === "FAIL" || liveQrState === "FAIL" || popup.type === "ERROR" ? "bg-danger/8 border-danger/20 text-danger" :
+              liveOperationState === "COMM" || popup.type === "WARNING" ? "bg-warning/8 border-warning/20 text-warning" :
+              popup.type === "SUCCESS" || popup.type === "INFO" ? "bg-success/15 border-success/30 text-success" :
               "bg-bg-elevated/30 border-border/30 text-text-muted"
             }`}>
-              <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
+              {popup.type === "SUCCESS" || popup.type === "INFO" ? (
+                <CheckCircle size={12} className="mt-0.5 flex-shrink-0" />
+              ) : (
+                <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
+              )}
               <p className="text-[11px] font-medium">{popup.message}</p>
             </div>
           )}

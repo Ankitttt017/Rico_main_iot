@@ -229,6 +229,7 @@ function toMachineResponse(machine) {
     plcSlmpFrameMode: plcConfig.slmpFrameMode || "AUTO",
     plcStartRegister: plain.plc_start_register,
     plcStatusRegister: plain.plc_status_register,
+    plcBlockRegister: plain.plc_block_register,
     plcPartRegister: plain.plc_part_register,
     plcStationRegister: plain.plc_station_register,
     plcResetRegister: plain.plc_reset_register,
@@ -249,6 +250,8 @@ function toMachineResponse(machine) {
     runningPartId: plain.running_part_id || null,
     runningStationNo: plain.running_station_no || null,
     runningStartedAt: plain.running_started_at || null,
+    cycleTime: plain.cycle_time || 0,
+    loadingTime: plain.loading_time || 0,
     plcConfig,
     plcSignalMap,
     spcConfig,
@@ -295,29 +298,29 @@ function normalizePayload(body = {}, existing = null) {
 
   const plcConfig = {
     rangeId: toInt(cfgRaw.rangeId ?? body.plcRangeId ?? body.plc_range_id ?? existing?.plc_range_id),
-    startRegister: toInt(cfgRaw.startRegister ?? body.plcStartRegister ?? body.plc_start_register ?? existing?.plc_start_register),
+    startRegister: toInt(cfgRaw.startRegister ?? body.plcStartRegister ?? body.plc_start_register ?? existing?.plc_start_register ?? 2060),
     statusRegister: toInt(
       cfgRaw.statusRegister ??
         cfgRaw.runningRegister ??
         body.plcStatusRegister ??
         body.plc_status_register ??
-        existing?.plc_status_register
+        existing?.plc_status_register ?? 2061
     ),
-    runningRegister: toInt(cfgRaw.runningRegister ?? existing?.plc_status_register),
-    blockRegister: toInt(cfgRaw.blockRegister ?? body.plcBlockRegister ?? body.plc_block_register),
-    endOkRegister: toInt(cfgRaw.endOkRegister ?? body.plcEndOkRegister ?? body.plc_end_ok_register),
-    endNgRegister: toInt(cfgRaw.endNgRegister ?? body.plcEndNgRegister ?? body.plc_end_ng_register),
+    runningRegister: toInt(cfgRaw.runningRegister ?? existing?.plc_status_register ?? 2061),
+    blockRegister: toInt(cfgRaw.blockRegister ?? body.plcBlockRegister ?? body.plc_block_register ?? 2060),
+    endOkRegister: toInt(cfgRaw.endOkRegister ?? body.plcEndOkRegister ?? body.plc_end_ok_register ?? 2061),
+    endNgRegister: toInt(cfgRaw.endNgRegister ?? body.plcEndNgRegister ?? body.plc_end_ng_register ?? 2062),
     partRegister: toInt(cfgRaw.partRegister ?? body.plcPartRegister ?? body.plc_part_register ?? existing?.plc_part_register),
     stationRegister: toInt(cfgRaw.stationRegister ?? body.plcStationRegister ?? body.plc_station_register ?? existing?.plc_station_register),
-    resetRegister: toInt(cfgRaw.resetRegister ?? body.plcResetRegister ?? body.plc_reset_register ?? existing?.plc_reset_register),
+    resetRegister: toInt(cfgRaw.resetRegister ?? body.plcResetRegister ?? body.plc_reset_register ?? existing?.plc_reset_register ?? 2063),
     heartbeatRegister: toInt(cfgRaw.heartbeatRegister ?? body.plcHeartbeatRegister ?? existing?.plc_heartbeat_register),
-    bypassRegister: toInt(cfgRaw.bypassRegister ?? body.plcBypassRegister),
+    bypassRegister: toInt(cfgRaw.bypassRegister ?? body.plcBypassRegister ?? 2065),
     startValue: toInt(cfgRaw.startValue ?? body.plcStartValue ?? body.plc_start_value ?? existing?.plc_start_value ?? 1),
-    startedValue: toInt(cfgRaw.startedValue ?? body.plcStartedValue ?? body.plc_started_value ?? existing?.plc_started_value ?? 2),
-    endOkValue: toInt(cfgRaw.endOkValue ?? body.plcEndOkValue ?? body.plc_end_ok_value ?? existing?.plc_end_ok_value ?? 3),
-    endNgValue: toInt(cfgRaw.endNgValue ?? body.plcEndNgValue ?? body.plc_end_ng_value ?? existing?.plc_end_ng_value ?? 4),
+    startedValue: toInt(cfgRaw.startedValue ?? body.plcStartedValue ?? body.plc_started_value ?? existing?.plc_started_value ?? 1),
+    endOkValue: toInt(cfgRaw.endOkValue ?? body.plcEndOkValue ?? body.plc_end_ok_value ?? existing?.plc_end_ok_value ?? 2),
+    endNgValue: toInt(cfgRaw.endNgValue ?? body.plcEndNgValue ?? body.plc_end_ng_value ?? existing?.plc_end_ng_value ?? 2),
     blockValue: toInt(cfgRaw.blockValue ?? body.plcBlockValue ?? body.plc_block_value ?? existing?.plc_block_value ?? 2),
-    resetValue: toInt(cfgRaw.resetValue ?? body.plcResetValue ?? body.plc_reset_value ?? existing?.plc_reset_value ?? 9),
+    resetValue: toInt(cfgRaw.resetValue ?? body.plcResetValue ?? body.plc_reset_value ?? existing?.plc_reset_value ?? 1),
     slmpFrameMode,
     handshakeMap: normalizeHandshakeMap(cfgRaw.handshakeMap),
   };
@@ -341,6 +344,7 @@ function normalizePayload(body = {}, existing = null) {
     plc_unit_id: toInt(body.plcUnitId ?? body.plc_unit_id ?? existing?.plc_unit_id ?? 1) || 1,
     plc_start_register: toInt(plcConfig.startRegister),
     plc_status_register: toInt(plcConfig.statusRegister ?? plcConfig.runningRegister),
+    plc_block_register: toInt(plcConfig.blockRegister),
     plc_part_register: toInt(plcConfig.partRegister),
     plc_station_register: toInt(plcConfig.stationRegister),
     plc_reset_register: toInt(plcConfig.resetRegister),
@@ -357,6 +361,8 @@ function normalizePayload(body = {}, existing = null) {
     plc_heartbeat_register: toInt(plcConfig.heartbeatRegister),
     plc_heartbeat_stale_ms: toPositiveInt(body.plcHeartbeatStaleMs ?? body.plc_heartbeat_stale_ms ?? existing?.plc_heartbeat_stale_ms),
     daily_target_qty: toPositiveInt(body.dailyTargetQty ?? body.daily_target_qty ?? existing?.daily_target_qty ?? 0) ?? 0,
+    cycle_time: toPositiveInt(body.cycleTime ?? body.cycle_time ?? existing?.cycle_time ?? 0) ?? 0,
+    loading_time: toPositiveInt(body.loadingTime ?? body.loading_time ?? existing?.loading_time ?? 0) ?? 0,
     status: normalizeStatus(body.status ?? existing?.status ?? "ACTIVE"),
     is_active:
       body.isActive !== undefined || body.is_active !== undefined

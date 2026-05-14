@@ -64,7 +64,17 @@ export const ENDPOINTS = {
     summary: "/dashboard/summary",
     trends: "/dashboard/trends",
     report: "/dashboard/report",
-    exportReport: "/dashboard/report/export",
+    exportReport: "/dashboard/report/export-full",
+    exportFullReport: "/dashboard/report/export-full",
+    exportPartsReport: "/dashboard/report/export-parts",
+    exportAuditReport: "/dashboard/report/export-audit",
+  },
+  reports: {
+    data: "/reports/report/data",
+    exportFull: "/reports/report/export-full",
+    exportNG: "/reports/report/export-ng",
+    exportParts: "/reports/report/export-parts",
+    exportAudit: "/reports/report/export-audit",
   },
   alarms: {
     base: "/alarms",

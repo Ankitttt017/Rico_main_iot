@@ -27,4 +27,5 @@ export const APP_ROUTES = {
   plants: "/organization/plants",
   divisions: "/organization/divisions",
   dies: "/organization/dies",
+  reports: "/reports",
 };

@@ -1,4 +1,5 @@
 const { Op, fn, col } = require("sequelize");
+const ExcelJS = require("exceljs");
 const Part = require("../models/Part");
 const Machine = require("../models/Machine");
 const Scanner = require("../models/Scanner");
@@ -6,6 +7,7 @@ const OperationLog = require("../models/OperationLog");
 const ProductionLog = require("../models/ProductionLog");
 const ReworkLog = require("../models/ReworkLog");
 const Shift = require("../models/Shift");
+const QrFormatRule = require("../models/QrFormatRule");
 const MachineRuntimeState = require("../models/MachineRuntimeState");
 const { saveScan } = require("../services/scanService");
 const { getPlcCircuitSnapshot } = require("../services/plcCommunicationService");
@@ -357,13 +359,13 @@ function parseMachineSignalMap(machine) {
   const raw = machine?.plc_signal_map;
   let parsed = raw;
   if (typeof raw === "string") {
-    try { parsed = JSON.parse(raw); } catch (e) {}
+    try { parsed = JSON.parse(raw); } catch (e) { }
   }
   const source = Array.isArray(parsed)
     ? parsed
     : parsed && typeof parsed === "object"
-    ? Object.entries(parsed).map(([key, value]) => ({ key, ...(value || {}) }))
-    : [];
+      ? Object.entries(parsed).map(([key, value]) => ({ key, ...(value || {}) }))
+      : [];
 
   for (const row of source) {
     const key = toUpper(row?.key || row?.signal || row?.name);
@@ -592,13 +594,22 @@ function resolveCurrentOperationForMachine(logs, machine) {
 }
 
 async function getLatestOperationLog(partId, stationNo) {
-  return OperationLog.findOne({
+  const station = normalizeStation(stationNo);
+  const logs = await OperationLog.findAll({
     where: {
       part_id: partId,
-      station_no: normalizeStation(stationNo),
+      station_no: station,
     },
     order: [["createdAt", "DESC"]],
   });
+
+  if (!logs.length) return null;
+
+  // Prioritize quality outcomes (PASS/NG) over administrative blocks (DUPLICATE/SEQUENCE)
+  const success = logs.find(l => ["ENDED_OK", "PASSED", "OK"].includes(toUpper(l.plc_status)) || ["PASS", "OK"].includes(toUpper(l.result)));
+  const ng = logs.find(l => ["ENDED_NG", "NG"].includes(toUpper(l.plc_status)) || ["FAIL", "NG"].includes(toUpper(l.result)));
+
+  return success || ng || logs[0];
 }
 
 async function safeRecordTimeline({
@@ -732,13 +743,19 @@ function mapScanDecisionToPopupType(scanResult) {
 
 function getBlockedPopupMessage(scanResult = {}) {
   const reason = String(scanResult?.reason || "").trim().toUpperCase();
+  const message = scanResult?.message || "";
+
   if (reason === "PREVIOUS_STATION_NOT_COMPLETED") {
-    return "BLOCKED - Previous Station Incomplete";
+    return `Station sequence skipped! Please complete operation at ${scanResult.expectedStation || "the previous station"} first.`;
   }
-  if (reason === "DUPLICATE_SCAN" || reason === "DUPLICATE_SCAN_IN_FLIGHT") {
-    return "BLOCKED - Duplicate Part";
+  if (reason === "DUPLICATE_SCAN" || reason === "DUPLICATE_SCAN_IN_FLIGHT" || reason === "ALREADY_COMPLETED") {
+    return `This part has already completed the ${scanResult.stationNo || "current"} operation. Duplicate scan detected.`;
   }
-  return scanResult?.message || reason || "BLOCKED";
+  // If it's a validation error, prefer the dynamic error message passed from the backend
+  if (reason === "VALIDATION_ERROR" && message) {
+    return message;
+  }
+  return message || reason || "BLOCKED";
 }
 
 function hasRejectionBinConfirmation(payload = {}) {
@@ -803,21 +820,21 @@ function getMachineSpcConfig(machine) {
     : [];
   const payloadResultNgValues = Array.isArray(source.payloadResultNgValues)
     ? source.payloadResultNgValues
-        .map((entry) => String(entry || "").trim().toUpperCase())
-        .filter(Boolean)
-        .slice(0, 20)
+      .map((entry) => String(entry || "").trim().toUpperCase())
+      .filter(Boolean)
+      .slice(0, 20)
     : ["NG", "FAIL", "0"];
   const plcResultOkValues = Array.isArray(source.plcResultOkValues)
     ? source.plcResultOkValues
-        .map((entry) => String(entry || "").trim().toUpperCase())
-        .filter(Boolean)
-        .slice(0, 20)
+      .map((entry) => String(entry || "").trim().toUpperCase())
+      .filter(Boolean)
+      .slice(0, 20)
     : ["1", "3", "OK", "PASS"];
   const plcResultNgValues = Array.isArray(source.plcResultNgValues)
     ? source.plcResultNgValues
-        .map((entry) => String(entry || "").trim().toUpperCase())
-        .filter(Boolean)
-        .slice(0, 20)
+      .map((entry) => String(entry || "").trim().toUpperCase())
+      .filter(Boolean)
+      .slice(0, 20)
     : ["0", "2", "NG", "FAIL"];
   return {
     enabled: source.enabled === true,
@@ -946,8 +963,8 @@ async function sendQualityCheckAckToPlc(machine, spcConfig, finalResult) {
     finalResult === "NG"
       ? spcConfig.plcAckNgValue
       : finalResult === "OK"
-      ? spcConfig.plcAckOkValue
-      : spcConfig.plcAckErrorValue;
+        ? spcConfig.plcAckOkValue
+        : spcConfig.plcAckErrorValue;
   if (protocol === "MODBUS_TCP") {
     await writeModbusRegister({
       ip,
@@ -1146,11 +1163,13 @@ async function startPlcFlow({ operationLogId, partId, stationNo, machine, userId
           stationNo,
           machineId: machine.id,
           machineName: machine.machine_name,
-          status: "STARTED",
+          qrStatus: "PASSED",
+          operationStatus: "RUNNING",
+          status: "RUNNING",
           plcStatus: "STARTED",
-          qrResult: "PASS",
-          message: "PLC start acknowledged",
+          message: "PLC cycle running",
         });
+        emitRealtime("PLC_RUNNING", { partId, machineId: machine.id, stationNo });
         emitRealtime("dashboard_refresh", { reason: "PLC_START_ACK" });
       },
       onEndedOk: async () => {
@@ -1174,11 +1193,13 @@ async function startPlcFlow({ operationLogId, partId, stationNo, machine, userId
           stationNo,
           machineId: machine.id,
           machineName: machine.machine_name,
+          qrStatus: "PASSED",
+          operationStatus: "PASSED",
           status: "ENDED_OK",
           plcStatus: "ENDED_OK",
-          qrResult: "PASS",
           message: "Operation Passed",
         });
+        emitRealtime("PLC_COMPLETED_OK", { partId, machineId: machine.id, stationNo });
         emitRealtime("dashboard_refresh", { reason: "PLC_END_OK" });
       },
       onEndedNg: async () => {
@@ -1203,11 +1224,13 @@ async function startPlcFlow({ operationLogId, partId, stationNo, machine, userId
           stationNo,
           machineId: machine.id,
           machineName: machine.machine_name,
+          qrStatus: "PASSED",
+          operationStatus: "FAILED",
           status: "ENDED_NG",
           plcStatus: "ENDED_NG",
-          qrResult: "PASS",
           message: "Operation Failed (NG)",
         });
+        emitRealtime("PLC_COMPLETED_NG", { partId, machineId: machine.id, stationNo });
         emitRealtime("dashboard_refresh", { reason: "PLC_END_NG" });
       },
       onError: async (error) => {
@@ -1233,9 +1256,10 @@ async function startPlcFlow({ operationLogId, partId, stationNo, machine, userId
           stationNo,
           machineId: machine.id,
           machineName: machine.machine_name,
+          qrStatus: "PASSED",
+          operationStatus: "PLC_TIMEOUT",
           status: "PLC_COMM_ERROR",
           plcStatus: "PLC_COMM_ERROR",
-          qrResult: "PASS",
           message: "PLC communication issue. Use Reset Operation, then scan again.",
         });
         emitRealtime("dashboard_refresh", { reason: "PLC_COMM_ERROR" });
@@ -1538,9 +1562,9 @@ exports.getLiveMachineState = async (req, res) => {
     const lastEvent = logs[0] || null;
     const plcHealth = getPlcHealthSnapshot(machine.id);
     const plcCircuit = getPlcCircuitSnapshot().find((entry) => entry.key === `machine:${machine.id}`) || null;
-    const scannerHealth = scannerConnectionManager.getStableSnapshot({ 
-      machineId: machine.id, 
-      scannerIp: scanner?.scanner_ip 
+    const scannerHealth = scannerConnectionManager.getStableSnapshot({
+      machineId: machine.id,
+      scannerIp: scanner?.scanner_ip
     }) || (await buildScannerHealth(scanner, machine.id));
     const machineState = plcHandshakeEngine.getState(machine.id);
 
@@ -1568,38 +1592,38 @@ exports.getLiveMachineState = async (req, res) => {
       plcQueue: plcConnectionManager.getQueueSnapshot(),
       scanner: scanner
         ? {
-            id: scanner.id,
-            scannerName: scanner.scanner_name,
-            scannerIp: scanner.scanner_ip,
-            scannerPort: scanner.scanner_port,
-            isActive: scanner.is_active,
-          }
+          id: scanner.id,
+          scannerName: scanner.scanner_name,
+          scannerIp: scanner.scanner_ip,
+          scannerPort: scanner.scanner_port,
+          isActive: scanner.is_active,
+        }
         : null,
       scannerHealth,
       machineState,
       current: current
         ? {
-            operationLogId: current.id,
-            partId: current.part_id,
-            plcStatus: current.plc_status,
-            result: current.result,
-            interlockReason: current.interlock_reason,
-            isBypassed: current.is_bypassed,
-            bypassReason: current.bypass_reason,
-            createdAt: current.createdAt,
-          }
+          operationLogId: current.id,
+          partId: current.part_id,
+          plcStatus: current.plc_status,
+          result: current.result,
+          interlockReason: current.interlock_reason,
+          isBypassed: current.is_bypassed,
+          bypassReason: current.bypass_reason,
+          createdAt: current.createdAt,
+        }
         : null,
       lastEvent: lastEvent
         ? {
-            operationLogId: lastEvent.id,
-            partId: lastEvent.part_id,
-            plcStatus: lastEvent.plc_status,
-            result: lastEvent.result,
-            interlockReason: lastEvent.interlock_reason,
-            isBypassed: lastEvent.is_bypassed,
-            bypassReason: lastEvent.bypass_reason,
-            createdAt: lastEvent.createdAt,
-          }
+          operationLogId: lastEvent.id,
+          partId: lastEvent.part_id,
+          plcStatus: lastEvent.plc_status,
+          result: lastEvent.result,
+          interlockReason: lastEvent.interlock_reason,
+          isBypassed: lastEvent.is_bypassed,
+          bypassReason: lastEvent.bypass_reason,
+          createdAt: lastEvent.createdAt,
+        }
         : null,
       recent: logs.map((row) => ({
         id: row.id,
@@ -1672,216 +1696,216 @@ exports.getIoSnapshot = async (req, res) => {
 
     const snapshotPromise = (async () => {
 
-    const stationNo = getMachineOperationStage(machine);
-    const [latestLog, scanner] = await Promise.all([
-      OperationLog.findOne({
-        where: stationNo
-          ? { machine_id: machine.id, station_no: stationNo }
-          : { machine_id: machine.id },
-        order: [["createdAt", "DESC"]],
-      }),
-      Scanner.findOne({
-        where: {
-          mapped_machine_id: machine.id,
-          is_active: true,
-        },
-        order: [["updatedAt", "DESC"]],
-      }),
-    ]);
+      const stationNo = getMachineOperationStage(machine);
+      const [latestLog, scanner] = await Promise.all([
+        OperationLog.findOne({
+          where: stationNo
+            ? { machine_id: machine.id, station_no: stationNo }
+            : { machine_id: machine.id },
+          order: [["createdAt", "DESC"]],
+        }),
+        Scanner.findOne({
+          where: {
+            mapped_machine_id: machine.id,
+            is_active: true,
+          },
+          order: [["updatedAt", "DESC"]],
+        }),
+      ]);
 
-    const protocol = toUpper(machine.plc_protocol || "TCP_TEXT");
-    const plcIp = machine.plc_ip || machine.machine_ip || null;
-    const plcPort = toIntegerOrNull(machine.plc_port || machine.machine_port);
-    const plcUnitId = toIntegerOrNull(machine.plc_unit_id) || 1;
-    const timeoutMs = toIntegerOrNull(machine.plc_test_timeout_ms) || 2000;
-    const signalMapEntries = parseMachineSignalMap(machine);
-    const registerList = signalMapEntries
-      .map((entry) => toIntegerOrNull(entry.register))
-      .filter((entry, index, array) => entry !== null && array.indexOf(entry) === index);
-    const slmpDefaultDevice = String(machine.plc_slmp_device || "D").trim().toUpperCase() || "D";
-    const slmpRegisterSpecs = registerList.map((registerNo) => {
-      const mapped = signalMapEntries.find((entry) => toIntegerOrNull(entry.register) === registerNo);
-      return {
-        register: registerNo,
-        device: String(mapped?.device || slmpDefaultDevice).trim().toUpperCase() || slmpDefaultDevice,
+      const protocol = toUpper(machine.plc_protocol || "TCP_TEXT");
+      const plcIp = machine.plc_ip || machine.machine_ip || null;
+      const plcPort = toIntegerOrNull(machine.plc_port || machine.machine_port);
+      const plcUnitId = toIntegerOrNull(machine.plc_unit_id) || 1;
+      const timeoutMs = toIntegerOrNull(machine.plc_test_timeout_ms) || 2000;
+      const signalMapEntries = parseMachineSignalMap(machine);
+      const registerList = signalMapEntries
+        .map((entry) => toIntegerOrNull(entry.register))
+        .filter((entry, index, array) => entry !== null && array.indexOf(entry) === index);
+      const slmpDefaultDevice = String(machine.plc_slmp_device || "D").trim().toUpperCase() || "D";
+      const slmpRegisterSpecs = registerList.map((registerNo) => {
+        const mapped = signalMapEntries.find((entry) => toIntegerOrNull(entry.register) === registerNo);
+        return {
+          register: registerNo,
+          device: String(mapped?.device || slmpDefaultDevice).trim().toUpperCase() || slmpDefaultDevice,
+        };
+      });
+
+      const errors = [];
+      const registerValues = {};
+      const checkedAt = new Date().toISOString();
+      const plcConnection = {
+        connected: false,
+        transportConnected: false,
+        readConnected: false,
+        protocol,
+        checkedAt,
+        error: null,
+        transportError: null,
+        readError: null,
       };
-    });
 
-    const errors = [];
-    const registerValues = {};
-    const checkedAt = new Date().toISOString();
-    const plcConnection = {
-      connected: false,
-      transportConnected: false,
-      readConnected: false,
-      protocol,
-      checkedAt,
-      error: null,
-      transportError: null,
-      readError: null,
-    };
+      if (!plcIp || !plcPort) {
+        plcConnection.error = "PLC endpoint missing on machine configuration";
+        errors.push(plcConnection.error);
+      } else {
+        try {
+          await probeTcpEndpoint({
+            ip: plcIp,
+            port: plcPort,
+            timeoutMs: Math.min(timeoutMs, 2000),
+          });
+          plcConnection.transportConnected = true;
+        } catch (error) {
+          const message = withPlcConnectivityHint(String(error.message || "Unable to connect to PLC endpoint"), {
+            ip: plcIp,
+            port: plcPort,
+            protocol,
+          });
+          plcConnection.transportError = message;
+          plcConnection.error = message;
+          errors.push(message);
+        }
+      }
 
-    if (!plcIp || !plcPort) {
-      plcConnection.error = "PLC endpoint missing on machine configuration";
-      errors.push(plcConnection.error);
-    } else {
-      try {
-        await probeTcpEndpoint({
-          ip: plcIp,
-          port: plcPort,
-          timeoutMs: Math.min(timeoutMs, 2000),
-        });
-        plcConnection.transportConnected = true;
-      } catch (error) {
-        const message = withPlcConnectivityHint(String(error.message || "Unable to connect to PLC endpoint"), {
+      if (plcIp && plcPort && protocol === "MODBUS_TCP") {
+        if (registerList.length === 0) {
+          const message = "No Modbus register mapped on this machine";
+          errors.push(message);
+          plcConnection.readError = message;
+          if (!plcConnection.error) {
+            plcConnection.error = message;
+          }
+        } else {
+          try {
+            const readResult = await readModbusRegisters({
+              ip: plcIp,
+              port: plcPort,
+              unitId: plcUnitId,
+              registers: registerList,
+              timeoutMs,
+            });
+            plcConnection.readConnected = true;
+            for (const [registerNo, value] of Object.entries(readResult.values || {})) {
+              registerValues[Number(registerNo)] = value;
+            }
+            if (Array.isArray(readResult.errors) && readResult.errors.length > 0) {
+              for (const row of readResult.errors) {
+                errors.push(
+                  `Register ${row.register}: ${row.message}`
+                );
+              }
+            }
+          } catch (error) {
+            const message = withPlcConnectivityHint(String(error.message || "Unable to read PLC register values"), {
+              ip: plcIp,
+              port: plcPort,
+              protocol,
+            });
+            plcConnection.readError = message;
+            plcConnection.error = message;
+            errors.push(message);
+          }
+        }
+      } else if (plcIp && plcPort && protocol === "SLMP") {
+        if (registerList.length === 0) {
+          const message = "No SLMP register mapped on this machine";
+          errors.push(message);
+          plcConnection.readError = message;
+          if (!plcConnection.error) {
+            plcConnection.error = message;
+          }
+        } else {
+          try {
+            let slmpFrameMode = "AUTO";
+            try {
+              const parsed = machine?.plc_registers ? JSON.parse(machine.plc_registers) : null;
+              const rawMode = String(parsed?.slmpFrameMode ?? parsed?.slmpFrame ?? parsed?.frameMode ?? "").trim().toUpperCase();
+              if (["ASCII", "BINARY", "AUTO"].includes(rawMode)) slmpFrameMode = rawMode;
+            } catch (_error) {
+              // keep AUTO
+            }
+            const readResult = await readSlmpRegisters({
+              ip: plcIp,
+              port: plcPort,
+              registers: slmpRegisterSpecs,
+              timeoutMs,
+              defaultDevice: slmpDefaultDevice,
+              frameMode: slmpFrameMode,
+            });
+            plcConnection.readConnected = true;
+            for (const [registerNo, value] of Object.entries(readResult.values || {})) {
+              registerValues[Number(registerNo)] = value;
+            }
+            if (Array.isArray(readResult.errors) && readResult.errors.length > 0) {
+              for (const row of readResult.errors) {
+                errors.push(`Register ${row.device || slmpDefaultDevice}${row.register}: ${row.message}`);
+              }
+            }
+          } catch (error) {
+            const message = withPlcConnectivityHint(String(error.message || "Unable to read SLMP register values"), {
+              ip: plcIp,
+              port: plcPort,
+              protocol,
+            });
+            plcConnection.readError = message;
+            plcConnection.error = message;
+            errors.push(message);
+          }
+        }
+      }
+
+      const stableState = applyPlcConnectionStability(machine.id, plcConnection);
+      plcConnection.connected = stableState.connected;
+      plcConnection.instantConnected = stableState.instantConnected;
+      plcConnection.failureCount = stableState.failureCount;
+      plcConnection.holdActive = stableState.holdActive;
+
+      const latestPlcStatus = toUpper(latestLog?.plc_status);
+      const rows = buildIoSignalRows(machine, registerValues, latestPlcStatus);
+      const plcHealth = getPlcHealthSnapshot(machine.id) || null;
+      const plcCircuit = getPlcCircuitSnapshot().find((entry) => entry.key === `machine:${machine.id}`) || null;
+      const scannerHealth = scannerConnectionManager.getStableSnapshot({ machineId: machine.id })
+        || (await buildScannerHealth(scanner, machine.id));
+      const machineState = plcHandshakeEngine.getState(machine.id);
+
+      const payload = {
+        snapshotAt: checkedAt,
+        machine: {
+          id: machine.id,
+          machineName: machine.machine_name,
+          lineName: machine.line_name,
+          sequenceNo: machine.sequence_no,
+          operationNo: machine.operation_no,
+          stationNo,
+          isRunning: Boolean(machine.is_running),
+          runningPartId: machine.running_part_id || null,
+          runningStationNo: machine.running_station_no || null,
+          runningStartedAt: machine.running_started_at || null,
+        },
+        plc: {
           ip: plcIp,
           port: plcPort,
           protocol,
-        });
-        plcConnection.transportError = message;
-        plcConnection.error = message;
-        errors.push(message);
-      }
-    }
-
-    if (plcIp && plcPort && protocol === "MODBUS_TCP") {
-      if (registerList.length === 0) {
-        const message = "No Modbus register mapped on this machine";
-        errors.push(message);
-        plcConnection.readError = message;
-        if (!plcConnection.error) {
-          plcConnection.error = message;
-        }
-      } else {
-        try {
-          const readResult = await readModbusRegisters({
-            ip: plcIp,
-            port: plcPort,
-            unitId: plcUnitId,
-            registers: registerList,
-            timeoutMs,
-          });
-          plcConnection.readConnected = true;
-          for (const [registerNo, value] of Object.entries(readResult.values || {})) {
-            registerValues[Number(registerNo)] = value;
-          }
-          if (Array.isArray(readResult.errors) && readResult.errors.length > 0) {
-            for (const row of readResult.errors) {
-              errors.push(
-                `Register ${row.register}: ${row.message}`
-              );
-            }
-          }
-        } catch (error) {
-          const message = withPlcConnectivityHint(String(error.message || "Unable to read PLC register values"), {
-            ip: plcIp,
-            port: plcPort,
-            protocol,
-          });
-          plcConnection.readError = message;
-          plcConnection.error = message;
-          errors.push(message);
-        }
-      }
-    } else if (plcIp && plcPort && protocol === "SLMP") {
-      if (registerList.length === 0) {
-        const message = "No SLMP register mapped on this machine";
-        errors.push(message);
-        plcConnection.readError = message;
-        if (!plcConnection.error) {
-          plcConnection.error = message;
-        }
-      } else {
-        try {
-          let slmpFrameMode = "AUTO";
-          try {
-            const parsed = machine?.plc_registers ? JSON.parse(machine.plc_registers) : null;
-            const rawMode = String(parsed?.slmpFrameMode ?? parsed?.slmpFrame ?? parsed?.frameMode ?? "").trim().toUpperCase();
-            if (["ASCII", "BINARY", "AUTO"].includes(rawMode)) slmpFrameMode = rawMode;
-          } catch (_error) {
-            // keep AUTO
-          }
-          const readResult = await readSlmpRegisters({
-            ip: plcIp,
-            port: plcPort,
-            registers: slmpRegisterSpecs,
-            timeoutMs,
-            defaultDevice: slmpDefaultDevice,
-            frameMode: slmpFrameMode,
-          });
-          plcConnection.readConnected = true;
-          for (const [registerNo, value] of Object.entries(readResult.values || {})) {
-            registerValues[Number(registerNo)] = value;
-          }
-          if (Array.isArray(readResult.errors) && readResult.errors.length > 0) {
-            for (const row of readResult.errors) {
-              errors.push(`Register ${row.device || slmpDefaultDevice}${row.register}: ${row.message}`);
-            }
-          }
-        } catch (error) {
-          const message = withPlcConnectivityHint(String(error.message || "Unable to read SLMP register values"), {
-            ip: plcIp,
-            port: plcPort,
-            protocol,
-          });
-          plcConnection.readError = message;
-          plcConnection.error = message;
-          errors.push(message);
-        }
-      }
-    }
-
-    const stableState = applyPlcConnectionStability(machine.id, plcConnection);
-    plcConnection.connected = stableState.connected;
-    plcConnection.instantConnected = stableState.instantConnected;
-    plcConnection.failureCount = stableState.failureCount;
-    plcConnection.holdActive = stableState.holdActive;
-
-    const latestPlcStatus = toUpper(latestLog?.plc_status);
-    const rows = buildIoSignalRows(machine, registerValues, latestPlcStatus);
-    const plcHealth = getPlcHealthSnapshot(machine.id) || null;
-    const plcCircuit = getPlcCircuitSnapshot().find((entry) => entry.key === `machine:${machine.id}`) || null;
-    const scannerHealth = scannerConnectionManager.getStableSnapshot({ machineId: machine.id })
-      || (await buildScannerHealth(scanner, machine.id));
-    const machineState = plcHandshakeEngine.getState(machine.id);
-
-    const payload = {
-      snapshotAt: checkedAt,
-      machine: {
-        id: machine.id,
-        machineName: machine.machine_name,
-        lineName: machine.line_name,
-        sequenceNo: machine.sequence_no,
-        operationNo: machine.operation_no,
-        stationNo,
-        isRunning: Boolean(machine.is_running),
-        runningPartId: machine.running_part_id || null,
-        runningStationNo: machine.running_station_no || null,
-        runningStartedAt: machine.running_started_at || null,
-      },
-      plc: {
-        ip: plcIp,
-        port: plcPort,
-        protocol,
-        unitId: plcUnitId,
-      },
-      plcConnection,
-      plcHealth,
-      plcCircuit,
-      plcQueue: plcConnectionManager.getQueueSnapshot(),
-      scanner: scanner
-        ? {
+          unitId: plcUnitId,
+        },
+        plcConnection,
+        plcHealth,
+        plcCircuit,
+        plcQueue: plcConnectionManager.getQueueSnapshot(),
+        scanner: scanner
+          ? {
             id: scanner.id,
             scannerName: scanner.scanner_name,
             scannerIp: scanner.scanner_ip,
             scannerPort: scanner.scanner_port,
             isActive: scanner.is_active,
           }
-        : null,
-      scannerHealth,
-      machineState,
-      latestOperation: latestLog
-        ? {
+          : null,
+        scannerHealth,
+        machineState,
+        latestOperation: latestLog
+          ? {
             operationLogId: latestLog.id,
             partId: latestLog.part_id,
             plcStatus: latestLog.plc_status,
@@ -1889,18 +1913,18 @@ exports.getIoSnapshot = async (req, res) => {
             interlockReason: latestLog.interlock_reason,
             createdAt: latestLog.createdAt,
           }
-        : null,
-      rows,
-      errors,
-      monitorPolicy: {
-        minIntervalMs: IO_SNAPSHOT_MIN_INTERVAL_MS,
-        cacheMaxAgeMs: IO_SNAPSHOT_CACHE_MAX_AGE_MS,
-        servedFromCache: false,
-        throttled: false,
-        cacheAgeMs: 0,
-      },
-    };
-    return payload;
+          : null,
+        rows,
+        errors,
+        monitorPolicy: {
+          minIntervalMs: IO_SNAPSHOT_MIN_INTERVAL_MS,
+          cacheMaxAgeMs: IO_SNAPSHOT_CACHE_MAX_AGE_MS,
+          servedFromCache: false,
+          throttled: false,
+          cacheAgeMs: 0,
+        },
+      };
+      return payload;
     })();
 
     ioSnapshotInFlight.set(cacheKey, snapshotPromise);
@@ -1968,9 +1992,9 @@ exports.getPartJourney = async (req, res) => {
     const machineRows =
       machineIds.length > 0
         ? await Machine.findAll({
-            where: { id: { [Op.in]: machineIds } },
-            attributes: ["id", "machine_name", "operation_no", "sequence_no"],
-          })
+          where: { id: { [Op.in]: machineIds } },
+          attributes: ["id", "machine_name", "operation_no", "sequence_no"],
+        })
         : [];
 
     const machineMap = machineRows.reduce((acc, machine) => {
@@ -2012,8 +2036,8 @@ exports.getPartJourney = async (req, res) => {
       !part || part.status === "COMPLETED"
         ? null
         : currentIndex < 0
-        ? sequenceData.sequence[0] || null
-        : sequenceData.sequence[currentIndex + 1] || null;
+          ? sequenceData.sequence[0] || null
+          : sequenceData.sequence[currentIndex + 1] || null;
 
     const stationTimeline = knownStations.map((stationNo, idx) => {
       const attempts = (logsByStation[stationNo] || []).map((row) => ({
@@ -2173,8 +2197,8 @@ exports.getPartCatalog = async (req, res) => {
       }
       partWhere.part_id = partWhere.part_id
         ? {
-            [Op.and]: [partWhere.part_id, { [Op.in]: scopedPartIds }],
-          }
+          [Op.and]: [partWhere.part_id, { [Op.in]: scopedPartIds }],
+        }
         : { [Op.in]: scopedPartIds };
     }
 
@@ -2202,10 +2226,10 @@ exports.getPartCatalog = async (req, res) => {
       .filter((entry) => Number.isFinite(entry));
     const machineRows = machineIds.length
       ? await Machine.findAll({
-          where: { id: { [Op.in]: machineIds } },
-          attributes: ["id", "machine_name", "line_name", "operation_no"],
-          raw: true,
-        })
+        where: { id: { [Op.in]: machineIds } },
+        attributes: ["id", "machine_name", "line_name", "operation_no"],
+        raw: true,
+      })
       : [];
     const machineMap = machineRows.reduce((acc, row) => {
       acc[row.id] = row;
@@ -2363,35 +2387,35 @@ exports.getMachineStationStats = async (req, res) => {
       plcCircuit,
       scanner: scanner
         ? {
-            id: scanner.id,
-            scannerName: scanner.scanner_name,
-            scannerIp: scanner.scanner_ip,
-            scannerPort: scanner.scanner_port,
-            isActive: scanner.is_active,
-          }
+          id: scanner.id,
+          scannerName: scanner.scanner_name,
+          scannerIp: scanner.scanner_ip,
+          scannerPort: scanner.scanner_port,
+          isActive: scanner.is_active,
+        }
         : null,
       scannerHealth,
       summary,
       trend,
       current: current
         ? {
-            operationLogId: current.id,
-            partId: current.part_id,
-            plcStatus: current.plc_status,
-            result: current.result,
-            interlockReason: current.interlock_reason,
-            createdAt: current.createdAt,
-          }
+          operationLogId: current.id,
+          partId: current.part_id,
+          plcStatus: current.plc_status,
+          result: current.result,
+          interlockReason: current.interlock_reason,
+          createdAt: current.createdAt,
+        }
         : null,
       lastEvent: lastEvent
         ? {
-            operationLogId: lastEvent.id,
-            partId: lastEvent.part_id,
-            plcStatus: lastEvent.plc_status,
-            result: lastEvent.result,
-            interlockReason: lastEvent.interlock_reason,
-            createdAt: lastEvent.createdAt,
-          }
+          operationLogId: lastEvent.id,
+          partId: lastEvent.part_id,
+          plcStatus: lastEvent.plc_status,
+          result: lastEvent.result,
+          interlockReason: lastEvent.interlock_reason,
+          createdAt: lastEvent.createdAt,
+        }
         : null,
       recentParts,
     });
@@ -2444,7 +2468,7 @@ exports.processScan = async (req, res) => {
     }
     const hasSpcResultInput = Boolean(
       spcConfig.enabled &&
-        (spcConfig.mode === "PLC_REGISTER" ? plcQualityResult?.result : spcResultInput)
+      (spcConfig.mode === "PLC_REGISTER" ? plcQualityResult?.result : spcResultInput)
     );
     const hasManualResultInput = Boolean(resultInput);
     const qualityPayload = extractQualityPayload(req.body, machine);
@@ -2469,29 +2493,29 @@ exports.processScan = async (req, res) => {
     const spcResolvedResult = spcConfig.mode === "PLC_REGISTER"
       ? plcQualityResult?.result || null
       : hasSpcResultInput
-      ? spcResultIsNg
-        ? "NG"
-        : "OK"
-      : null;
+        ? spcResultIsNg
+          ? "NG"
+          : "OK"
+        : null;
     const finalResult = rejectionBinConfirmed
       ? "NG"
       : spcResolvedResult
-      ? spcResolvedResult
-      : hasManualResultInput
-      ? resultInput
-      : "OK";
+        ? spcResolvedResult
+        : hasManualResultInput
+          ? resultInput
+          : "OK";
     const ngReason = rejectionBinConfirmed ? "REJECTION_BIN_CONFIRMED" : undefined;
     const resultSource = rejectionBinConfirmed
       ? "PLC_REJECTION_BIN"
       : spcResolvedResult
-      ? spcConfig.mode === "PLC_REGISTER"
-        ? "QUALITY_CHECK_PLC_REGISTER"
-        : "QUALITY_CHECK_IP_PAYLOAD"
-      : manualResultEnabled
-      ? "MANUAL_OK_NG"
-      : hasManualResultInput
-      ? "PLC_PAYLOAD"
-      : "DEFAULT_OK";
+        ? spcConfig.mode === "PLC_REGISTER"
+          ? "QUALITY_CHECK_PLC_REGISTER"
+          : "QUALITY_CHECK_IP_PAYLOAD"
+        : manualResultEnabled
+          ? "MANUAL_OK_NG"
+          : hasManualResultInput
+            ? "PLC_PAYLOAD"
+            : "DEFAULT_OK";
     const machineBypassEnabled = isMachineBypassEnabled(machine.id);
     const bypassState = machineBypassEnabled ? getMachineBypass(machine.id) : null;
     const response = await saveScan(normalizedPartId, normalizedStation, finalResult, machine.id, req.user?.id, {
@@ -2500,10 +2524,10 @@ exports.processScan = async (req, res) => {
       resultInput: spcConfig.mode === "PLC_REGISTER"
         ? normalizeQualityToken(plcQualityResult?.token || plcQualityResult?.rawValue || finalResult)
         : hasSpcResultInput
-        ? spcResultInput
-        : hasManualResultInput
-        ? resultInput
-        : finalResult,
+          ? spcResultInput
+          : hasManualResultInput
+            ? resultInput
+            : finalResult,
       qualityPayload,
       skipInterlockValidation: machineBypassEnabled,
       skipDuplicateValidation: machineBypassEnabled,
@@ -2549,24 +2573,30 @@ exports.processScan = async (req, res) => {
       requiredPlcPartCount,
     });
 
-    const qrStatus = response.decision === "ALLOW" ? "PASS" : "FAIL";
-    const operationStatus = response.operationStatus || (response.decision === "ALLOW" ? "PENDING" : "WAIT");
-    const popupType =
-      response.decision === "ALLOW" && operationStatus === "ENDED_OK" ? "SUCCESS" : mapScanDecisionToPopupType(response);
-    const popupMessage = response.decision === "ALLOW" ? (response.message || "Scan processed") : getBlockedPopupMessage(response);
-    emitOperatorPopup(popupType, {
+    const qrStatus = response.qrStatus || (response.decision === "ALLOW" ? "PASSED" : "FAILED");
+    const operationStatus = response.operationStatus || (response.decision === "ALLOW" ? "WAITING" : "BLOCKED");
+
+    emitOperatorPopup(response.decision === "ALLOW" ? "INFO" : "ERROR", {
       partId: normalizedPartId,
       stationNo: normalizedStation,
       machineId: machine.id,
       machineName: machine.machine_name,
-      status: response.decision === "ALLOW" ? operationStatus : "BLOCKED",
-      plcStatus: response.decision === "ALLOW" ? operationStatus : "BLOCKED",
-      qrResult: qrStatus,
+      qrStatus,
+      operationStatus,
+      status: response.decision === "ALLOW" ? "SCANNED" : "BLOCKED",
+      plcStatus: response.decision === "ALLOW" ? "WAITING_PLC" : "BLOCKED",
       reason: response.reason || null,
       expectedStation: response.expectedStation || null,
-      qrReason: response.reason || null,
-      message: popupMessage,
+      message: response.decision === "ALLOW"
+        ? `QR PASS - Starting ${normalizedStation}`
+        : getBlockedPopupMessage(response),
     });
+
+    if (response.decision === "ALLOW") {
+      emitRealtime("QR_VALIDATED", { partId: normalizedPartId, machineId: machine.id, stationNo: normalizedStation });
+    } else if (response.reason === "DUPLICATE_SCAN") {
+      emitRealtime("DUPLICATE_SCAN_BLOCKED", { partId: normalizedPartId, machineId: machine.id, stationNo: normalizedStation });
+    }
 
     response.qrStatus = qrStatus;
     response.operationStatus = operationStatus;
@@ -2631,7 +2661,7 @@ exports.verifyScanForOperator = async (req, res) => {
     }
     const hasSpcResultInput = Boolean(
       spcConfig.enabled &&
-        (spcConfig.mode === "PLC_REGISTER" ? plcQualityResult?.result : spcResultInput)
+      (spcConfig.mode === "PLC_REGISTER" ? plcQualityResult?.result : spcResultInput)
     );
     const hasManualResultInput = Boolean(resultInput);
     const qualityPayload = extractQualityPayload(req.body, machine);
@@ -2646,29 +2676,29 @@ exports.verifyScanForOperator = async (req, res) => {
     const spcResolvedResult = spcConfig.mode === "PLC_REGISTER"
       ? plcQualityResult?.result || null
       : hasSpcResultInput
-      ? spcResultIsNg
-        ? "NG"
-        : "OK"
-      : null;
+        ? spcResultIsNg
+          ? "NG"
+          : "OK"
+        : null;
     const finalResult = rejectionBinConfirmed
       ? "NG"
       : spcResolvedResult
-      ? spcResolvedResult
-      : hasManualResultInput
-      ? resultInput
-      : "OK";
+        ? spcResolvedResult
+        : hasManualResultInput
+          ? resultInput
+          : "OK";
     const ngReason = rejectionBinConfirmed ? "REJECTION_BIN_CONFIRMED" : undefined;
     const resultSource = rejectionBinConfirmed
       ? "PLC_REJECTION_BIN"
       : spcResolvedResult
-      ? spcConfig.mode === "PLC_REGISTER"
-        ? "QUALITY_CHECK_PLC_REGISTER"
-        : "QUALITY_CHECK_IP_PAYLOAD"
-      : manualResultEnabled
-      ? "MANUAL_OK_NG"
-      : hasManualResultInput
-      ? "PLC_PAYLOAD"
-      : "DEFAULT_OK";
+        ? spcConfig.mode === "PLC_REGISTER"
+          ? "QUALITY_CHECK_PLC_REGISTER"
+          : "QUALITY_CHECK_IP_PAYLOAD"
+        : manualResultEnabled
+          ? "MANUAL_OK_NG"
+          : hasManualResultInput
+            ? "PLC_PAYLOAD"
+            : "DEFAULT_OK";
     const machineBypassEnabled = isMachineBypassEnabled(machine.id);
     const bypassState = machineBypassEnabled ? getMachineBypass(machine.id) : null;
     const response = await saveScan(normalizedPartId, stationNo, finalResult, machine.id, req.user?.id, {
@@ -2677,10 +2707,10 @@ exports.verifyScanForOperator = async (req, res) => {
       resultInput: spcConfig.mode === "PLC_REGISTER"
         ? normalizeQualityToken(plcQualityResult?.token || plcQualityResult?.rawValue || finalResult)
         : hasSpcResultInput
-        ? spcResultInput
-        : hasManualResultInput
-        ? resultInput
-        : finalResult,
+          ? spcResultInput
+          : hasManualResultInput
+            ? resultInput
+            : finalResult,
       qualityPayload,
       skipInterlockValidation: machineBypassEnabled,
       skipDuplicateValidation: machineBypassEnabled,
@@ -3539,8 +3569,10 @@ exports.getProcessFlow = async (req, res) => {
 
 function getDateRangeFromQuery(query) {
   const now = new Date();
-  const from = query.dateFrom ? new Date(query.dateFrom) : new Date(now.getTime() - 24 * 60 * 60 * 1000);
-  const to = query.dateTo ? new Date(query.dateTo) : now;
+  const fromCandidate = query?.dateFrom ? new Date(query.dateFrom) : new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const toCandidate = query?.dateTo ? new Date(query.dateTo) : now;
+  const from = Number.isNaN(fromCandidate.getTime()) ? new Date(now.getTime() - 24 * 60 * 60 * 1000) : fromCandidate;
+  const to = Number.isNaN(toCandidate.getTime()) ? now : toCandidate;
   return { from, to };
 }
 
@@ -3701,10 +3733,10 @@ exports.getDashboardSummary = async (req, res) => {
         group: ["status"],
         raw: true,
       }),
-      ProductionLog.findAll({
+      OperationLog.findAll({
         where: logWhere,
         order: [["createdAt", "DESC"]],
-        limit: 500,
+        limit: 50,
         raw: true,
       }),
       ProductionLog.findAll({
@@ -3751,13 +3783,21 @@ exports.getDashboardSummary = async (req, res) => {
 
     const recentScans = filteredRecentRows.map((row) => {
       const machine = machineMap[row.machine_id] || {};
+      const start = row.plc_start_time || row.plc_start_at || row.createdAt;
+      const end = row.plc_end_time || row.plc_end_at || null;
+      let cycleTime = null;
+      if (start && end) {
+        cycleTime = Math.max(0, (new Date(end).getTime() - new Date(start).getTime()) / 1000).toFixed(1);
+      }
       return {
         partId: row.part_id,
-        stationNo: machine.operation_no || null,
-        station: machine.operation_no || null,
+        stationNo: row.station_no || machine.operation_no || null,
+        station: row.station_no || machine.operation_no || null,
         machine: machine.machine_name || null,
         lineName: machine.line_name || null,
-        result: row.status,
+        result: row.result || (["STARTED", "PENDING"].includes(String(row.plc_status).toUpperCase()) ? "WIP" : row.plc_status),
+        plcStatus: row.plc_status,
+        cycleTime,
         timestamp: row.createdAt,
       };
     });
@@ -3783,6 +3823,7 @@ exports.getDashboardSummary = async (req, res) => {
       quality: {
         ok: okLogs,
         ng: ngLogs,
+        interlocked: interlockedCount,
       },
       shiftProduction,
       availableShifts: shifts.map((shift) => ({
@@ -3908,7 +3949,7 @@ exports.getDashboardReport = async (req, res) => {
       }),
       OperationLog.findAll({
         where: operationWhere,
-        attributes: ["id", "part_id", "machine_id", "station_no", "operation_no", "plc_status", "result", "user_id", "interlock_reason", "createdAt"],
+        attributes: ["id", "part_id", "machine_id", "station_no", "operation_no", "plc_status", "result", "user_id", "interlock_reason", "plc_start_time", "plc_start_at", "plc_end_time", "plc_end_at", "createdAt"],
         raw: true,
       }),
       OperationLog.findAll({
@@ -4001,13 +4042,13 @@ exports.getDashboardReport = async (req, res) => {
 
       if (plcStatus === "ENDED_OK" && result === "OK") {
         machineCardMap[machineId].okCount += 1;
-      } else if (plcStatus === "ENDED_NG" && result === "NG") {
+      } else if (plcStatus === "ENDED_NG" || result === "NG") {
         machineCardMap[machineId].ngCount += 1;
-      } else if (plcStatus === "INTERLOCKED") {
+      } else if (plcStatus === "INTERLOCKED" || plcStatus === "BLOCKED") {
         machineCardMap[machineId].interlockedCount += 1;
       } else if (plcStatus === "PLC_COMM_ERROR") {
         machineCardMap[machineId].commErrorCount += 1;
-      } else if (plcStatus === "PENDING" || plcStatus === "STARTED") {
+      } else if (["PENDING", "STARTED", "RUNNING", "IN_PROGRESS", "START_SENT", "WAITING_RUNNING", "WAITING_END"].includes(plcStatus)) {
         machineCardMap[machineId].inProgressCount += 1;
       }
     }
@@ -4123,16 +4164,24 @@ exports.getDashboardReport = async (req, res) => {
       const machine = machineMetaById[Number(row.machine_id)] || machineRowMapById[Number(row.machine_id)] || {};
       const plcStatus = String(row.plc_status || "").trim().toUpperCase();
       const result = String(row.result || "").trim().toUpperCase();
-      let statusLabel = "RUNNING";
-      if (plcStatus === "INTERLOCKED") {
+      let statusLabel = "IDLE";
+      if (plcStatus === "INTERLOCKED" || plcStatus === "PLC_COMM_ERROR") {
         statusLabel = "BLOCKED";
       } else if (plcStatus === "ENDED_OK" && result === "OK") {
         statusLabel = "PASSED";
       } else if (plcStatus === "ENDED_NG" || result === "NG") {
         statusLabel = "FAILED";
-      } else if (plcStatus === "PLC_COMM_ERROR") {
-        statusLabel = "BLOCKED";
+      } else if (["STARTED", "PENDING", "IN_PROGRESS"].includes(plcStatus)) {
+        statusLabel = "RUNNING";
       }
+
+      const start = row.plc_start_time || row.plc_start_at || row.createdAt;
+      const end = row.plc_end_time || row.plc_end_at || null;
+      let cycleTime = null;
+      if (start && end) {
+        cycleTime = Math.max(0, (new Date(end).getTime() - new Date(start).getTime()) / 1000).toFixed(1);
+      }
+
       return {
         id: row.id,
         partId: row.part_id,
@@ -4145,6 +4194,7 @@ exports.getDashboardReport = async (req, res) => {
         status: statusLabel,
         reason: row.interlock_reason || null,
         interlockReason: row.interlock_reason || null,
+        cycleTime,
         createdAt: row.createdAt,
       };
     });
@@ -4190,92 +4240,471 @@ exports.getDashboardReport = async (req, res) => {
   }
 };
 
-exports.exportDashboardReportCsv = async (req, res) => {
-  try {
-    const { from, to } = getDateRangeFromQuery(req.query);
-    const shiftCodeFilter = req.query.shiftCode ? String(req.query.shiftCode).trim().toUpperCase() : null;
-    const lineNameFilter = normalizeLineName(req.query.lineName);
-    const where = {
-      createdAt: { [Op.gte]: from, [Op.lte]: to },
-    };
-    if (lineNameFilter) {
-      const rows = await Machine.findAll({
-        where: { line_name: lineNameFilter, is_active: true },
-        attributes: ["id"],
-        raw: true,
-      });
-      const ids = rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id) && id > 0);
-      if (!ids.length) {
-        res.setHeader("Content-Type", "text/csv");
-        res.setHeader("Content-Disposition", `attachment; filename=TRACEABILITY_REPORT_${buildReportFileTimestamp()}.csv`);
-        return res.send("PART_ID,LINE,STATION,MACHINE,SHIFT,STATUS,RESULT,TIMESTAMP\n");
-      }
-      where.machine_id = { [Op.in]: ids };
-    }
-    if (req.query.machineId) {
-      where.machine_id = Number(req.query.machineId);
-    }
-    if (req.query.partId) {
-      where.part_id = req.query.partId;
-    }
-    if (req.query.status) {
-      where.status = String(req.query.status).toUpperCase();
-    }
+const DEFAULT_REPORT_COLUMNS = [
+  { id: "partId", label: "Part Serial No", enabled: true },
+  { id: "createdAt", label: "Timestamp", enabled: true },
+  { id: "shiftCode", label: "Shift", enabled: true },
+  { id: "operationNo", label: "Operation No", enabled: true },
+  { id: "machineName", label: "Machine Name", enabled: true },
+  { id: "modelCode", label: "Model Code", enabled: true },
+  { id: "qrFormatName", label: "Model Name", enabled: true },
+  { id: "status", label: "Result (OK/NG)", enabled: true },
+  { id: "reason", label: "Reason", enabled: true },
+  { id: "lineName", label: "Line No", enabled: true },
+  { id: "operatorId", label: "Operator ID", enabled: false },
+  { id: "cycleTime", label: "Cycle Time (s)", enabled: false },
+  { id: "plcStatus", label: "PLC Status", enabled: false },
+];
 
-    const [rows, shifts] = await Promise.all([
-      ProductionLog.findAll({
-        where,
-        order: [["createdAt", "DESC"]],
-        raw: true,
-      }),
-      getActiveShiftDefinitions(),
-    ]);
-
-    const filteredRows = applyShiftFilter(rows, shiftCodeFilter, shifts);
-    const machineIds = uniqueStages(filteredRows.map((row) => String(row.machine_id || "")).filter(Boolean))
-      .map((entry) => Number(entry))
-      .filter((entry) => Number.isFinite(entry));
-    const machineRows = machineIds.length
-      ? await Machine.findAll({
-          where: { id: { [Op.in]: machineIds } },
-          attributes: ["id", "machine_name", "line_name", "operation_no"],
-          raw: true,
-        })
-      : [];
-    const machineMap = machineRows.reduce((acc, row) => {
-      acc[row.id] = row;
-      return acc;
-    }, {});
-
-    const header = "PART_ID,LINE,STATION,MACHINE,SHIFT,STATUS,RESULT,REASON,TIMESTAMP";
-    const body = filteredRows
-      .map((row) => {
-        const machine = machineMap[row.machine_id] || {};
-        const result = String(row.status || "").trim().toUpperCase();
-        const statusText = result === "OK" ? "PASSED" : "FAILED";
-        const fields = [
-          row.part_id || "",
-          machine.line_name || "",
-          machine.operation_no || "",
-          machine.machine_name || "",
-          resolveShiftCodeForDate(row.createdAt, shifts),
-          statusText,
-          result,
-          row.ng_reason || "",
-          formatReportTimestamp(row.createdAt),
-        ];
-        return fields.map((value) => toCsvField(value)).join(",");
-      })
-      .join("\n");
-    const csv = `${header}\n${body}`;
-
-    res.setHeader("Content-Type", "text/csv");
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename=TRACEABILITY_REPORT_${buildReportFileTimestamp()}.csv`
-    );
-    res.send(csv);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+const DEFAULT_EXPORT_REPORT_CONFIG = {
+  companyName: "Traceability System",
+  plantName: "-",
+  projectTitle: "Production Traceability",
+  reportTitle: "Production Report",
+  logoUrl: "",
+  headerLine1: "Production Traceability Report",
+  headerLine2: "Industrial Analytics",
+  footerText: "Confidential - Internal Use Only",
+  location: "-",
+  preparedBy: "",
+  approvedBy: "",
+  department: "Production",
+  showLogo: true,
+  showDate: true,
+  showShift: true,
+  showMachine: true,
+  columns: DEFAULT_REPORT_COLUMNS,
 };
+
+function normalizeReportColumns(rawColumns) {
+  const defaultsById = new Map(DEFAULT_REPORT_COLUMNS.map((row) => [row.id, row]));
+  const used = new Set();
+  const merged = [];
+  const incoming = Array.isArray(rawColumns) ? rawColumns : [];
+
+  for (const column of incoming) {
+    if (!column || typeof column !== "object") continue;
+    const id = String(column.id || "").trim();
+    if (!id || used.has(id)) continue;
+    const base = defaultsById.get(id);
+    if (!base) continue;
+    used.add(id);
+    merged.push({
+      id,
+      label: String(column.label || base.label || id),
+      enabled: column.enabled !== false,
+    });
+  }
+
+  for (const base of DEFAULT_REPORT_COLUMNS) {
+    if (used.has(base.id)) continue;
+    merged.push({ ...base });
+  }
+
+  return merged;
+}
+
+function normalizeExportReportConfig(rawConfig = {}) {
+  const source = rawConfig && typeof rawConfig === "object" ? rawConfig : {};
+  return {
+    ...DEFAULT_EXPORT_REPORT_CONFIG,
+    ...source,
+    columns: normalizeReportColumns(source.columns),
+  };
+}
+
+function getExportPayload(req) {
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  const filters = body.filters && typeof body.filters === "object" ? body.filters : req.query || {};
+  const reportConfig = normalizeExportReportConfig(body.reportConfig || {});
+  return { filters, reportConfig };
+}
+
+function toDisplayDateTime(value) {
+  if (!value) return "-";
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return String(value);
+  return dt.toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function normalizeResultToken(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function deriveOperationStatus(row) {
+  const plcStatus = normalizeResultToken(row?.plc_status);
+  const result = normalizeResultToken(row?.result);
+  if (result === "OK" || plcStatus === "ENDED_OK") return "OK";
+  if (result === "NG" || plcStatus === "ENDED_NG") return "NG";
+  return "";
+}
+
+function matchesStatusFilter(row, statusFilter) {
+  if (!statusFilter) return true;
+  const token = String(statusFilter || "").trim().toUpperCase();
+  if (!token) return true;
+  const values = [
+    normalizeResultToken(row.status),
+    normalizeResultToken(row.result),
+    normalizeResultToken(row.plcStatus),
+  ];
+  if (token === "WIP") return values.includes("RUNNING") || values.includes("PENDING") || values.includes("STARTED");
+  return values.includes(token);
+}
+
+async function getDashboardExportRows(filters) {
+  const query = filters && typeof filters === "object" ? filters : {};
+  const { from, to } = getDateRangeFromQuery(query);
+  const shiftCodeFilter = query?.shiftCode ? String(query.shiftCode).trim().toUpperCase() : null;
+  const lineNameFilter = normalizeLineName(query?.lineName);
+  const statusFilter = String(query?.status || "").trim().toUpperCase();
+  const operatorIdFilter = Number(query?.operatorId || 0) || null;
+  const operationWhere = {
+    createdAt: { [Op.gte]: from, [Op.lte]: to },
+  };
+
+  if (lineNameFilter) {
+    const lineMachines = await Machine.findAll({
+      where: { line_name: lineNameFilter, is_active: true },
+      attributes: ["id"],
+      raw: true,
+    });
+    const lineMachineIds = lineMachines.map((row) => Number(row.id)).filter((id) => Number.isFinite(id) && id > 0);
+    if (!lineMachineIds.length) {
+      return [];
+    }
+    operationWhere.machine_id = { [Op.in]: lineMachineIds };
+  }
+
+  if (query?.machineId) {
+    operationWhere.machine_id = Number(query.machineId);
+  }
+  if (query?.partId) {
+    operationWhere.part_id = { [Op.like]: `%${String(query.partId).trim()}%` };
+  }
+  if (operatorIdFilter) {
+    operationWhere.user_id = operatorIdFilter;
+  }
+
+  const [operationRows, shifts] = await Promise.all([
+    OperationLog.findAll({
+      where: operationWhere,
+      order: [["createdAt", "DESC"]],
+      raw: true,
+    }),
+    getActiveShiftDefinitions(),
+  ]);
+
+  const shiftFilteredRows = applyShiftFilter(operationRows, shiftCodeFilter, shifts);
+  const machineIds = uniqueStages(shiftFilteredRows.map((row) => String(row.machine_id || "")).filter(Boolean))
+    .map((entry) => Number(entry))
+    .filter((entry) => Number.isFinite(entry));
+  const machineRows = machineIds.length
+    ? await Machine.findAll({
+      where: { id: { [Op.in]: machineIds } },
+      attributes: ["id", "machine_name", "line_name", "operation_no"],
+      raw: true,
+    })
+    : [];
+  const machineMap = machineRows.reduce((acc, row) => {
+    acc[row.id] = row;
+    return acc;
+  }, {});
+
+  const partIds = uniqueStages(shiftFilteredRows.map((row) => String(row.part_id || "").trim()).filter(Boolean));
+  const partRows = partIds.length
+    ? await Part.findAll({
+      where: { part_id: { [Op.in]: partIds } },
+      attributes: ["part_id", "qr_format_name"],
+      raw: true,
+    })
+    : [];
+  const partMap = partRows.reduce((acc, row) => {
+    acc[row.part_id] = row;
+    return acc;
+  }, {});
+  const qrFormatNames = uniqueStages(partRows.map((row) => String(row.qr_format_name || "").trim()).filter(Boolean));
+  const qrRuleRows = qrFormatNames.length
+    ? await QrFormatRule.findAll({
+      where: { format_name: { [Op.in]: qrFormatNames } },
+      attributes: ["format_name", "model_code"],
+      raw: true,
+    })
+    : [];
+  const modelByFormat = qrRuleRows.reduce((acc, row) => {
+    acc[String(row.format_name || "").trim()] = String(row.model_code || "").trim();
+    return acc;
+  }, {});
+
+  const mappedRows = shiftFilteredRows.map((row) => {
+    const machine = machineMap[row.machine_id] || {};
+    const part = partMap[row.part_id] || {};
+    const qrFormatName = String(part.qr_format_name || "").trim();
+    const modelCode = modelByFormat[qrFormatName] || "";
+    const status = deriveOperationStatus(row);
+    const result = normalizeResultToken(row.result);
+    const plcStatus = normalizeResultToken(row.plc_status);
+    const start = row.plc_start_time || row.plc_start_at || null;
+    const end = row.plc_end_time || row.plc_end_at || null;
+    const cycleTime = start && end
+      ? Number(Math.max(0, (new Date(end).getTime() - new Date(start).getTime()) / 1000).toFixed(1))
+      : null;
+
+    return {
+      partId: row.part_id || "",
+      modelCode,
+      qrFormatName,
+      machineName: machine.machine_name || "",
+      lineName: machine.line_name || "",
+      stationNo: row.station_no || machine.operation_no || "",
+      operationNo: row.operation_no || "",
+      shiftCode: resolveShiftCodeForDate(row.createdAt, shifts) || "",
+      status,
+      result,
+      plcStatus,
+      reason: row.interlock_reason || "",
+      operatorId: row.user_id || "",
+      cycleTime: cycleTime === null ? "" : cycleTime,
+      createdAt: formatReportTimestamp(row.createdAt),
+      createdAtRaw: row.createdAt,
+    };
+  });
+
+  return mappedRows.filter((row) => matchesStatusFilter(row, statusFilter));
+}
+
+function tryParseHexColor(colorValue, fallbackArgb) {
+  const value = String(colorValue || "").trim();
+  const match = value.match(/^#?([0-9a-fA-F]{6})$/);
+  if (!match) return fallbackArgb;
+  return `FF${match[1].toUpperCase()}`;
+}
+
+async function resolveLogoImageBase64(logoUrl) {
+  const input = String(logoUrl || "").trim();
+  if (!input) return null;
+  if (/^data:image\/(png|jpe?g);base64,/i.test(input)) {
+    return input;
+  }
+  if (!/^https?:\/\//i.test(input)) {
+    return null;
+  }
+  try {
+    const response = await fetch(input);
+    if (!response.ok) return null;
+    const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+    if (!contentType.includes("image/")) return null;
+    const arrayBuffer = await response.arrayBuffer();
+    const binary = Buffer.from(arrayBuffer).toString("base64");
+    const type = contentType.includes("png") ? "png" : "jpeg";
+    return `data:image/${type};base64,${binary}`;
+  } catch {
+    return null;
+  }
+}
+
+function buildFilterSummaryRows(filters, rowsCount) {
+  const query = filters && typeof filters === "object" ? filters : {};
+  const selected = [
+    ["From", query.dateFrom ? toDisplayDateTime(query.dateFrom) : "-"],
+    ["To", query.dateTo ? toDisplayDateTime(query.dateTo) : "-"],
+    ["Line", query.lineName || "-"],
+    ["Machine", query.machineId || "-"],
+    ["Part", query.partId || "-"],
+    ["Status", query.status || "-"],
+    ["Shift", query.shiftCode || "-"],
+    ["Operator", query.operatorId || "-"],
+  ];
+  const selectedCount = selected.filter((row) => row[1] && row[1] !== "-").length;
+  const appliedText = selected
+    .filter((row) => row[1] && row[1] !== "-")
+    .map(([label, value]) => `${label}: ${value}`)
+    .join("  |  ");
+  return {
+    selected,
+    selectedCount,
+    rowsCount,
+    appliedText,
+  };
+}
+
+async function sendDashboardExcel(res, { rows, filters, reportConfig, sheetName, filePrefix }) {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet(sheetName);
+  const config = normalizeExportReportConfig(reportConfig || {});
+  const navColor = tryParseHexColor(config.reportAccentColor || "#1A3A7C", "FF1A3A7C");
+  const headerBgColor = tryParseHexColor(config.reportHeaderBgColor || "#EAF0F8", "FFEAF0F8");
+  const headerTextColor = "FFFFFFFF";
+  const borderColor = "FFD8DEE8";
+  const filterSummary = buildFilterSummaryRows(filters, rows.length);
+
+  const logoBase64 = config.showLogo ? await resolveLogoImageBase64(config.logoUrl) : null;
+  let rowPtr = 1;
+
+  if (logoBase64) {
+    const extMatch = logoBase64.match(/^data:image\/(png|jpe?g);base64,/i);
+    const extension = extMatch && extMatch[1].toLowerCase().startsWith("png") ? "png" : "jpeg";
+    const imageId = workbook.addImage({ base64: logoBase64, extension });
+    worksheet.addImage(imageId, { tl: { col: 0, row: 0 }, ext: { width: 170, height: 62 } });
+    worksheet.mergeCells("C1:I1");
+    worksheet.mergeCells("C2:I2");
+    worksheet.mergeCells("C3:I3");
+    worksheet.mergeCells("C4:I4");
+    worksheet.getCell("C1").value = config.headerLine1 || config.companyName;
+    worksheet.getCell("C2").value = config.headerLine2 || config.projectTitle;
+    worksheet.getCell("C3").value = config.reportTitle || "Production Report";
+    worksheet.getCell("C4").value = `Generated: ${toDisplayDateTime(new Date())}   |   Sign Date: ${toDisplayDateTime(new Date())}`;
+    rowPtr = 6;
+  } else {
+    worksheet.mergeCells("A1:I1");
+    worksheet.mergeCells("A2:I2");
+    worksheet.mergeCells("A3:I3");
+    worksheet.mergeCells("A4:I4");
+    worksheet.getCell("A1").value = config.headerLine1 || config.companyName;
+    worksheet.getCell("A2").value = config.headerLine2 || config.projectTitle;
+    worksheet.getCell("A3").value = config.reportTitle || "Production Report";
+    worksheet.getCell("A4").value = `Generated: ${toDisplayDateTime(new Date())}   |   Sign Date: ${toDisplayDateTime(new Date())}`;
+    rowPtr = 6;
+  }
+
+  ["A1", "A2", "A3", "A4", "C1", "C2", "C3", "C4"].forEach((ref) => {
+    const cell = worksheet.getCell(ref);
+    if (!cell.value) return;
+    cell.alignment = { vertical: "middle", horizontal: ref.endsWith("1") || ref.endsWith("3") ? "left" : "left" };
+    if (ref.endsWith("1")) cell.font = { bold: true, size: 14, color: { argb: navColor } };
+    else if (ref.endsWith("3")) cell.font = { bold: true, size: 13, color: { argb: "FF243A53" } };
+    else cell.font = { size: 10, color: { argb: "FF5B6574" } };
+  });
+
+  worksheet.getCell(`A${rowPtr}`).value = `Plant: ${config.plantName || "-"}   |   Department: ${config.department || "-"}   |   Location: ${config.location || "-"}`;
+  worksheet.mergeCells(`A${rowPtr}:I${rowPtr}`);
+  worksheet.getCell(`A${rowPtr}`).font = { size: 10, color: { argb: "FF415167" } };
+  rowPtr += 1;
+
+  const appliedFiltersText = filterSummary.appliedText || "No filters selected";
+  worksheet.getCell(`A${rowPtr}`).value = `Applied Filters (${filterSummary.selectedCount})  |  Rows: ${filterSummary.rowsCount}  |  ${appliedFiltersText}`;
+  worksheet.mergeCells(`A${rowPtr}:I${rowPtr}`);
+  worksheet.getCell(`A${rowPtr}`).font = { bold: true, size: 10, color: { argb: navColor } };
+  worksheet.getCell(`A${rowPtr}`).fill = { type: "pattern", pattern: "solid", fgColor: { argb: headerBgColor } };
+  rowPtr += 1;
+
+  rowPtr += 1;
+
+  const columnMeta = {
+    partId: { key: "partId", width: 22 },
+    modelCode: { key: "modelCode", width: 16 },
+    qrFormatName: { key: "qrFormatName", width: 20 },
+    machineName: { key: "machineName", width: 20 },
+    lineName: { key: "lineName", width: 14 },
+    stationNo: { key: "stationNo", width: 12 },
+    operationNo: { key: "operationNo", width: 13 },
+    shiftCode: { key: "shiftCode", width: 12 },
+    status: { key: "status", width: 12 },
+    result: { key: "result", width: 12 },
+    plcStatus: { key: "plcStatus", width: 15 },
+    reason: { key: "reason", width: 28 },
+    operatorId: { key: "operatorId", width: 12 },
+    cycleTime: { key: "cycleTime", width: 14 },
+    createdAt: { key: "createdAt", width: 21 },
+  };
+
+  const enabledColumns = config.columns.filter((column) => column.enabled !== false);
+  const normalizedColumns = (enabledColumns.length ? enabledColumns : DEFAULT_REPORT_COLUMNS.filter((row) => row.enabled)).map((column) => {
+    const meta = columnMeta[column.id] || { key: column.id, width: 18 };
+    return {
+      header: column.label || column.id,
+      key: meta.key,
+      width: meta.width,
+    };
+  });
+
+  worksheet.columns = normalizedColumns;
+  const headerRowNumber = rowPtr;
+  const headerRow = worksheet.getRow(headerRowNumber);
+  headerRow.values = normalizedColumns.map((column) => column.header);
+  headerRow.height = 22;
+  headerRow.font = { bold: true, color: { argb: headerTextColor }, size: 10 };
+  headerRow.alignment = { horizontal: "center", vertical: "middle" };
+  headerRow.eachCell((cell) => {
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: navColor } };
+    cell.border = {
+      top: { style: "thin", color: { argb: borderColor } },
+      left: { style: "thin", color: { argb: borderColor } },
+      bottom: { style: "thin", color: { argb: borderColor } },
+      right: { style: "thin", color: { argb: borderColor } },
+    };
+  });
+
+  const dataRows = rows.map((row) => {
+    const payload = {};
+    for (const column of normalizedColumns) {
+      payload[column.key] = row[column.key] ?? "";
+    }
+    return payload;
+  });
+  worksheet.addRows(dataRows);
+
+  const statusColumnIndex = normalizedColumns.findIndex((column) => column.key === "status") + 1;
+  for (let r = headerRowNumber + 1; r <= worksheet.rowCount; r += 1) {
+    const excelRow = worksheet.getRow(r);
+    if (statusColumnIndex > 0) {
+      const statusToken = normalizeResultToken(excelRow.getCell(statusColumnIndex)?.value);
+      if (statusToken === "OK") {
+        excelRow.getCell(statusColumnIndex).fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "FFEAF8EE" },
+        };
+      } else if (statusToken === "NG") {
+        excelRow.getCell(statusColumnIndex).fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "FFFDECEC" },
+        };
+      } else if (statusToken) {
+        excelRow.getCell(statusColumnIndex).fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "FFFFF7E8" },
+        };
+      }
+    }
+
+    excelRow.eachCell((cell) => {
+      cell.border = {
+        top: { style: "thin", color: { argb: borderColor } },
+        left: { style: "thin", color: { argb: borderColor } },
+        bottom: { style: "thin", color: { argb: borderColor } },
+        right: { style: "thin", color: { argb: borderColor } },
+      };
+      cell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+    });
+  }
+
+  const footerRow = worksheet.rowCount + 2;
+  worksheet.getCell(`A${footerRow}`).value = config.footerText || "Confidential - Internal Use Only";
+  worksheet.getCell(`A${footerRow}`).font = { size: 10, italic: true, color: { argb: "FF66748A" } };
+  worksheet.mergeCells(`A${footerRow}:E${footerRow}`);
+  worksheet.getCell(`F${footerRow}`).value = `Prepared By: ${config.preparedBy || "-"}`;
+  worksheet.getCell(`G${footerRow}`).value = `Approved By: ${config.approvedBy || "-"}`;
+  worksheet.getCell(`H${footerRow}`).value = "Signed Date:";
+  worksheet.getCell(`I${footerRow}`).value = toDisplayDateTime(new Date());
+  worksheet.getCell(`H${footerRow}`).font = { bold: true, size: 10, color: { argb: "FF44566E" } };
+
+  worksheet.views = [{ state: "frozen", ySplit: headerRowNumber }];
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename=${filePrefix}_${buildReportFileTimestamp()}.xlsx`);
+  res.send(Buffer.from(buffer));
+}
+
+// Legacy export functions removed. Using reportController instead.
+

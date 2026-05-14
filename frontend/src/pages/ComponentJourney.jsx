@@ -9,6 +9,8 @@
 // ============================================================
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
+import ExcelJS from "exceljs";
+import { saveAs } from "file-saver";
 import {
   AlertTriangle, CheckCircle2, Clock3, RefreshCw, RotateCcw,
   Search, X, XCircle, Activity, Layers, ChevronRight,
@@ -594,7 +596,7 @@ const ComponentJourney = () => {
     finally { setRefreshing(false); }
   },[loadPartCatalog,searchTerm,refreshJourneyNow]);
 
-  const exportJourneyReport = useCallback((format = "csv") => {
+  const exportJourneyReport = useCallback(async () => {
     const rows = (stationTimeline || []).map((station) => {
       const latest = Array.isArray(station.attempts) && station.attempts.length > 0
         ? station.attempts[station.attempts.length - 1]
@@ -613,33 +615,124 @@ const ComponentJourney = () => {
       return;
     }
 
-    const pad = (v) => String(v).padStart(2, "0");
-    const now = new Date();
-    const stamp = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
-    const nameBase = `TRACEABILITY_REPORT_${stamp}`;
-    const header = ["PART_ID","STATION","STATE","LATEST_STATUS","RESULT","REMARK","TIMESTAMP"];
-    const lines = [
-      header.join(","),
-      ...rows.map((row) => [
-        selectedPartId || "",
-        row.stationNo,
-        row.stageState,
-        row.latestStatus,
-        row.latestResult,
-        row.interlockReason,
-        row.completedAt ? new Date(row.completedAt).toLocaleString() : "",
-      ].map((cell) => `"${String(cell || "").replace(/"/g, '""')}"`).join(",")),
-    ];
-    const csv = lines.join("\n");
-    const blob = new Blob([csv], {
-      type: format === "excel" ? "application/vnd.ms-excel;charset=utf-8;" : "text/csv;charset=utf-8;",
-    });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `${nameBase}.${format === "excel" ? "xls" : "csv"}`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    try {
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet("Traceability Report");
+
+      // Set column widths
+      sheet.columns = [
+        { header: "Part ID", key: "partId", width: 25 },
+        { header: "Station", key: "stationNo", width: 15 },
+        { header: "State", key: "stageState", width: 15 },
+        { header: "Latest Status", key: "latestStatus", width: 20 },
+        { header: "Result", key: "latestResult", width: 15 },
+        { header: "Remark", key: "interlockReason", width: 35 },
+        { header: "Timestamp", key: "completedAt", width: 25 }
+      ];
+
+      // Add Title
+      sheet.insertRow(1, ["Industrial Traceability System - Part Journey Report"]);
+      sheet.mergeCells("A1:G1");
+      const titleRow = sheet.getRow(1);
+      titleRow.font = { name: "Arial", family: 4, size: 16, bold: true, color: { argb: "FF1A3263" } };
+      titleRow.alignment = { horizontal: "center", vertical: "middle" };
+      titleRow.height = 30;
+
+      sheet.insertRow(2, [`Report Generated: ${new Date().toLocaleString()}`, "", "", "", "", "", `Total Stations: ${rows.length}`]);
+      sheet.mergeCells("A2:E2");
+      sheet.mergeCells("F2:G2");
+      const subTitleRow = sheet.getRow(2);
+      subTitleRow.font = { name: "Arial", size: 10, italic: true, color: { argb: "FF666666" } };
+      subTitleRow.getCell(6).alignment = { horizontal: "right" };
+      subTitleRow.height = 20;
+
+      sheet.insertRow(3, []); // Empty row
+
+      // Header Row Styling (now row 4)
+      const headerRow = sheet.getRow(4);
+      headerRow.values = ["Part ID", "Station", "State", "Latest Status", "Result", "Remark", "Timestamp"];
+      headerRow.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+      headerRow.alignment = { horizontal: "center", vertical: "middle" };
+      headerRow.height = 25;
+      
+      headerRow.eachCell((cell) => {
+        cell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "FF1A3263" } // Navy Blue
+        };
+        cell.border = {
+          top: { style: 'thin', color: { argb: "FFCCCCCC" } },
+          left: { style: 'thin', color: { argb: "FFCCCCCC" } },
+          bottom: { style: 'thin', color: { argb: "FFCCCCCC" } },
+          right: { style: 'thin', color: { argb: "FFCCCCCC" } }
+        };
+      });
+
+      // Add Data Rows
+      rows.forEach((row, index) => {
+        const dataRow = sheet.addRow({
+          partId: selectedPartId || "",
+          stationNo: row.stationNo,
+          stageState: row.stageState,
+          latestStatus: row.latestStatus,
+          latestResult: row.latestResult,
+          interlockReason: row.interlockReason,
+          completedAt: row.completedAt ? new Date(row.completedAt).toLocaleString() : ""
+        });
+
+        // Alternate row shading
+        if (index % 2 === 0) {
+          dataRow.eachCell(cell => {
+            cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8F9FA" } };
+          });
+        }
+
+        // Apply borders and alignment to all cells
+        dataRow.eachCell((cell, colNumber) => {
+          cell.border = {
+            top: { style: 'thin', color: { argb: "FFEEEEEE" } },
+            left: { style: 'thin', color: { argb: "FFEEEEEE" } },
+            bottom: { style: 'thin', color: { argb: "FFEEEEEE" } },
+            right: { style: 'thin', color: { argb: "FFEEEEEE" } }
+          };
+          if (colNumber !== 6) { // Center everything except remarks
+            cell.alignment = { horizontal: "center", vertical: "middle" };
+          } else {
+            cell.alignment = { horizontal: "left", vertical: "middle", wrapText: true };
+          }
+        });
+
+        // Color coding for State (Column 3)
+        const stateCell = dataRow.getCell(3);
+        const state = String(row.stageState).toUpperCase();
+        if (state === "PASSED" || state === "COMPLETED") {
+          stateCell.font = { color: { argb: "FF15803D" }, bold: true }; // Green
+        } else if (state === "FAILED" || state === "NG") {
+          stateCell.font = { color: { argb: "FFDC2626" }, bold: true }; // Red
+        } else if (state === "IN_PROGRESS" || state === "RUN") {
+          stateCell.font = { color: { argb: "FFD97706" }, bold: true }; // Orange
+        }
+
+        // Color coding for Result (Column 5)
+        const resultCell = dataRow.getCell(5);
+        const result = String(row.latestResult).toUpperCase();
+        if (["PASS", "OK", "ALLOW"].includes(result)) {
+          resultCell.font = { color: { argb: "FF15803D" }, bold: true };
+        } else if (["FAIL", "NG", "BLOCK"].includes(result)) {
+          resultCell.font = { color: { argb: "FFDC2626" }, bold: true };
+        }
+      });
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const pad = (v) => String(v).padStart(2, "0");
+      const now = new Date();
+      const stamp = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
+      saveAs(new Blob([buffer]), `Traceability_Report_${stamp}.xlsx`);
+
+    } catch (e) {
+      setPopup({ type:"ERROR", title:"Export Failed", message:"Failed to generate Excel file." });
+    }
   }, [selectedPartId, stationTimeline]);
 
   const handleResetStation = useCallback((sNo)=>{
@@ -865,11 +958,8 @@ const ComponentJourney = () => {
               </div>
             </div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-              <Btn variant="ghost" onClick={()=>exportJourneyReport("csv")} disabled={!stationTimeline.length}>
-                <Download size={13}/> CSV
-              </Btn>
-              <Btn variant="ghost" onClick={()=>exportJourneyReport("excel")} disabled={!stationTimeline.length}>
-                <Download size={13}/> Excel
+              <Btn variant="ghost" onClick={exportJourneyReport} disabled={!stationTimeline.length}>
+                <Download size={13}/> Export Report
               </Btn>
               <Btn variant="ghost" onClick={handleRefresh} disabled={refreshing||loading} loading={refreshing}>
                 {!refreshing&&<RefreshCw size={13}/>}

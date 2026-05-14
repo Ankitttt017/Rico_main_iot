@@ -1,5 +1,6 @@
 import apiClient from "./client";
 import { ENDPOINTS } from "./endpoints";
+import { loadReportConfig } from "../utils/reportConfig";
 
 export const authApi = {
   login: async (payload) => {
@@ -289,8 +290,37 @@ export const dashboardApi = {
     return data;
   },
   exportReport: async (params) => {
-    const { data } = await apiClient.get(ENDPOINTS.dashboard.exportReport, {
-      params,
+    const { data } = await apiClient.post(ENDPOINTS.dashboard.exportFullReport, {
+      filters: params || {},
+      reportConfig: loadReportConfig(),
+    }, {
+      responseType: "blob",
+    });
+    return data;
+  },
+  exportFullReport: async (params) => {
+    const { data } = await apiClient.post(ENDPOINTS.dashboard.exportFullReport, {
+      filters: params || {},
+      reportConfig: loadReportConfig(),
+    }, {
+      responseType: "blob",
+    });
+    return data;
+  },
+  exportPartsReport: async (params) => {
+    const { data } = await apiClient.post(ENDPOINTS.dashboard.exportPartsReport, {
+      filters: params || {},
+      reportConfig: loadReportConfig(),
+    }, {
+      responseType: "blob",
+    });
+    return data;
+  },
+  exportAuditReport: async (params) => {
+    const { data } = await apiClient.post(ENDPOINTS.dashboard.exportAuditReport, {
+      filters: params || {},
+      reportConfig: loadReportConfig(),
+    }, {
       responseType: "blob",
     });
     return data;
@@ -436,6 +466,49 @@ export const industrialApi = {
   },
   queryTimelines: async (params = {}) => {
     const { data } = await apiClient.get(ENDPOINTS.industrial.timelines, { params });
+    return data;
+  },
+};
+
+export const reportApi = {
+  getData: async (params) => {
+    const { data } = await apiClient.get(ENDPOINTS.reports.data, { params });
+    return data;
+  },
+  exportFull: async (params, reportConfig) => {
+    const { data } = await apiClient.post(ENDPOINTS.reports.exportFull, {
+      filters: params || {},
+      reportConfig: reportConfig || loadReportConfig(),
+    }, {
+      responseType: "blob",
+    });
+    return data;
+  },
+  exportNG: async (params, reportConfig) => {
+    const { data } = await apiClient.post(ENDPOINTS.reports.exportNG, {
+      filters: params || {},
+      reportConfig: reportConfig || loadReportConfig(),
+    }, {
+      responseType: "blob",
+    });
+    return data;
+  },
+  exportParts: async (params, reportConfig) => {
+    const { data } = await apiClient.post(ENDPOINTS.reports.exportParts, {
+      filters: params || {},
+      reportConfig: reportConfig || loadReportConfig(),
+    }, {
+      responseType: "blob",
+    });
+    return data;
+  },
+  exportAudit: async (params, reportConfig) => {
+    const { data } = await apiClient.post(ENDPOINTS.reports.exportAudit, {
+      filters: params || {},
+      reportConfig: reportConfig || loadReportConfig(),
+    }, {
+      responseType: "blob",
+    });
     return data;
   },
 };

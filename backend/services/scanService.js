@@ -129,21 +129,15 @@ async function setPartInterlock(part, reason) {
 }
 
 function getExpectedStation(part, sequence) {
-  if (!sequence.length) {
-    return null;
-  }
+  if (!sequence.length) return null;
+  if (!part.current_operation) return sequence[0];
 
-  if (!part.current_station) {
-    return sequence[0];
-  }
+  const currentOp = normalizeStation(part.current_operation);
+  const currentIndex = sequence.indexOf(currentOp);
 
-  const currentIndex = sequence.findIndex((station) => station === normalizeStation(part.current_station));
-  if (currentIndex === -1) {
-    return sequence[0];
-  }
-  if (currentIndex >= sequence.length - 1) {
-    return sequence[sequence.length - 1];
-  }
+  if (currentIndex === -1) return sequence[0];
+  if (currentIndex >= sequence.length - 1) return null; // Already at the end
+
   return sequence[currentIndex + 1];
 }
 
@@ -197,34 +191,11 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
   }
 
   if (!scanStartAllowed) {
-    const blockedLog = await OperationLog.create({
-      part_id: normalizedPartId,
-      machine_id: mId || null,
-      operation_no: station,
-      station_no: station,
-      plc_status: "INTERLOCKED",
-      result: "NG",
-      result_source: "AUDIT_BLOCK",
-      result_input: "BLOCK",
-      user_id: userId,
-      interlock_reason: "DUPLICATE_SCAN_IN_FLIGHT",
-    }).catch(() => null);
-    emitRealtime("scan_event", {
-      type: "WARNING",
-      partId: normalizedPartId,
-      stationNo: station,
-      machineId: mId || null,
-      decision: "BLOCK",
-      reason: "DUPLICATE_SCAN_IN_FLIGHT",
-      message: "Scan already in progress for this part/station",
-      operationLogId: blockedLog?.id || null,
-    });
     return {
       decision: "BLOCK",
       reason: "DUPLICATE_SCAN_IN_FLIGHT",
       message: "Scan already in progress. Wait for current cycle processing.",
       currentStatus: "IN_PROGRESS",
-      operationLogId: blockedLog?.id || null,
     };
   }
 
@@ -232,7 +203,7 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
     const activeRules = await getActiveQrRules();
     const applicableRules = activeRules.filter((rule) => isRuleApplicableToStation(rule, station));
     let matchedRule = null;
-    
+
     if (applicableRules.length > 0) {
       for (const rule of applicableRules) {
         try {
@@ -241,7 +212,6 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
             break;
           }
         } catch (_error) {
-          await saveAuditLog(normalizedPartId, mId, "NG", "QR_RULE_CONFIG_ERROR", userId);
           return {
             decision: "BLOCK",
             reason: "QR_RULE_CONFIG_ERROR",
@@ -253,10 +223,10 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
 
       if (!matchedRule) {
         const expectedFormats = applicableRules.slice(0, 5).map((rule) => getRuleLabel(rule)).join(", ");
-        await saveAuditLog(normalizedPartId, mId, "NG", "INVALID_QR_FORMAT", userId);
         return {
           decision: "BLOCK",
           reason: "INVALID_QR_FORMAT",
+          validationResult: "FAILED",
           message: expectedFormats ? `QR format mismatch. Allowed: ${expectedFormats}` : "QR format mismatch.",
           currentStatus: "REJECTED_QR_FORMAT",
         };
@@ -269,7 +239,7 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
         part_id: normalizedPartId,
         month: now.getMonth() + 1,
         year: now.getFullYear(),
-        current_operation: station,
+        current_operation: null,
         current_station: null,
         status: "IN_PROGRESS",
       });
@@ -283,99 +253,56 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
       }
     }
 
-    if (part.status === "COMPLETED") {
-      await saveAuditLog(normalizedPartId, mId, "NG", "ALREADY_COMPLETED", userId);
-      return { decision: "BLOCK", reason: "ALREADY_COMPLETED", message: `${normalizedPartId} already completed`, currentStatus: part.status };
-    }
-
-    const isInterlockRecovery = (part.status === "INTERLOCKED" || part.is_interlocked) && 
-                                (part.current_operation === station || part.current_station === station);
-
-    if (!skipInterlockValidation && (part.is_interlocked || part.status === "INTERLOCKED") && !isInterlockRecovery) {
-      if (part.status === "NG" || part.status === "ENDED_NG" || part.interlock_reason === "SCAN_RESULT_NG" || part.interlock_reason === "GLOBAL_REJECTION") {
-        return { decision: "ALLOW", reason: "GLOBAL_REJECTION", message: "Part is globally NG. Rejection flow.", currentStatus: part.status, forceNg: true };
-      }
-      await saveAuditLog(normalizedPartId, mId, "NG", part.interlock_reason || "PART_INTERLOCKED", userId);
-      return { decision: "BLOCK", reason: part.interlock_reason || "PART_INTERLOCKED", message: `${normalizedPartId} is interlocked`, currentStatus: part.status };
-    }
-
-    const existingAtStation = await OperationLog.findOne({
-      where: { part_id: normalizedPartId, station_no: station },
-      order: [["createdAt", "DESC"]],
-    });
-    
-    const isRetryableCommFailure = String(existingAtStation?.plc_status || "") === "RESET";
-
-    if (!skipDuplicateValidation && existingAtStation && String(existingAtStation.plc_status || "").toUpperCase() === "PLC_COMM_ERROR") {
-      return { decision: "BLOCK", reason: "RESET_REQUIRED_AFTER_PLC_COMM_ERROR", message: `PLC timeout at ${station}. Use Reset Operation.`, currentStatus: part.status };
-    }
-
-    if (!skipDuplicateValidation && existingAtStation && !part.is_rework && !isRetryableCommFailure && !isInterlockRecovery) {
-      const existingStatus = toUpper(existingAtStation.plc_status);
-      const createdAtMs = existingAtStation.createdAt ? new Date(existingAtStation.createdAt).getTime() : NaN;
-      const ageMs = Number.isFinite(createdAtMs) ? Date.now() - createdAtMs : Number.POSITIVE_INFINITY;
-      const canTreatAsIdempotent = RECENT_DUPLICATE_GRACE_MS > 0 && ageMs >= 0 && ageMs <= RECENT_DUPLICATE_GRACE_MS && (existingStatus === "PENDING" || existingStatus === "STARTED" || existingStatus === "ENDED_OK");
-
-      if (canTreatAsIdempotent) {
-        return { decision: "ALLOW", reason: "RECENT_DUPLICATE_IGNORED", message: "Duplicate scan ignored; using recent result.", currentStatus: part.status, operationStatus: existingStatus || "PENDING", stationNo: station };
-      }
-
-      await saveAuditLog(normalizedPartId, mId, "NG", "DUPLICATE_SCAN", userId);
-      const blockedLog = await OperationLog.create({
-        part_id: normalizedPartId,
-        machine_id: mId || null,
-        operation_no: station,
-        station_no: station,
-        plc_status: "INTERLOCKED",
-        result: "NG",
-        result_source: "AUDIT_BLOCK",
-        result_input: "BLOCK",
-        user_id: userId,
-        interlock_reason: "DUPLICATE_SCAN",
-      });
+    const sequence = await getActiveStations();
+    if (!sequence.includes(station)) {
       return {
         decision: "BLOCK",
-        reason: "DUPLICATE_SCAN",
-        message: `Duplicate scan at ${station}`,
-        currentStatus: part.status,
-        operationLogId: blockedLog.id,
+        reason: "STATION_NOT_CONFIGURED",
+        message: `BLOCKED\nStation Not Found\n\nStation: ${station}\nPlease check configuration.`,
+        currentStatus: part.status
       };
     }
 
-    if (isInterlockRecovery && existingAtStation && existingAtStation.plc_status !== "PENDING") {
-      await existingAtStation.update({ plc_status: "RETRY", interlock_reason: "INTERLOCK_RECOVERY_SCAN" });
-    }
-
-    const sequence = await getActiveStations();
-    if (!sequence.includes(station)) {
-      await saveAuditLog(normalizedPartId, mId, "NG", "STATION_NOT_CONFIGURED", userId);
-      return { decision: "BLOCK", reason: "STATION_NOT_CONFIGURED", message: `Station ${station} not configured`, currentStatus: part.status };
-    }
-
+    // 1. INDUSTRIAL SEQUENCE VALIDATION
     const expectedStation = getExpectedStation(part, sequence);
-    const previousStation = expectedStation && sequence.includes(expectedStation) ? sequence[Math.max(sequence.indexOf(expectedStation) - 1, 0)] || null : null;
+    const hasExistingSuccess = await OperationLog.findOne({
+      where: { 
+        part_id: normalizedPartId, 
+        station_no: station,
+        plc_status: ["ENDED_OK", "PASSED", "COMPLETED_OK"] 
+      }
+    });
 
-    if (!skipSequenceValidation && previousStation && station === expectedStation && sequence.indexOf(station) > 0) {
-      const previousLog = await OperationLog.findOne({ where: { part_id: normalizedPartId, station_no: normalizeStation(previousStation) }, order: [["createdAt", "DESC"]] });
-      const prevStatus = toUpper(previousLog?.plc_status);
-      if (prevStatus !== "ENDED_OK" && prevStatus !== "ENDED_NG") {
-        await saveAuditLog(normalizedPartId, mId, "NG", "PREVIOUS_STATION_NOT_COMPLETED", userId);
+    const scanAttemptType = hasExistingSuccess ? "RE-SCAN" : "INITIAL";
+
+    if (!skipSequenceValidation && expectedStation && station !== expectedStation) {
+      const scannedIndex = sequence.indexOf(station);
+      const expectedIndex = sequence.indexOf(expectedStation);
+
+      if (scannedIndex > expectedIndex) {
         const blockedLog = await OperationLog.create({
           part_id: normalizedPartId,
           machine_id: mId || null,
           operation_no: station,
           station_no: station,
           plc_status: "INTERLOCKED",
-          result: "NG",
-          result_source: "AUDIT_BLOCK",
-          result_input: "BLOCK",
+          result: "BLOCK",
+          scan_attempt_type: scanAttemptType,
+          validation_result: "BLOCKED",
+          operation_result: "INTERLOCKED",
           user_id: userId,
           interlock_reason: "PREVIOUS_STATION_NOT_COMPLETED",
         });
+        
+        part.last_validation_result = "BLOCKED";
+        await part.save();
+
         return {
           decision: "BLOCK",
           reason: "PREVIOUS_STATION_NOT_COMPLETED",
-          message: `Previous station ${previousStation} not completed`,
+          qrStatus: "BLOCKED",
+          operationStatus: "INTERLOCKED",
+          message: `BLOCKED - Sequence Error\nPlease scan at ${expectedStation} first.\n(Skipped operation detected)`,
           expectedStation,
           currentStatus: part.status,
           operationLogId: blockedLog.id,
@@ -383,28 +310,62 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
       }
     }
 
-    if (!skipSequenceValidation && expectedStation && station !== expectedStation) {
-      await saveAuditLog(normalizedPartId, mId, "NG", "PREVIOUS_STATION_NOT_COMPLETED", userId);
+    // 2. DUPLICATE VALIDATION
+    if (part.status === "COMPLETED" && !part.is_rework) {
+       part.last_validation_result = "DUPLICATE";
+       await part.save();
+       return {
+        decision: "BLOCK",
+        reason: "ALREADY_COMPLETED",
+        qrStatus: "DUPLICATE",
+        operationStatus: "PASSED",
+        message: `BLOCKED - Already Done\nThis part is already finished.\n\nPart: ${normalizedPartId}`,
+        currentStatus: part.status
+      };
+    }
+
+    if (!skipDuplicateValidation && hasExistingSuccess && !part.is_rework) {
       const blockedLog = await OperationLog.create({
         part_id: normalizedPartId,
         machine_id: mId || null,
         operation_no: station,
         station_no: station,
         plc_status: "INTERLOCKED",
-        result: "NG",
-        result_source: "AUDIT_BLOCK",
-        result_input: "BLOCK",
+        result: "BLOCK",
+        scan_attempt_type: "RE-SCAN",
+        validation_result: "DUPLICATE",
+        operation_result: "PASSED", // Show that previous was PASS
         user_id: userId,
-        interlock_reason: "PREVIOUS_STATION_NOT_COMPLETED",
+        interlock_reason: "DUPLICATE_SCAN",
       });
+      
+      part.last_validation_result = "DUPLICATE";
+      await part.save();
+
       return {
         decision: "BLOCK",
-        reason: "PREVIOUS_STATION_NOT_COMPLETED",
-        message: `Seq violation. Expected ${expectedStation}`,
-        expectedStation,
+        reason: "DUPLICATE_SCAN",
+        qrStatus: "DUPLICATE",
+        operationStatus: "PASSED",
+        message: `BLOCKED - Duplicate Scan\nOperation ${station} already completed previously.`,
         currentStatus: part.status,
         operationLogId: blockedLog.id,
       };
+    }
+
+    // 3. INTERLOCK / NG VALIDATION
+    if (!skipInterlockValidation && (part.is_interlocked || part.status === "INTERLOCKED")) {
+      if (["NG", "ENDED_NG", "FAILED"].includes(part.status) || part.interlock_reason === "SCAN_RESULT_NG") {
+        return {
+          decision: "ALLOW",
+          reason: "GLOBAL_REJECTION",
+          qrStatus: "PASSED",
+          operationStatus: "FAILED",
+          message: "BLOCKED - Quality Alert\nPart marked as NG/Rejected.\nMove to rejection area.",
+          currentStatus: part.status,
+          forceNg: true
+        };
+      }
     }
 
     if (normalizedResult === "NG") {
@@ -414,22 +375,31 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
         operation_no: station,
         station_no: station,
         plc_status: "ENDED_NG",
-        plc_end_time: new Date(),
-        plc_end_at: new Date(),
         result: "NG",
-        result_source: resultSource,
-        result_input: resultInput,
+        scan_attempt_type: scanAttemptType,
+        validation_result: "PASSED",
+        operation_result: "FAILED",
         user_id: userId,
         interlock_reason: forcedNgReason,
       });
       part.status = "NG";
       part.is_interlocked = true;
       part.interlock_reason = forcedNgReason;
+      part.last_validation_result = "PASSED";
       await part.save();
-      await saveAuditLog(normalizedPartId, mId, "NG", forcedNgReason, userId);
-      return { decision: "BLOCK", reason: forcedNgReason, message: "Operation Failed (NG)", expectedStation, currentStatus: part.status, operationLogId: ngLog.id, resultSource };
+      return {
+        decision: "BLOCK",
+        reason: forcedNgReason,
+        qrStatus: "PASSED",
+        operationStatus: "FAILED",
+        message: "FAILED\nScan Result NG\n\nOperation rejected.",
+        expectedStation,
+        currentStatus: part.status,
+        operationLogId: ngLog.id
+      };
     }
 
+    // 4. FINAL ALLOWANCE
     const log = await OperationLog.create({
       part_id: normalizedPartId,
       machine_id: mId || null,
@@ -437,20 +407,24 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
       station_no: station,
       plc_status: "PENDING",
       result: "OK",
-      result_source: resultSource,
-      result_input: resultInput,
+      scan_attempt_type: scanAttemptType,
+      validation_result: "PASSED",
+      operation_result: "WAITING",
       user_id: userId,
       interlock_reason: null,
     });
 
     part.current_operation = station;
     part.status = part.status === "REWORK" ? "REWORK" : "IN_PROGRESS";
+    part.last_validation_result = "PASSED";
     await part.save();
 
     return {
       decision: "ALLOW",
       reason: "PASS",
-      message: "QR verified. Starting operation",
+      qrStatus: "PASSED",
+      operationStatus: "WAITING",
+      message: `SCAN OK - Starting ${station}`,
       expectedStation,
       currentStatus: part.status,
       operationLogId: log.id,
@@ -459,15 +433,14 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
       resultSource,
     };
   } catch (err) {
+    console.error(`[SCAN_VALIDATION_ERROR] partId=${normalizedPartId} station=${station}:`, err);
     const isUniqueConstraint = err.name === 'SequelizeUniqueConstraintError';
-    console.error(`[ScanService] ${isUniqueConstraint ? 'DB CONFLICT' : 'DB ERROR'}:`, err.message);
-    
     return {
       decision: "BLOCK",
       reason: isUniqueConstraint ? "ALREADY_SCANNED" : "VALIDATION_ERROR",
-      message: isUniqueConstraint 
-        ? "This part was already scanned here. Please check the process sequence or reset if required."
-        : "Process validation failed. Please check connectivity and try again.",
+      qrStatus: "FAILED",
+      operationStatus: "IDLE",
+      message: `Process validation failed. ${err.message || "Please check connectivity and try again."}`,
       currentStatus: "ERROR",
     };
   } finally {

@@ -31,22 +31,34 @@ class PlcRecoveryService {
       const dbState = runtime.current_state;
       let recoveredState = dbState;
 
-      // Recovery Logic (Point 1, 21)
+      // Industrial Recovery Rules (Section 4 & 6)
+      const hasActiveOp = Boolean(runtime.active_operation_id);
+      const isTerminalState = [
+        plcStateMachineService.states.COMPLETED_OK, 
+        plcStateMachineService.states.COMPLETED_NG,
+        plcStateMachineService.states.BLOCKED,
+        plcStateMachineService.states.INTERLOCKED
+      ].includes(dbState);
+
       if (liveSignals.RUNNING) {
-        recoveredState = plcStateMachineService.states.RUNNING;
+        // Only reconstruct RUNNING if we have a matching active operation (Rule 4)
+        recoveredState = hasActiveOp ? plcStateMachineService.states.RUNNING : plcStateMachineService.states.RECOVERING;
       } else if (liveSignals.END_OK || liveSignals.END_NG) {
-        recoveredState = plcStateMachineService.states.WAITING_END;
+        recoveredState = hasActiveOp ? plcStateMachineService.states.WAITING_END : plcStateMachineService.states.IDLE;
       } else if (liveSignals.RESET) {
         recoveredState = plcStateMachineService.states.RESETTING;
-      } else if (dbState === plcStateMachineService.states.START_SENT) {
-        // If we were waiting for ACK and PLC is IDLE, we might need to resend START or enter error
+      } else if (isTerminalState || dbState === plcStateMachineService.states.RECOVERING) {
+        // If PLC is clear and we are in a terminal state, return to IDLE (Rule 4)
+        recoveredState = plcStateMachineService.states.IDLE;
+      } else if (dbState === plcStateMachineService.states.START_SENT || dbState === plcStateMachineService.states.WAITING_RUNNING) {
+        // Handshake interrupted, move to recovery
         recoveredState = plcStateMachineService.states.RECOVERING;
       }
 
       if (recoveredState !== dbState) {
-        console.log(`[RecoveryService] Machine ${machine.id}: DB state ${dbState} -> Recovered PLC state ${recoveredState}`);
+        console.log(`[RecoveryService] Machine ${machine.id}: DB ${dbState} -> PLC ${recoveredState} (ActiveOp=${hasActiveOp})`);
         await plcStateMachineService.transition(machine.id, recoveredState, {
-          recovery_state: `Recovered from PLC signals at startup`,
+          recovery_state: `Recovered from PLC signals (hasActiveOp=${hasActiveOp})`,
           plc_snapshot: liveSignals
         });
       } else {

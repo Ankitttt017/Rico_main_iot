@@ -91,30 +91,41 @@ async function getPartJourney(req, res) {
       let completedAt    = null;
 
       if (ops.length > 0) {
+        // Separate quality outcomes from administrative blocks (audit logs)
+        const qualityLogs = ops.filter(isQualityOutcomeLog);
+        const qrSuccessLog = qualityLogs.find(l => ["PASS", "OK", "ALLOW"].includes(toUpper(l.result)));
+        const qrNgLog = qualityLogs.find(l => ["FAIL", "NG"].includes(toUpper(l.result)));
+        
+        const opSuccessLog = qualityLogs.find(l => ["ENDED_OK", "PASSED", "OK", "COMPLETED_OK"].includes(toUpper(l.plc_status)));
+        const opNgLog = qualityLogs.find(l => ["ENDED_NG", "NG", "FAILED", "COMPLETED_NG"].includes(toUpper(l.plc_status)));
+        
         const latest = ops[ops.length - 1];
+        const latestPlcSt = toUpper(latest.plc_status);
 
-        // QR Verification: based on result field
-        const qrResult = toUpper(latest.result);
-        const plcSt = toUpper(latest.plc_status);
-        if (["PASS", "OK", "ALLOW", "ACCEPT"].includes(qrResult)) qrVerification = "PASS";
-        else if (["FAIL", "NG", "BLOCK", "REJECT"].includes(qrResult)) qrVerification = "FAIL";
-        else if (["PENDING", "STARTED", "IN_PROGRESS", "ENDED_OK", "ENDED_NG", "INTERLOCKED", "PLC_COMM_ERROR"].includes(plcSt)) {
-          qrVerification = "PASS";
-        } else if (hasActivity) {
-          qrVerification = "RUN";
+        // QR Verification: based on quality logs
+        if (qrSuccessLog) qrVerification = "PASS";
+        else if (qrNgLog) qrVerification = "FAIL";
+        else if (["FAIL", "NG", "BLOCK", "REJECT"].includes(toUpper(latest.result))) qrVerification = "FAIL";
+        else if (hasActivity) qrVerification = "RUN";
+
+        // Operation: Prioritize Quality PASS > Quality FAIL > In Progress
+        if (opSuccessLog) operation = "PASS";
+        else if (opNgLog) operation = "FAIL";
+        else if (["STARTED", "IN_PROGRESS", "RUNNING"].includes(latestPlcSt)) operation = "RUN";
+        else if (["PLC_COMM_ERROR", "TIMEOUT"].includes(latestPlcSt)) operation = "COMM";
+        else if (["INTERLOCKED", "BLOCKED"].includes(latestPlcSt)) {
+            // Administrative block (not a quality NG)
+            operation = "WAIT"; 
         }
+        else if (["PENDING", "WAITING", "RETRY", "RESET"].includes(latestPlcSt)) operation = "WAIT";
+        // Manual station fallback
+        else if (qrSuccessLog && (!latestPlcSt || latestPlcSt === "NONE" || latestPlcSt === "IDLE")) operation = "PASS";
 
-        // Operation: from plc_status
-        if (["ENDED_OK", "PASSED"].includes(plcSt)) operation = "PASS";
-        else if (["ENDED_NG", "INTERLOCKED", "BLOCKED"].includes(plcSt)) operation = "FAIL";
-        else if (["STARTED", "IN_PROGRESS"].includes(plcSt)) operation = "RUN";
-        else if (["PLC_COMM_ERROR"].includes(plcSt)) operation = "COMM";
-        else if (["PENDING", "RETRY", "RESET"].includes(plcSt)) operation = "WAIT";
-
-        // completedAt from plc_end_at or plc_end_time
-        if (latest.plc_end_at) completedAt = latest.plc_end_at;
-        else if (latest.plc_end_time) completedAt = latest.plc_end_time;
-        else if (latest.updatedAt && plcSt === "ENDED_OK") completedAt = latest.updatedAt;
+        // completedAt from best available log
+        const bestLog = opSuccessLog || opNgLog || qrSuccessLog || qrNgLog || (qualityLogs.length > 0 ? qualityLogs[qualityLogs.length - 1] : latest);
+        if (bestLog.plc_end_at) completedAt = bestLog.plc_end_at;
+        else if (bestLog.plc_end_time) completedAt = bestLog.plc_end_time;
+        else if (bestLog.updatedAt && toUpper(bestLog.plc_status) === "ENDED_OK") completedAt = bestLog.updatedAt;
       }
 
       // Quality Check: from ProductionLog verdict

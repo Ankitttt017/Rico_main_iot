@@ -158,6 +158,29 @@ class SocketPool {
       socket.setKeepAlive(true, SOCKET_KEEPALIVE_INTERVAL_MS);
       socket.setTimeout(5000);
 
+      // Persistent error handler to prevent process crash (Requirement 4)
+      socket.on("error", (err) => {
+        this.stats.errors += 1;
+        logWarn("SOCKET_ERROR", { endpoint: this.endpoint, error: err.message });
+        if (socket === this.activeSocket) {
+          this.activeSocket = null;
+          this.stats.disconnects += 1;
+        }
+      });
+
+      socket.on("close", (hadError) => {
+        logInfo("SOCKET_CLOSED", { endpoint: this.endpoint, hadError });
+        if (socket === this.activeSocket) {
+          this.activeSocket = null;
+          this.stats.disconnects += 1;
+        }
+      });
+
+      socket.on("timeout", () => {
+        logWarn("SOCKET_TIMEOUT", { endpoint: this.endpoint });
+        socket.destroy(new Error("Socket timeout"));
+      });
+
       socket.once("connect", () => {
         this.activeSocket = this.candidateSocket;
         this.candidateSocket = null;
@@ -173,18 +196,6 @@ class SocketPool {
           attempt: this.stats.connects,
         });
         resolve(this.activeSocket);
-      });
-
-      socket.once("error", (err) => {
-        this.stats.errors += 1;
-        this._handleConnectionError(err);
-        reject(err);
-      });
-
-      socket.once("timeout", () => {
-        this.stats.errors += 1;
-        this._handleConnectionError(new Error("Socket timeout"));
-        reject(new Error("Socket timeout"));
       });
 
       socket.connect(this.port, this.ip);

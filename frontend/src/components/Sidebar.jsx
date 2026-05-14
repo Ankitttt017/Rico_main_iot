@@ -6,7 +6,6 @@ import {
   ChevronLeft,
   ChevronDown,
   ChevronRight,
-  QrCode,
   UserCog,
   Wrench,
   Boxes,
@@ -22,6 +21,8 @@ import {
   Users,
   FileText,
   Route,
+  Zap,
+  BarChart3,
 } from "lucide-react";
 
 import { APP_ROUTES } from "../constants/routes";
@@ -32,7 +33,31 @@ import {
   getRoleAccessSettings,
   saveRoleAccessSettings,
 } from "../utils/roleAccess";
+import logo from "../assets/images/logo.jpg";
 
+
+const RicoIcon = () => (
+  <div className="flex flex-col items-center leading-none select-none">
+    <span
+      style={{
+        fontFamily:
+          "'Arial Black', 'Impact', 'Franklin Gothic Medium', sans-serif",
+        fontWeight: 900,
+        fontSize: "40px",
+        color: "#1a3a7c",
+        lineHeight: 1,
+        letterSpacing: "0.05em",
+      }}
+    >
+      R
+    </span>
+    
+  </div>
+);
+
+// ─────────────────────────────────────────────
+// Sidebar
+// ─────────────────────────────────────────────
 const Sidebar = ({ onClose }) => {
   const [collapsed, setCollapsed] = useState(false);
   const [traceOpen, setTraceOpen] = useState(true);
@@ -45,20 +70,23 @@ const Sidebar = ({ onClose }) => {
   const location = useLocation();
   const userRole = getUserRole();
 
-  // Close mobile sidebar on route change
   useEffect(() => {
     if (onClose) onClose();
   }, [location.pathname]);
 
-  // ===============================
-  // TRACEABILITY
-  // ===============================
+  // ── TRACEABILITY ──────────────────────────
   const traceabilityNavigation = useMemo(
     () => [
       {
         name: "Dashboard",
         path: APP_ROUTES.dashboard,
         icon: LayoutDashboard,
+        moduleKey: "dashboard",
+      },
+      {
+        name: "Production Analytics",
+        path: APP_ROUTES.reports,
+        icon: BarChart3,
         moduleKey: "dashboard",
       },
       {
@@ -103,7 +131,6 @@ const Sidebar = ({ onClose }) => {
         icon: Boxes,
         moduleKey: "packing",
       },
-
       {
         name: "Role Access",
         path: APP_ROUTES.masterSettings,
@@ -122,11 +149,10 @@ const Sidebar = ({ onClose }) => {
         icon: Cpu,
         moduleKey: "machines",
       },
-
       {
         name: "PLC Manager",
         path: APP_ROUTES.plcConfig,
-        icon: Cpu,
+        icon: Zap,
         moduleKey: "plc_config",
       },
       {
@@ -169,9 +195,7 @@ const Sidebar = ({ onClose }) => {
     []
   );
 
-  // ===============================
-  // ORGANIZATION
-  // ===============================
+  // ── ORGANIZATION ──────────────────────────
   const organizationNavigation = useMemo(
     () => [
       {
@@ -220,9 +244,7 @@ const Sidebar = ({ onClose }) => {
     []
   );
 
-  // ===============================
-  // ROLE FILTER
-  // ===============================
+  // ── ROLE FILTER ───────────────────────────
   const visibleTraceNavigation = useMemo(
     () =>
       traceabilityNavigation.filter((item) =>
@@ -239,33 +261,25 @@ const Sidebar = ({ onClose }) => {
     [organizationNavigation, roleAccessSettings, userRole]
   );
 
-  // ===============================
-  // FETCH ROLE ACCESS
-  // ===============================
+  // ── FETCH ROLE ACCESS ─────────────────────
   useEffect(() => {
     let cancelled = false;
-
     roleAccessApi
       .list()
       .then((data) => {
         if (cancelled || !data) return;
-
         saveRoleAccessSettings(data);
         setRoleAccessSettings(getRoleAccessSettings());
       })
       .catch(() => {});
-
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // ===============================
-  // NAV ITEM
-  // ===============================
+  // ── NAV ITEM ──────────────────────────────
   const renderNavItem = (item, nested = false) => {
     const Icon = item.icon;
-
     return (
       <NavLink
         key={item.path}
@@ -277,7 +291,6 @@ const Sidebar = ({ onClose }) => {
           ${collapsed ? "justify-center px-2" : "gap-3 px-3"}
           py-2 rounded-xl transition-all duration-200
           ${nested && !collapsed ? "ml-3" : ""}
-          
           ${
             isActive
               ? "bg-[#1a3263] text-[#e8e2db] font-semibold shadow-md"
@@ -286,7 +299,6 @@ const Sidebar = ({ onClose }) => {
         }
       >
         <Icon size={18} className="flex-shrink-0" />
-
         {!collapsed && (
           <span className="text-sm truncate">{item.name}</span>
         )}
@@ -294,13 +306,38 @@ const Sidebar = ({ onClose }) => {
     );
   };
 
-  const sectionLabel = (label) =>
-    !collapsed && (
-      <p className="px-3 pt-4 pb-1 text-[10px] font-bold uppercase tracking-widest text-text-muted/60">
-        {label}
-      </p>
+  // ── SECTION TOGGLE BUTTON ─────────────────
+  const renderSectionToggle = (label, icon, isOpen, onToggle) => {
+    const Icon = icon;
+    return (
+      <button
+        onClick={onToggle}
+        className={`w-full flex items-center justify-between px-2 py-2 rounded-xl transition-all
+        ${
+          isOpen
+            ? "bg-bg-hover text-primary"
+            : "text-text-muted hover:bg-bg-hover/60"
+        }`}
+      >
+        <span
+          className={`flex items-center ${
+            collapsed ? "justify-center w-full" : "gap-3"
+          }`}
+        >
+          <Icon size={18} />
+          {!collapsed && <span className="text-sm">{label}</span>}
+        </span>
+        {!collapsed && (
+          <ChevronDown
+            size={14}
+            className={`transition-transform ${isOpen ? "rotate-180" : ""}`}
+          />
+        )}
+      </button>
     );
+  };
 
+  // ─────────────────────────────────────────
   return (
     <aside
       className={`
@@ -313,79 +350,62 @@ const Sidebar = ({ onClose }) => {
         overflow-hidden
       `}
     >
-      {/* HEADER */}
+      {/* ── HEADER ── */}
       <div className="h-14 flex items-center justify-between px-3 border-b border-border/60">
-        {!collapsed ? (
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center">
-              <QrCode className="text-primary" size={18} />
-            </div>
 
-            <span className="font-bold text-base text-text-main">
-              Indus<span className="text-primary">Trace</span>
-            </span>
+        {!collapsed ? (
+          /* EXPANDED — real logo image, height-constrained, left-aligned */
+          <div className="flex items-center flex-1 min-w-0">
+            <img
+              src={logo}
+              alt="RICO"
+              draggable={false}
+              style={{
+                height: "30px",       /* fits comfortably in the 56px header */
+                width: "auto",
+                objectFit: "contain",
+                objectPosition: "left center",
+                display: "block",
+                userSelect: "none",
+              }}
+            />
           </div>
         ) : (
+          /* COLLAPSED — R lettermark with red bar */
           <div className="w-full flex justify-center">
-            <QrCode className="text-primary" size={20} />
+            <RicoIcon />
           </div>
         )}
 
-        {!collapsed && (
+        {/* Collapse / expand button */}
+        {!collapsed ? (
           <button
             onClick={() => setCollapsed(true)}
-            className="p-1 rounded-lg hover:bg-bg-hover/60"
+            className="p-1 rounded-lg hover:bg-bg-hover/60 flex-shrink-0 ml-1"
+            title="Collapse sidebar"
           >
             <ChevronLeft size={16} />
           </button>
-        )}
-
-        {collapsed && (
+        ) : (
           <button
             onClick={() => setCollapsed(false)}
             className="absolute top-4 right-[-12px] bg-bg-card border border-border rounded-full p-1 shadow-md"
+            title="Expand sidebar"
           >
             <ChevronRight size={14} />
           </button>
         )}
       </div>
 
-      {/* NAVIGATION */}
+      {/* ── NAVIGATION ── */}
       <nav className="flex-1 overflow-y-auto py-2 px-2 space-y-1">
-        {/* ORGANIZATION */}
-    
-
-        <button
-          onClick={() => setOrgOpen((p) => !p)}
-          className={`w-full flex items-center justify-between px-2 py-2 rounded-xl transition-all
-          ${
-            orgOpen
-              ? "bg-bg-hover text-primary"
-              : "text-text-muted hover:bg-bg-hover/60"
-          }`}
-        >
-          <span
-            className={`flex items-center ${
-              collapsed ? "justify-center w-full" : "gap-3"
-            }`}
-          >
-            <SlidersHorizontal size={18} />
-
-            {!collapsed && (
-              <span className="text-sm">Organization</span>
-            )}
-          </span>
-
-          {!collapsed && (
-            <ChevronDown
-              size={14}
-              className={`transition-transform ${
-                orgOpen ? "rotate-180" : ""
-              }`}
-            />
-          )}
-        </button>
-
+        {/* Organization */}
+        {renderSectionToggle(
+          "Organization",
+          SlidersHorizontal,
+          orgOpen,
+          () => setOrgOpen((p) => !p)
+        )}
         {(orgOpen || collapsed) && (
           <div className="space-y-0.5">
             {visibleOrgNavigation.map((item) =>
@@ -394,40 +414,13 @@ const Sidebar = ({ onClose }) => {
           </div>
         )}
 
-        {/* TRACEABILITY */}
-      
-
-        <button
-          onClick={() => setTraceOpen((p) => !p)}
-          className={`w-full flex items-center justify-between px-2 py-2 rounded-xl transition-all
-          ${
-            traceOpen
-              ? "bg-bg-hover text-primary"
-              : "text-text-muted hover:bg-bg-hover/60"
-          }`}
-        >
-          <span
-            className={`flex items-center ${
-              collapsed ? "justify-center w-full" : "gap-3"
-            }`}
-          >
-            <Factory size={18} />
-
-            {!collapsed && (
-              <span className="text-sm">Traceability</span>
-            )}
-          </span>
-
-          {!collapsed && (
-            <ChevronDown
-              size={14}
-              className={`transition-transform ${
-                traceOpen ? "rotate-180" : ""
-              }`}
-            />
-          )}
-        </button>
-
+        {/* Traceability */}
+        {renderSectionToggle(
+          "Traceability",
+          Factory,
+          traceOpen,
+          () => setTraceOpen((p) => !p)
+        )}
         {(traceOpen || collapsed) && (
           <div className="space-y-0.5">
             {visibleTraceNavigation.map((item) =>
@@ -437,10 +430,25 @@ const Sidebar = ({ onClose }) => {
         )}
       </nav>
 
-      {/* FOOTER */}
+      {/* ── FOOTER ── */}
       {!collapsed && (
-        <div className="px-2 py-2 border-t border-border/60 text-center text-[10px] text-text-muted/60">
-          IndusTrace v2.0
+        <div className="px-3 py-2 border-t border-border/60 flex items-center gap-2">
+          {/* Faded logo repeat */}
+          <img
+            src={logo}
+            alt="RICO"
+            draggable={false}
+            style={{
+              height: "13px",
+              width: "auto",
+              objectFit: "contain",
+              opacity: 0.45,
+              userSelect: "none",
+            }}
+          />
+          <span className="text-[10px] text-text-muted/60">
+            Traceability v2.0
+          </span>
         </div>
       )}
     </aside>

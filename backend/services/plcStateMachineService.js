@@ -2,6 +2,7 @@ const MachineRuntimeState = require("../models/MachineRuntimeState");
 const { emitRealtime } = require("./realtimeService");
 const { logWarn } = require("./industrialLogger");
 const { v4: uuidv4 } = require("uuid");
+// Industrial Hardening: v1.3.1 - Enhanced IDLE->COMPLETED_NG transitions
 
 const States = {
   IDLE: "IDLE",
@@ -16,6 +17,9 @@ const States = {
   WAITING_BIN_ACK: "WAITING_BIN_ACK",
   RESETTING: "RESETTING",
   RESET_ACK_WAIT: "RESET_ACK_WAIT",
+  // Industrial Blocked States
+  BLOCKED: "BLOCKED",
+  INTERLOCKED: "INTERLOCKED",
   // Error/Timeout States
   RUNNING_TIMEOUT: "RUNNING_TIMEOUT",
   END_TIMEOUT: "END_TIMEOUT",
@@ -25,24 +29,26 @@ const States = {
 };
 
 const Transitions = {
-  [States.IDLE]: [States.SCANNED, States.RECOVERING, States.RESETTING],
-  [States.SCANNED]: [States.VALIDATED, States.IDLE, States.PLC_ERROR],
-  [States.VALIDATED]: [States.START_SENT, States.IDLE, States.PLC_ERROR],
-  [States.START_SENT]: [States.WAITING_RUNNING, States.PLC_ERROR, States.RESETTING, States.RUNNING],
+  [States.IDLE]: [States.SCANNED, States.RECOVERING, States.RESETTING, States.BLOCKED, States.INTERLOCKED],
+  [States.SCANNED]: [States.VALIDATED, States.IDLE, States.PLC_ERROR, States.BLOCKED, States.INTERLOCKED],
+  [States.VALIDATED]: [States.START_SENT, States.RUNNING, States.IDLE, States.PLC_ERROR, States.BLOCKED],
+  [States.BLOCKED]: [States.IDLE, States.RESETTING, States.SCANNED, States.PLC_ERROR, States.RECOVERING],
+  [States.INTERLOCKED]: [States.IDLE, States.RESETTING, States.SCANNED, States.PLC_ERROR, States.RECOVERING],
 
-  [States.WAITING_RUNNING]: [States.RUNNING, States.RUNNING_TIMEOUT, States.PLC_ERROR, States.RESETTING],
-  [States.RUNNING]: [States.WAITING_END, States.COMPLETED_OK, States.COMPLETED_NG, States.PLC_ERROR, States.RESETTING],
-  [States.WAITING_END]: [States.COMPLETED_OK, States.COMPLETED_NG, States.END_TIMEOUT, States.PLC_ERROR, States.RESETTING],
-  [States.COMPLETED_OK]: [States.RESETTING, States.IDLE],
-  [States.COMPLETED_NG]: [States.WAITING_BIN_ACK, States.RESETTING, States.IDLE],
-  [States.WAITING_BIN_ACK]: [States.RESETTING, States.IDLE, States.PLC_ERROR],
-  [States.RESETTING]: [States.IDLE, States.RESET_ACK_WAIT, States.RESET_TIMEOUT, States.PLC_ERROR],
-  [States.RESET_ACK_WAIT]: [States.IDLE, States.RESET_TIMEOUT, States.PLC_ERROR],
-  [States.RUNNING_TIMEOUT]: [States.RESETTING, States.IDLE],
-  [States.END_TIMEOUT]: [States.RESETTING, States.IDLE],
-  [States.RESET_TIMEOUT]: [States.IDLE, States.PLC_ERROR],
+  [States.WAITING_RUNNING]: [States.RUNNING, States.RUNNING_TIMEOUT, States.PLC_ERROR, States.RECOVERING, States.RESETTING, States.IDLE],
+  [States.START_SENT]: [States.RUNNING, States.WAITING_RUNNING, States.RECOVERING, States.PLC_ERROR, States.RESETTING, States.IDLE, States.SCANNED],
+  [States.RUNNING]: [States.WAITING_END, States.COMPLETED_OK, States.COMPLETED_NG, States.PLC_ERROR, States.RECOVERING, States.RESETTING, States.IDLE, States.SCANNED],
+  [States.WAITING_END]: [States.COMPLETED_OK, States.COMPLETED_NG, States.END_TIMEOUT, States.PLC_ERROR, States.RECOVERING, States.RESETTING, States.IDLE, States.SCANNED],
+  [States.COMPLETED_OK]: [States.RESETTING, States.IDLE, States.RECOVERING, States.SCANNED],
+  [States.COMPLETED_NG]: [States.WAITING_BIN_ACK, States.RESETTING, States.IDLE, States.RECOVERING, States.SCANNED],
+  [States.WAITING_BIN_ACK]: [States.RESETTING, States.IDLE, States.PLC_ERROR, States.RECOVERING, States.SCANNED],
+  [States.RESETTING]: [States.IDLE, States.RESET_ACK_WAIT, States.RESET_TIMEOUT, States.PLC_ERROR, States.RECOVERING],
+  [States.RESET_ACK_WAIT]: [States.IDLE, States.RESET_TIMEOUT, States.PLC_ERROR, States.RECOVERING],
+  [States.RUNNING_TIMEOUT]: [States.RESETTING, States.IDLE, States.RECOVERING],
+  [States.END_TIMEOUT]: [States.RESETTING, States.IDLE, States.RECOVERING],
+  [States.RESET_TIMEOUT]: [States.IDLE, States.PLC_ERROR, States.RECOVERING],
   [States.PLC_ERROR]: [States.RECOVERING, States.RESETTING, States.IDLE],
-  [States.RECOVERING]: [States.IDLE, States.RUNNING, States.WAITING_END, States.PLC_ERROR],
+  [States.RECOVERING]: [States.IDLE, States.RUNNING, States.WAITING_END, States.PLC_ERROR, States.BLOCKED, States.INTERLOCKED],
 };
 
 class PlcStateMachineService {
@@ -128,6 +134,12 @@ class PlcStateMachineService {
       timestamp: updateData.last_transition_at,
       cycleToken: updateData.cycle_token,
       ...metadata
+    });
+
+    emitRealtime("dashboard_refresh", { 
+      reason: "MACHINE_STATE_CHANGE", 
+      machineId, 
+      newState 
     });
 
     emitRealtime("operator_popup", {

@@ -5,6 +5,7 @@ const POOL_ENABLED = !["0", "false", "no", "off"].includes(
   String(process.env.PLC_SOCKET_POOL_ENABLED || "true").trim().toLowerCase()
 );
 const DEFAULT_IDLE_MS = Math.max(Number(process.env.PLC_SOCKET_IDLE_MS || 10000), 1000);
+const DEFAULT_LEASE_TIMEOUT_MS = Math.max(Number(process.env.PLC_SOCKET_LEASE_TIMEOUT_MS || 15000), 1000);
 
 const pool = new Map();
 
@@ -51,7 +52,7 @@ const waiters = new Map(); // key -> [resolve]
 async function acquireSocket({ ip, port, timeoutMs }) {
   const key = `${ip}:${port}`;
   const startTime = Date.now();
-  const deadline = startTime + (timeoutMs || 5000);
+  const deadline = startTime + (timeoutMs || DEFAULT_LEASE_TIMEOUT_MS);
 
   if (!POOL_ENABLED) {
     const socket = await createSocketClient({ ip, port, timeoutMs });

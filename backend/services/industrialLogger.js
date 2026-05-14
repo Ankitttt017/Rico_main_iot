@@ -18,8 +18,14 @@ function logError(event, payload) {
   console.error(toLogLine(event, payload));
 }
 
+function logPlc(machineId, event, payload = {}) {
+  const line = toLogLine(event, { machineId, ...payload });
+  console.log(line.replace("[INDUSTRIAL:", "[PLC:"));
+}
+
 module.exports = {
   logInfo,
   logWarn,
   logError,
+  logPlc,
 };
