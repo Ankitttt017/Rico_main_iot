@@ -171,6 +171,12 @@ const Sidebar = ({ onClose }) => {
         icon: Settings2,
         moduleKey: "master_settings",
       },
+      {
+        name: "Report Config",
+        path: APP_ROUTES.masterReports,
+        icon: FileText,
+        moduleKey: "master_settings",
+      },
        {
         name: "Shift Manager",
         path: APP_ROUTES.shifts,

@@ -722,7 +722,7 @@ const GlobalPopup = ({
           <div className="p-4">
             <p className="text-sm text-text-main">{popup.message || "Update received."}</p>
           </div>
-          <button onClick={onClose} className="w-full py-2.5 text-sm font-semibold border-t border-border hover:bg-bg-elevated transition-colors">
+          <button onClick={onClose} className="w-full py-2.5  text-sm font-semibold border-t border-border hover:bg-bg-elevated transition-colors">
             Close
           </button>
         </div>
@@ -845,8 +845,8 @@ const GlobalPopup = ({
                 <Layout className="text-amber-400" size={18} />
               </div>
               <div>
-                <h2 className="text-white text-sm font-bold">Journey</h2>
-                <p className="text-text-muted text-[9px] font-medium uppercase">Traceability</p>
+                <h3 className="text-white text-sm font-bold">Part Journey</h3>
+                <p className="text-amber-400 text-[9px] font-medium uppercase">Traceability</p>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -858,14 +858,14 @@ const GlobalPopup = ({
               <button
                 onClick={() => setIsFullscreen(!isFullscreen)}
                 title={isFullscreen ? "Minimize" : "Maximize Screen"}
-                className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
-                style={{ background: "#0f172a" }}
+                className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-white/10 text-black hover:text-white transition-colors"
+                style={{ background: "#f59e0b" }}
               >
                 {isFullscreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
               </button>
               {/* Manual stations: hide close so popup stays persistent for operator */}
               {typeof onClose === "function" && !isManualResultStation && (
-                <button onClick={onClose} className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-white/10 transition-colors" style={{ background: "#0f172a" }}>
+                <button onClick={onClose} className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-white/10 transition-colors" style={{ background: "#f59e0b" }}>
                   <X size={12} className="text-text-muted" />
                 </button>
               )}
@@ -875,16 +875,16 @@ const GlobalPopup = ({
           {/* Compact Stats */}
           <div className="grid grid-cols-3 gap-2 mt-3">
             <div className="rounded-lg p-2" style={{ background: "#0f172a" }}>
-              <p className="text-text-muted text-[9px] font-medium uppercase mb-0.5">Station</p>
-              <p className="text-white text-xs font-bold truncate">{currentStationName}</p>
+              <p className="text-amber-400 text-[9px] font-medium uppercase mb-0.5">Station</p>
+              <p className="text-white text-m font-bold truncate">{currentStationName}</p>
             </div>
             <div className="rounded-lg p-2" style={{ background: "#0f172a" }}>
-              <p className="text-text-muted text-[9px] font-medium uppercase mb-0.5">Shift</p>
-              <p className="text-white text-xs font-bold">{shiftText}</p>
+              <p className="text-amber-400 text-[9px] font-medium uppercase mb-0.5">Shift</p>
+              <p className="text-white text-m font-bold">{shiftText}</p>
             </div>
             <div className="rounded-lg p-2" style={allPassed ? { background: "#064e3b" } : { background: "#0f172a" }}>
-              <p className="text-[9px] font-medium uppercase mb-0.5" style={{ color: allPassed ? "#34d399" : "#64748b" }}>Pass</p>
-              <p className="text-xs font-bold" style={{ color: allPassed ? "#4ade80" : "#fff" }}>{passCount}/{totalCount}</p>
+              <p className="text-amber-400 text-[9px] font-medium uppercase mb-0.5" >Pass</p>
+              <p className="text-m font-bold" style={{ color: allPassed ? "#4ade80" : "#fff" }}>{passCount}/{totalCount}</p>
             </div>
           </div>
         </div>
@@ -892,9 +892,9 @@ const GlobalPopup = ({
         {/* Timeline Body - Single source of truth */}
         <div className="flex-1 overflow-y-auto px-5 py-3 bg-bg-card font-medium">
           {effectivePartId && (
-            <div className="mb-4 p-4 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-between shadow-inner">
+            <div className="mb-4 p-3 bg-slate-450 border border-slate-600 rounded-xl flex items-center justify-between shadow-inner">
               <span className="text-[11px] font-black text-slate-400 uppercase tracking-widest">Scanned Part QR</span>
-              <span className="font-mono text-base font-black text-amber-400 tracking-wider select-all">{effectivePartId}</span>
+              <span className="font-mono text-base font-black text-amber-500 tracking-wider select-all">{effectivePartId}</span>
             </div>
           )}
 

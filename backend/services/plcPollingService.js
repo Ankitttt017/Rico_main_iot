@@ -145,9 +145,25 @@ class PlcPollingService {
     }
   }
 
+  isPLCConfigured(machine) {
+    const ip = machine.plc_ip || machine.machine_ip;
+    const protocol = String(machine.plc_protocol || "").trim().toUpperCase();
+    
+    // Skip if IP is invalid (0.0.0.0 indicates disabled)
+    if (!ip || ip === "0.0.0.0" || ip === "localhost" || protocol === "DISABLED") {
+      return false;
+    }
+    return true;
+  }
+
   async readAllRegisters(machine) {
     if (plcCommunicationService.shouldSimulate(machine)) {
       return this.simulateSignals(machine);
+    }
+
+    // Skip polling if PLC is not configured
+    if (!this.isPLCConfigured(machine)) {
+      return null;
     }
 
     try {
@@ -256,8 +272,13 @@ class PlcPollingService {
       signals.TIMESTAMP = Date.now();
       return signals;
     } catch (error) {
+      // Suppress address-related errors when PLC is not properly configured
+      if (error.code === "EADDRNOTAVAIL" || error.message?.includes("0.0.0.0")) {
+        return null;
+      }
       console.error(`[PollingService] Live read failed for machine ${machine.id}:`, error.message);
       return null;
+
     }
   }
 
