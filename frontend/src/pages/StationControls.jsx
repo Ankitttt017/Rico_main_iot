@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { RefreshCw, Save, Settings2, ChevronDown, Info, Activity, X } from "lucide-react";
 import { machineApi, stationSettingsApi, traceabilityApi } from "../api/services";
-import GlobalPopup from "../components/GlobalPopup";
 import { getMachineStage } from "../utils/machineFields";
 import {
   DEFAULT_STATION_FEATURES,
@@ -149,6 +148,12 @@ const Tooltip = ({ children, content }) => {
 const FEATURE_COLS = [
   { key: "qr", label: "QR", desc: "Barcode / QR scan validation", color: "blue", type: "toggle" },
   { key: "operation", label: "OP", desc: "Operation sequence check", color: "violet", type: "toggle" },
+  { key: "plcCommunication", label: "PLC", desc: "Enable PLC read/write communication for this station", color: "sky", type: "toggle" },
+  { key: "validateQrFormat", label: "Fmt", desc: "Validate QR format pattern", color: "blue", type: "toggle" },
+  { key: "validateShotNumber", label: "Shot", desc: "Verify shot number from PLC/DB mapping", color: "sky", type: "toggle" },
+  { key: "validatePreviousStation", label: "Prev", desc: "Validate previous station completion", color: "violet", type: "toggle" },
+  { key: "validateDuplicateBarcode", label: "Dup", desc: "Block duplicate barcode scans", color: "rose", type: "toggle" },
+  { key: "validateCustomerCode", label: "Cust", desc: "Enable customer code validation rule", color: "teal", type: "toggle" },
   { key: "qualityCheck", label: "QC", desc: "Enable quality validation steps", color: "teal", type: "toggle" },
   { key: "manualResult", label: "Manual", desc: "Operator manual OK/NG result", color: "emerald", type: "toggle" },
   { key: "rejectionBin", label: "Reject", desc: "Rejection bin routing", color: "rose", type: "toggle" },
@@ -178,6 +183,7 @@ const StationControl = () => {
   const [lineFilter, setLineFilter] = useState("");
   const [stationSettings, setStationSettings] = useState(() => getStationFeatureSettings());
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [popup, setPopup] = useState(null);
   const [showDropdown, setShowDropdown] = useState(false);
 
@@ -308,11 +314,14 @@ const StationControl = () => {
   };
 
   const saveSettings = async () => {
+    setSaving(true);
     try {
       await stationSettingsApi.save(normalizedSettings);
       setPopup({ type: "SUCCESS", title: "Settings Saved", message: "Station protocols have been synchronized." });
     } catch (err) {
       setPopup({ type: "ERROR", title: "Save Error", message: err.response?.data?.error || "Unable to save station configuration." });
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -320,7 +329,6 @@ const StationControl = () => {
 
   return (
     <div className="space-y-6 rise-in text-slate-900" style={{ fontFamily: "var(--font-outfit)" }}>
-      <GlobalPopup popup={popup} onClose={() => setPopup(null)} />
 
       {/* Header */}
       <div className="db-header-card mb-6">
@@ -342,8 +350,9 @@ const StationControl = () => {
             <button onClick={() => loadData({ silent: false })} className="db-action-btn">
               <RefreshCw size={14} /> Refresh
             </button>
-            <button onClick={saveSettings} className="db-action-btn">
-              <Save size={14} /> Save Settings
+            <button onClick={saveSettings} disabled={saving} className="db-action-btn" style={{ opacity: saving ? 0.7 : 1, cursor: saving ? "not-allowed" : "pointer" }}>
+              {saving ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}
+              {saving ? "Saving..." : "Save Settings"}
             </button>
           </div>
         </div>

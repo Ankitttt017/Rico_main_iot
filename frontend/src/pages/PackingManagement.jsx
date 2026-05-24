@@ -16,7 +16,6 @@ import {
   CheckCircle
 } from "lucide-react";
 import { packingApi } from "../api/services";
-import GlobalPopup from "../components/GlobalPopup";
 
 function toPositiveInt(value, fallback) {
   const parsed = Number(value);
@@ -154,7 +153,6 @@ const PackingManagement = () => {
 
   return (
     <div className="space-y-6 rise-in" style={{ fontFamily: "var(--font-outfit)" }}>
-      <GlobalPopup popup={popup} onClose={() => setPopup(null)} />
 
       {/* Header matching Station Control */}
       <div className="db-header-card mb-6">

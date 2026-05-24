@@ -39,6 +39,7 @@ const {
 } = require("../services/machineBypassService");
 const { normalizeIp, sameIp } = require("../utils/networkAddress");
 const { normalizeTimeValue, toMinutes: toShiftMinutes } = require("../utils/time");
+const { readPartIdFromScannerPlc } = require("../services/scannerPlcDataService");
 
 const IO_SNAPSHOT_MIN_INTERVAL_MS = Math.max(Number(process.env.IO_SNAPSHOT_MIN_INTERVAL_MS || 2500), 1000);
 const IO_SNAPSHOT_CACHE_MAX_AGE_MS = Math.max(
@@ -477,6 +478,32 @@ async function resolveMachineFromRequest(body, req) {
   });
 }
 
+async function resolveScannerFromRequest({ machine, body, req }) {
+  const explicitScannerIp = normalizeIp(body?.scannerIp);
+  const sourceIp = explicitScannerIp || normalizeIp(body?.sourceIp) || normalizeIp(req?.ip) || normalizeIp(req?.socket?.remoteAddress);
+  if (sourceIp) {
+    const byIp = await Scanner.findOne({
+      where: {
+        scanner_ip: sourceIp,
+        is_active: true,
+      },
+      order: [["updatedAt", "DESC"]],
+    });
+    if (byIp) return byIp;
+  }
+
+  if (machine?.id) {
+    return Scanner.findOne({
+      where: {
+        mapped_machine_id: machine.id,
+        is_active: true,
+      },
+      order: [["updatedAt", "DESC"]],
+    });
+  }
+  return null;
+}
+
 async function getActiveStationSequence() {
   const machines = await Machine.findAll({
     where: { is_active: true },
@@ -525,6 +552,40 @@ function toJourneyRow(log) {
     bypassReason: log.bypass_reason,
     createdAt: log.createdAt,
   };
+}
+
+const JOURNEY_NOISE_REASONS = new Set([
+  "DUPLICATE_SCAN",
+  "DUPLICATE_SCAN_IN_FLIGHT",
+  "ALREADY_COMPLETED",
+  "PREVIOUS_STATION_NOT_COMPLETED",
+  "INVALID_QR_FORMAT",
+  "QR_RULE_CONFIG_ERROR",
+  "STATION_NOT_CONFIGURED",
+  "PART_NOT_FOUND",
+  "CUSTOMER_CODE_INVALID",
+  "CUSTOMER_CODE_RULE_INVALID",
+  "INVALID_INPUT",
+  "VALIDATION_ERROR",
+  "ALREADY_SCANNED",
+]);
+
+function isJourneyNoiseLog(log) {
+  if (!log) return false;
+  const plcStatus = String(log.plc_status || "").trim().toUpperCase();
+  const validationResult = String(log.validation_result || "").trim().toUpperCase();
+  const reason = String(log.interlock_reason || "").trim().toUpperCase();
+  const result = String(log.result || "").trim().toUpperCase();
+
+  if (plcStatus === "VALIDATION_ONLY") return true;
+  if (JOURNEY_NOISE_REASONS.has(reason)) return true;
+
+  if (plcStatus === "INTERLOCKED") {
+    if (validationResult === "DUPLICATE" || validationResult === "BLOCKED") return true;
+    if (result === "BLOCK") return true;
+  }
+
+  return false;
 }
 
 function getQualitySummaryFromOperationLogs(rows) {
@@ -756,6 +817,9 @@ function getBlockedPopupMessage(scanResult = {}) {
   const message = scanResult?.message || "";
 
   if (reason === "PREVIOUS_STATION_NOT_COMPLETED") {
+    if (scanResult?.expectedStation && scanResult?.lastCompletedStation) {
+      return `Sequence mismatch. Scan at ${scanResult.expectedStation} first. Last completed station: ${scanResult.lastCompletedStation}.`;
+    }
     return `Station sequence skipped! Please complete operation at ${scanResult.expectedStation || "the previous station"} first.`;
   }
   if (reason === "DUPLICATE_SCAN" || reason === "DUPLICATE_SCAN_IN_FLIGHT" || reason === "ALREADY_COMPLETED") {
@@ -1348,8 +1412,9 @@ async function handleStationPlcFlow({
   const machineBypassEnabled = isMachineBypassEnabled(machine.id) || machine.bypass_enabled === true;
   const stationFeatures = await getStationFeatureConfig(stationNo).catch(() => ({ operation: true }));
   const plcConfigured = Boolean(machine.plc_ip);
+  const plcCommunicationEnabled = stationFeatures.plcCommunication !== false;
 
-  if (!stationFeatures.operation || machineBypassEnabled || !plcConfigured) {
+  if (!stationFeatures.operation || machineBypassEnabled || !plcConfigured || !plcCommunicationEnabled) {
     // PLC is bypassed, disabled, or not configured!
     if (response.decision === "ALLOW" && response.operationLogId) {
       if (stationFeatures.manualResult) {
@@ -1383,12 +1448,18 @@ async function handleStationPlcFlow({
           machineId: machine.id,
           stationNo,
           eventType: TIMELINE_EVENTS.COMPLETED_OK,
-          eventData: { bypassed: true, machineBypassEnabled, operationEnabled: stationFeatures.operation, plcConfigured },
+          eventData: {
+            bypassed: true,
+            machineBypassEnabled,
+            operationEnabled: stationFeatures.operation,
+            plcConfigured,
+            plcCommunicationEnabled,
+          },
         });
 
         response.plcHandshake = "BYPASSED";
         response.operationStatus = "PASSED";
-        response.message = "Operation completed directly (PLC bypassed/disabled).";
+        response.message = "Operation completed directly (PLC communication bypassed/disabled).";
 
         emitOperatorPopup("SUCCESS", {
           partId,
@@ -1399,7 +1470,7 @@ async function handleStationPlcFlow({
           operationStatus: "PASSED",
           status: "ENDED_OK",
           plcStatus: "ENDED_OK",
-          message: "Operation Passed (PLC bypassed/disabled)",
+          message: "Operation Passed (PLC communication bypassed/disabled)",
         });
         emitRealtime("dashboard_refresh", { reason: "PLC_BYPASSED" });
       }
@@ -1668,6 +1739,7 @@ exports.getLiveMachineState = async (req, res) => {
           scannerName: scanner.scanner_name,
           scannerIp: scanner.scanner_ip,
           scannerPort: scanner.scanner_port,
+          scannerMode: scanner.scanner_mode || "TCP_CLIENT",
           isActive: scanner.is_active,
           isSimulation: Boolean(scanner.is_simulation),
         }
@@ -1972,6 +2044,7 @@ exports.getIoSnapshot = async (req, res) => {
             scannerName: scanner.scanner_name,
             scannerIp: scanner.scanner_ip,
             scannerPort: scanner.scanner_port,
+            scannerMode: scanner.scanner_mode || "TCP_CLIENT",
             isActive: scanner.is_active,
           }
           : null,
@@ -2080,7 +2153,8 @@ exports.getPartJourney = async (req, res) => {
       return acc;
     }, {});
 
-    const journey = logs.map(toJourneyRow);
+    const productionLogs = logs.filter((row) => !isJourneyNoiseLog(row));
+    const journey = productionLogs.map(toJourneyRow);
     const logsByStation = journey.reduce((acc, row) => {
       if (!row.stationNo) {
         return acc;
@@ -2488,6 +2562,7 @@ exports.getMachineStationStats = async (req, res) => {
           scannerName: scanner.scanner_name,
           scannerIp: scanner.scanner_ip,
           scannerPort: scanner.scanner_port,
+          scannerMode: scanner.scanner_mode || "TCP_CLIENT",
           isActive: scanner.is_active,
           isSimulation: Boolean(scanner.is_simulation),
         }
@@ -2525,14 +2600,33 @@ exports.getMachineStationStats = async (req, res) => {
 exports.processScan = async (req, res) => {
   try {
     const { partId, stationNo, operation, result } = req.body;
-    const normalizedPartId = String(partId || "").trim();
-    if (!normalizedPartId) {
-      return res.status(400).json({ error: "partId is required" });
-    }
+    let normalizedPartId = String(partId || "").trim();
 
     const machine = await resolveMachineFromRequest(req.body, req);
     if (!machine) {
       return res.status(404).json({ error: "Machine not found for scanner/IP mapping" });
+    }
+
+    let scannerRead = null;
+    if (!normalizedPartId) {
+      const scanner = await resolveScannerFromRequest({ machine, body: req.body, req });
+      const mode = String(scanner?.scanner_mode || "").trim().toUpperCase();
+      if (scanner && mode === "PLC_REGISTER") {
+        try {
+          scannerRead = await readPartIdFromScannerPlc(scanner.get({ plain: true }));
+          normalizedPartId = String(scannerRead.partId || "").trim();
+        } catch (error) {
+          return res.status(400).json({
+            error: `PLC scanner read failed: ${error.message}`,
+          });
+        }
+      }
+    }
+
+    if (!normalizedPartId) {
+      return res.status(400).json({
+        error: "partId is required (or configure scanner mode PLC_REGISTER with valid register range)",
+      });
     }
 
     const machineStage = getMachineOperationStage(machine);
@@ -2616,6 +2710,14 @@ exports.processScan = async (req, res) => {
             ? "PLC_PAYLOAD"
             : "DEFAULT_OK";
     const machineBypassEnabled = isMachineBypassEnabled(machine.id);
+    const qrValidationEnabled = stationFeatures.qr !== false;
+    const stationBypassEnabled = stationFeatures.bypass === true || stationFeatures.operation === false;
+    const skipAllBypassValidations = machineBypassEnabled || stationBypassEnabled;
+    const validateQrFormat = stationFeatures.validateQrFormat !== false;
+    const validateShotNumber = stationFeatures.validateShotNumber !== false;
+    const validatePreviousStation = stationFeatures.validatePreviousStation !== false;
+    const validateDuplicateBarcode = stationFeatures.validateDuplicateBarcode !== false;
+    const validateCustomerCode = stationFeatures.validateCustomerCode === true;
     const bypassState = machineBypassEnabled ? getMachineBypass(machine.id) : null;
     const response = await saveScan(normalizedPartId, normalizedStation, finalResult, machine.id, req.user?.id, {
       ...(ngReason ? { ngReason } : {}),
@@ -2628,9 +2730,13 @@ exports.processScan = async (req, res) => {
             ? resultInput
             : finalResult,
       qualityPayload,
-      skipInterlockValidation: machineBypassEnabled,
-      skipDuplicateValidation: machineBypassEnabled,
-      skipSequenceValidation: machineBypassEnabled,
+      customerCodePattern: stationFeatures.customerCodePattern || "",
+      skipQrFormatValidation: !qrValidationEnabled || !validateQrFormat || skipAllBypassValidations,
+      skipShotValidation: !validateShotNumber || skipAllBypassValidations,
+      skipCustomerCodeValidation: !qrValidationEnabled || !validateCustomerCode || skipAllBypassValidations,
+      skipInterlockValidation: skipAllBypassValidations,
+      skipDuplicateValidation: !qrValidationEnabled || !validateDuplicateBarcode || skipAllBypassValidations,
+      skipSequenceValidation: !validatePreviousStation || skipAllBypassValidations,
     });
     if (response?.decision === "ALLOW" && response?.operationLogId) {
       await safeRecordTimeline({
@@ -2686,6 +2792,7 @@ exports.processScan = async (req, res) => {
       plcStatus: response.decision === "ALLOW" ? "WAITING_PLC" : "BLOCKED",
       reason: response.reason || null,
       expectedStation: response.expectedStation || null,
+      lastCompletedStation: response.lastCompletedStation || null,
       message: response.decision === "ALLOW"
         ? `QR PASS - Starting ${normalizedStation}`
         : getBlockedPopupMessage(response),
@@ -2704,6 +2811,7 @@ exports.processScan = async (req, res) => {
     response.manualResultEnabled = manualResultEnabled;
     response.isSpcStation = spcConfig.enabled;
     response.machineBypassEnabled = machineBypassEnabled;
+    response.stationBypassEnabled = stationBypassEnabled;
     response.machineBypassReason = bypassState?.reason || null;
     response.qualityCheck = {
       mode: spcConfig.mode,
@@ -2713,10 +2821,19 @@ exports.processScan = async (req, res) => {
       plcResultToken: plcQualityResult?.token ?? null,
       ack: qualityAck,
     };
+    response.validationConfig = {
+      qrValidationEnabled,
+      validateQrFormat,
+      validateShotNumber,
+      validatePreviousStation,
+      validateDuplicateBarcode,
+      validateCustomerCode,
+    };
 
     res.json({
       ...response,
       partId: normalizedPartId,
+      scannerRead,
       machine: {
         id: machine.id,
         machineName: machine.machine_name,
@@ -2797,6 +2914,14 @@ exports.verifyScanForOperator = async (req, res) => {
             ? "PLC_PAYLOAD"
             : "DEFAULT_OK";
     const machineBypassEnabled = isMachineBypassEnabled(machine.id);
+    const qrValidationEnabled = stationFeatures.qr !== false;
+    const stationBypassEnabled = stationFeatures.bypass === true || stationFeatures.operation === false;
+    const skipAllBypassValidations = machineBypassEnabled || stationBypassEnabled;
+    const validateQrFormat = stationFeatures.validateQrFormat !== false;
+    const validateShotNumber = stationFeatures.validateShotNumber !== false;
+    const validatePreviousStation = stationFeatures.validatePreviousStation !== false;
+    const validateDuplicateBarcode = stationFeatures.validateDuplicateBarcode !== false;
+    const validateCustomerCode = stationFeatures.validateCustomerCode === true;
     const bypassState = machineBypassEnabled ? getMachineBypass(machine.id) : null;
     const response = await saveScan(normalizedPartId, stationNo, finalResult, machine.id, req.user?.id, {
       ...(ngReason ? { ngReason } : {}),
@@ -2809,9 +2934,13 @@ exports.verifyScanForOperator = async (req, res) => {
             ? resultInput
             : finalResult,
       qualityPayload,
-      skipInterlockValidation: machineBypassEnabled,
-      skipDuplicateValidation: machineBypassEnabled,
-      skipSequenceValidation: machineBypassEnabled,
+      customerCodePattern: stationFeatures.customerCodePattern || "",
+      skipQrFormatValidation: !qrValidationEnabled || !validateQrFormat || skipAllBypassValidations,
+      skipShotValidation: !validateShotNumber || skipAllBypassValidations,
+      skipCustomerCodeValidation: !qrValidationEnabled || !validateCustomerCode || skipAllBypassValidations,
+      skipInterlockValidation: skipAllBypassValidations,
+      skipDuplicateValidation: !qrValidationEnabled || !validateDuplicateBarcode || skipAllBypassValidations,
+      skipSequenceValidation: !validatePreviousStation || skipAllBypassValidations,
     });
     if (response?.decision === "ALLOW" && response?.operationLogId) {
       await safeRecordTimeline({
@@ -2867,6 +2996,7 @@ exports.verifyScanForOperator = async (req, res) => {
       qrResult: qrStatus,
       reason: response.reason || null,
       expectedStation: response.expectedStation || null,
+      lastCompletedStation: response.lastCompletedStation || null,
       qrReason: response.reason || null,
       message: popupMessage,
     });
@@ -2878,6 +3008,7 @@ exports.verifyScanForOperator = async (req, res) => {
     response.manualResultEnabled = manualResultEnabled;
     response.isSpcStation = spcConfig.enabled;
     response.machineBypassEnabled = machineBypassEnabled;
+    response.stationBypassEnabled = stationBypassEnabled;
     response.machineBypassReason = bypassState?.reason || null;
     response.qualityCheck = {
       mode: spcConfig.mode,
@@ -2886,6 +3017,14 @@ exports.verifyScanForOperator = async (req, res) => {
       plcResultRaw: plcQualityResult?.rawValue ?? null,
       plcResultToken: plcQualityResult?.token ?? null,
       ack: qualityAck,
+    };
+    response.validationConfig = {
+      qrValidationEnabled,
+      validateQrFormat,
+      validateShotNumber,
+      validatePreviousStation,
+      validateDuplicateBarcode,
+      validateCustomerCode,
     };
 
     res.json({
@@ -3642,7 +3781,7 @@ exports.submitManualResult = async (req, res) => {
         part.is_interlocked = false;
         part.interlock_reason = null;
       } else {
-        part.status = "IN_PROGRESS";
+        part.status = "NG";
         part.is_interlocked = true;
         part.interlock_reason = reason || "MANUAL_REJECT";
       }
@@ -4245,6 +4384,10 @@ exports.getDashboardReport = async (req, res) => {
 
     const filteredRows = applyShiftFilter(productionRows, shiftCodeFilter, shifts);
     const filteredOperationRows = applyShiftFilter(operationRows, shiftCodeFilter, shifts);
+    const productionOperationRows = filteredOperationRows.filter((row) => !isJourneyNoiseLog(row));
+    const filteredInterlocks = applyShiftFilter(interlocks, shiftCodeFilter, shifts).filter(
+      (row) => !isJourneyNoiseLog(row)
+    );
 
     const machineWiseMap = filteredRows.reduce((acc, row) => {
       if (!acc[row.machine_id]) {
@@ -4288,7 +4431,7 @@ exports.getDashboardReport = async (req, res) => {
       };
     }
 
-    for (const row of filteredOperationRows) {
+    for (const row of productionOperationRows) {
       const machineId = Number(row.machine_id || 0);
       if (!Number.isFinite(machineId) || machineId <= 0) {
         continue;
@@ -4427,7 +4570,7 @@ exports.getDashboardReport = async (req, res) => {
       }
     }
 
-    const partHistory = [...filteredOperationRows]
+    const partHistory = [...productionOperationRows]
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     const historyTotal = partHistory.length;
     const historyStart = (page - 1) * pageSize;
@@ -4491,7 +4634,7 @@ exports.getDashboardReport = async (req, res) => {
       stationCards,
       hourlyProduction: hourly,
       shiftProduction,
-      interlockHistory: interlocks,
+      interlockHistory: filteredInterlocks,
       reworkCount,
       partJourney: pagedHistory,
       partJourneyPagination: {
@@ -4676,7 +4819,8 @@ async function getDashboardExportRows(filters) {
   ]);
 
   const shiftFilteredRows = applyShiftFilter(operationRows, shiftCodeFilter, shifts);
-  const machineIds = uniqueStages(shiftFilteredRows.map((row) => String(row.machine_id || "")).filter(Boolean))
+  const productionRows = shiftFilteredRows.filter((row) => !isJourneyNoiseLog(row));
+  const machineIds = uniqueStages(productionRows.map((row) => String(row.machine_id || "")).filter(Boolean))
     .map((entry) => Number(entry))
     .filter((entry) => Number.isFinite(entry));
   const machineRows = machineIds.length
@@ -4691,7 +4835,7 @@ async function getDashboardExportRows(filters) {
     return acc;
   }, {});
 
-  const partIds = uniqueStages(shiftFilteredRows.map((row) => String(row.part_id || "").trim()).filter(Boolean));
+  const partIds = uniqueStages(productionRows.map((row) => String(row.part_id || "").trim()).filter(Boolean));
   const partRows = partIds.length
     ? await Part.findAll({
       where: { part_id: { [Op.in]: partIds } },
@@ -4716,7 +4860,7 @@ async function getDashboardExportRows(filters) {
     return acc;
   }, {});
 
-  const mappedRows = shiftFilteredRows.map((row) => {
+  const mappedRows = productionRows.map((row) => {
     const machine = machineMap[row.machine_id] || {};
     const part = partMap[row.part_id] || {};
     const qrFormatName = String(part.qr_format_name || "").trim();

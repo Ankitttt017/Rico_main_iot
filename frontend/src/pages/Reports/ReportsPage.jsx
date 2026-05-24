@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { reportApi, machineApi } from '../../api/services';
 import { loadReportConfig } from '../../utils/reportConfig';
 import { toDatetimeLocal } from '../../utils/time';
@@ -21,6 +21,11 @@ const ReportsPage = () => {
     machineId: '',
     lineName: '',
     shiftCode: '',
+    status: '',
+    station: '',
+    barcode: '',
+    customerCode: '',
+    operatorId: '',
     resultType: '',
     modelCode: '',
     operationNo: ''
@@ -30,27 +35,7 @@ const ReportsPage = () => {
     setLoading(true);
     try {
       const response = await reportApi.getData(filters);
-      // Client-side result resolution to match the table display
-      const enrichedRows = (response.rows || []).map(row => {
-        // Simple client-side mapping for the table (actual logic is in backend too)
-        const reason = String(row.interlock_reason || "").toUpperCase();
-        const plcStatus = String(row.plc_status || "").toUpperCase();
-        const res = String(row.result || "").toUpperCase();
-
-        let industrialResult = "UNKNOWN";
-        if (reason.includes("DUPLICATE")) industrialResult = "DUPLICATE";
-        else if (reason.includes("PREVIOUS")) industrialResult = "PREVIOUS STATION PENDING";
-        else if (reason.includes("VALIDATION") || reason.includes("INTERLOCK")) industrialResult = "VALIDATION REJECT";
-        else if (res === "OK" || plcStatus === "ENDED_OK") industrialResult = "OK";
-        else if (res === "NG" || plcStatus === "ENDED_NG") industrialResult = "NG";
-        
-        return { ...row, industrialResult };
-      });
-
-      setData({
-        rows: enrichedRows,
-        metrics: response.metrics || {}
-      });
+      setData({ rows: response.rows || [], metrics: response.metrics || {} });
     } catch (e) {
       console.error(e);
       toast.error("Failed to load production analytics");
@@ -97,6 +82,91 @@ const ReportsPage = () => {
     }
   };
 
+  const reportTable = useMemo(() => {
+    const sourceRows = data.rows || [];
+    const stationOrder = [...new Set(sourceRows.map((r) => String(r.operationNo || r.stationNo || "").trim()).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+    const stationLabelMap = stationOrder.reduce((acc, operationNo) => {
+      const machineNames = [...new Set(
+        sourceRows
+          .filter((row) => String(row.operationNo || row.stationNo || "").trim() === operationNo)
+          .map((row) => String(row.machineName || "").trim())
+          .filter(Boolean)
+      )];
+      acc[operationNo] = machineNames.length > 0 ? `${operationNo} - ${machineNames.join(" / ")}` : operationNo;
+      return acc;
+    }, {});
+    const plcKeys = [...new Set(sourceRows.flatMap((r) => Object.keys(r.plcReading || {})))].sort((a, b) => a.localeCompare(b));
+    const grouped = new Map();
+
+    sourceRows.forEach((row) => {
+      const key = String(row.partId || row.part_id || "").trim();
+      if (!key) return;
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          barcode: key,
+          customerCode: row.customerCode || "-",
+          stationResults: {},
+          stationCycleTimes: {},
+          overallStatus: row.industrialResult || row.statusLabel || "UNKNOWN",
+          verifyStatus: String(row.validation_result || row.validationResult || "-").toUpperCase(),
+          ngReason: row.reason || row.interlock_reason || "-",
+          bypassStatus: row.bypassStatus ? "Yes" : "No",
+          plcData: {},
+        });
+      }
+      const bucket = grouped.get(key);
+      const stationKey = String(row.operationNo || row.stationNo || "").trim();
+      if (stationKey) {
+        bucket.stationResults[stationKey] = String(row.industrialResult || row.statusLabel || "-").toUpperCase();
+        bucket.stationCycleTimes[stationKey] = row.cycleTime || "-";
+      }
+      bucket.customerCode = row.customerCode || bucket.customerCode;
+      bucket.overallStatus = String(row.industrialResult || bucket.overallStatus || "UNKNOWN").toUpperCase();
+      if (!bucket.verifyStatus || bucket.verifyStatus === "-") {
+        bucket.verifyStatus = String(row.validation_result || row.validationResult || "-").toUpperCase();
+      }
+      bucket.ngReason = row.reason || row.interlock_reason || bucket.ngReason || "-";
+      bucket.bypassStatus = row.bypassStatus ? "Yes" : bucket.bypassStatus;
+      Object.assign(bucket.plcData, row.plcReading || {});
+    });
+
+    const dynamicColumns = [
+      { key: "srNo", label: "Sr No" },
+      { key: "barcode", label: "Barcode" },
+      { key: "customerCode", label: "Customer Code" },
+      ...stationOrder.map((station) => ({ key: `station_${station}`, label: stationLabelMap[station] || station })),
+      ...stationOrder.map((station) => ({ key: `cycle_${station}`, label: `${stationLabelMap[station] || station} Cycle(s)` })),
+      { key: "verifyStatus", label: "Verify" },
+      { key: "overallStatus", label: "Status" },
+      { key: "ngReason", label: "NG Reason" },
+      { key: "bypassStatus", label: "Bypass" },
+      ...plcKeys.map((key) => ({ key: `plc_${key}`, label: key })),
+    ];
+
+    const dynamicRows = Array.from(grouped.values()).map((row, idx) => {
+      const shaped = {
+        srNo: idx + 1,
+        barcode: row.barcode,
+        customerCode: row.customerCode,
+        verifyStatus: row.verifyStatus || "-",
+        overallStatus: row.overallStatus,
+        ngReason: row.ngReason,
+        bypassStatus: row.bypassStatus,
+      };
+      stationOrder.forEach((station) => {
+        shaped[`station_${station}`] = row.stationResults[station] || "-";
+        shaped[`cycle_${station}`] = row.stationCycleTimes[station] || "-";
+      });
+      plcKeys.forEach((key) => {
+        shaped[`plc_${key}`] = row.plcData[key] ?? "-";
+      });
+      return shaped;
+    });
+
+    return { columns: dynamicColumns, rows: dynamicRows };
+  }, [data.rows]);
+
   return (
     <div className="space-y-6 pb-20 rise-in">
       {/* Page Header */}
@@ -139,14 +209,14 @@ const ReportsPage = () => {
         onClear={() => setFilters({
           dateFrom: toDatetimeLocal(new Date(new Date().setHours(0,0,0,0))),
           dateTo: toDatetimeLocal(new Date(new Date().setHours(23,59,59,999))),
-          machineId: '', lineName: '', shiftCode: '', resultType: '', modelCode: '', operationNo: ''
+          machineId: '', lineName: '', shiftCode: '', status: '', station: '', barcode: '', customerCode: '', operatorId: '', resultType: '', modelCode: '', operationNo: ''
         })}
         machines={machines}
       />
 
       <ReportSummaryCards metrics={data.metrics} />
 
-      <ReportTable rows={data.rows} loading={loading} />
+      <ReportTable rows={reportTable.rows} columns={reportTable.columns} loading={loading} />
     </div>
   );
 };

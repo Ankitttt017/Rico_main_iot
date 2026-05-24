@@ -124,6 +124,16 @@ async function generateIndustrialExcel(res, {
 
   const stationOrder = [...new Set(rows.map((r) => String(r.operation_no || r.operationNo || "").trim()).filter(Boolean))]
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+  const stationLabelByOperation = stationOrder.reduce((acc, operationNo) => {
+    const machineNames = [...new Set(
+      rows
+        .filter((row) => String(row.operation_no || row.operationNo || "").trim() === operationNo)
+        .map((row) => String(row.machineName || row.machine_name || row?.Machine?.machine_name || "").trim())
+        .filter(Boolean)
+    )];
+    acc[operationNo] = machineNames.length > 0 ? `${operationNo} - ${machineNames.join(" / ")}` : operationNo;
+    return acc;
+  }, {});
 
   const grouped = new Map();
   rows.forEach((row) => {
@@ -141,13 +151,19 @@ async function generateIndustrialExcel(res, {
         cycleTime: row.cycleTime || "0.00",
         reason: row.interlock_reason || row.reason || "-",
         stationResults: {},
+        stationCycleTimes: {},
+        plcReading: {},
       });
     }
     const bucket = grouped.get(partSerial);
     const op = String(row.operation_no || row.operationNo || "").trim();
     const resolved = row.industrialResult ? { status: row.industrialResult } : resolveIndustrialResult(row);
     const status = String(resolved.status || "").toUpperCase();
-    if (op) bucket.stationResults[op] = status === "OK" || status === "NG" ? status : "-";
+    if (op) {
+      bucket.stationResults[op] = status === "OK" || status === "NG" ? status : "-";
+      bucket.stationCycleTimes[op] = row.cycleTime || "-";
+    }
+    Object.assign(bucket.plcReading, row.plcReading || {});
   });
 
   const matrixRows = [...grouped.values()];
@@ -167,70 +183,16 @@ async function generateIndustrialExcel(res, {
     { header: "Cycle Time (s)", width: 16 },
     { header: "Line No", width: 14 },
   ];
-  const stationColumns = stationOrder.map((op) => ({ header: op, width: 12 }));
-  const plcColumns = [
-    { header: "Part Name", key: "part_name", width: 22 },
-    { header: "Shot Time", key: "shot_time", width: 14 },
-    { header: "Shot Date", key: "shot_date", width: 14 },
-    { header: "Shot Number", key: "shot_number", width: 14 },
-    { header: "OK Shot", key: "ok_shot", width: 10 },
-    { header: "NG Shot", key: "ng_shot", width: 10 },
-    { header: "PLC cycle_time", key: "cycle_time", width: 14 },
-    { header: "die_close_core_in_time", key: "die_close_core_in_time", width: 20 },
-    { header: "pouring_time", key: "pouring_time", width: 14 },
-    { header: "shot_fwd_time", key: "shot_fwd_time", width: 14 },
-    { header: "curing_time", key: "curing_time", width: 14 },
-    { header: "die_open_core_out_time", key: "die_open_core_out_time", width: 20 },
-    { header: "extract_time", key: "extract_time", width: 14 },
-    { header: "ejector_time", key: "ejector_time", width: 14 },
-    { header: "spray_time", key: "spray_time", width: 14 },
-    { header: "v1_speed", key: "v1_speed", width: 12 },
-    { header: "v2_speed", key: "v2_speed", width: 12 },
-    { header: "v3_speed", key: "v3_speed", width: 12 },
-    { header: "v4_speed", key: "v4_speed", width: 12 },
-    { header: "accel_point", key: "accel_point", width: 12 },
-    { header: "deaccel_point", key: "deaccel_point", width: 14 },
-    { header: "metal_pressure", key: "metal_pressure", width: 14 },
-    { header: "intensification_time", key: "intensification_time", width: 18 },
-    { header: "biscuit_thickness", key: "biscuit_thickness", width: 16 },
-    { header: "clamp_tonnage_he_low_pct", key: "clamp_tonnage_he_low_pct", width: 22 },
-    { header: "clamp_tonnage_he_low_mn", key: "clamp_tonnage_he_low_mn", width: 22 },
-    { header: "clamp_tonnage_op_up_pct", key: "clamp_tonnage_op_up_pct", width: 22 },
-    { header: "clamp_tonnage_op_low_pct", key: "clamp_tonnage_op_low_pct", width: 22 },
-    { header: "clamp_tonnage_he_up_pct", key: "clamp_tonnage_he_up_pct", width: 22 },
-    { header: "vacuum_pressure", key: "vacuum_pressure", width: 16 },
-    { header: "cooling_water_mov", key: "cooling_water_mov", width: 16 },
-    { header: "cooling_water_sta", key: "cooling_water_sta", width: 16 },
-    { header: "furnace_metal_temp", key: "furnace_metal_temp", width: 18 },
-    { header: "clamp_force_pct", key: "clamp_force_pct", width: 14 },
-    { header: "clamp_tonnage", key: "clamp_tonnage", width: 14 },
-    { header: "shot_acc_pressure", key: "shot_acc_pressure", width: 16 },
-    { header: "intensification_acc_pressure", key: "intensification_acc_pressure", width: 22 },
-    { header: "jet_cooling_pressure", key: "jet_cooling_pressure", width: 18 },
-    { header: "fixed_die_temp_f1", key: "fixed_die_temp_f1", width: 16 },
-    { header: "fixed_die_temp_f2", key: "fixed_die_temp_f2", width: 16 },
-    { header: "moving_die_temp_m1", key: "moving_die_temp_m1", width: 18 },
-    { header: "moving_die_temp_m2", key: "moving_die_temp_m2", width: 18 },
-    { header: "slide_temp_s1", key: "slide_temp_s1", width: 14 },
-    { header: "manual_mode", key: "manual_mode", width: 12 },
-    { header: "emergency_stop", key: "emergency_stop", width: 14 },
-    { header: "hyd_oil_level_low", key: "hyd_oil_level_low", width: 16 },
-    { header: "running_mode", key: "running_mode", width: 12 },
-    { header: "hyd_pump_motor_overload", key: "hyd_pump_motor_overload", width: 20 },
-    { header: "hyd_oil_high_temp", key: "hyd_oil_high_temp", width: 16 },
-    { header: "servo_pump_overload", key: "servo_pump_overload", width: 18 },
-    { header: "servo_pump_motor_high_temp", key: "servo_pump_motor_high_temp", width: 22 },
-    { header: "die_close_step", key: "die_close_step", width: 12 },
-    { header: "pouring_step", key: "pouring_step", width: 12 },
-    { header: "shot_fwd_step", key: "shot_fwd_step", width: 12 },
-    { header: "curing_step", key: "curing_step", width: 12 },
-    { header: "die_open_step", key: "die_open_step", width: 12 },
-    { header: "ejector_step", key: "ejector_step", width: 12 },
-    { header: "extractor_step", key: "extractor_step", width: 12 },
-    { header: "spray_step", key: "spray_step", width: 12 },
-    { header: "cycle_end", key: "cycle_end", width: 12 }
-  ];
-  const columns = [...baseColumns, ...stationColumns, ...plcColumns];
+  const stationColumns = stationOrder.map((op) => ({ header: stationLabelByOperation[op] || op, width: 24 }));
+  const stationCycleColumns = stationOrder.map((op) => ({ header: `${stationLabelByOperation[op] || op} CYCLE(S)`, width: 20 }));
+  const plcKeys = [...new Set(rows.flatMap((r) => Object.keys(r.plcReading || {})))]
+    .sort((a, b) => a.localeCompare(b));
+  const plcColumns = plcKeys.map((key) => ({
+    header: `PLC ${String(key).replaceAll("_", " ")}`.toUpperCase(),
+    key,
+    width: Math.min(Math.max(String(key).length + 6, 14), 28),
+  }));
+  const columns = [...baseColumns, ...stationColumns, ...stationCycleColumns, ...plcColumns];
 
   columns.forEach((col, i) => {
     worksheet.getColumn(i + 1).width = col.width;
@@ -244,6 +206,7 @@ async function generateIndustrialExcel(res, {
 
   matrixRows.forEach((row, i) => {
     const stationResults = stationOrder.map((op) => row.stationResults[op] || "-");
+    const stationCycles = stationOrder.map((op) => row.stationCycleTimes[op] || "-");
     const overall = stationResults.includes("NG") ? "NG" : stationResults.includes("OK") ? "OK" : "-";
     const plc = row.plcReading || {};
     const values = [
@@ -260,6 +223,7 @@ async function generateIndustrialExcel(res, {
       row.cycleTime,
       row.lineName,
       ...stationResults,
+      ...stationCycles,
       ...plcColumns.map((c) => {
         const v = plc[c.key];
         return v === undefined || v === null || v === "" ? "-" : v;

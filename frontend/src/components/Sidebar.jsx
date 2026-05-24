@@ -96,6 +96,12 @@ const Sidebar = ({ onClose }) => {
         moduleKey: "production",
       },
       {
+        name: "Reports",
+        path: APP_ROUTES.reports,
+        icon: BarChart3,
+        moduleKey: "production",
+      },
+      {
         name: "Packing",
         path: APP_ROUTES.packing,
         icon: Boxes,
@@ -298,8 +304,8 @@ const Sidebar = ({ onClose }) => {
     <aside
       className={`
         ${collapsed ? "w-[60px]" : "w-[240px]"}
-        h-screen flex flex-col
-        fixed md:relative z-50
+        h-full flex flex-col
+        relative z-50
         bg-bg-card/90 backdrop-blur-xl
         border-r border-border/60
         transition-all duration-300

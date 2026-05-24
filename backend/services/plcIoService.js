@@ -1,7 +1,7 @@
 const net = require("net");
 const { acquireSocket, releaseSocket } = require("./plcProtocols/socketPool");
 
-const DEFAULT_TIMEOUT_MS = Math.max(Number(process.env.PLC_IO_TIMEOUT_MS || 2000), 300);
+const DEFAULT_TIMEOUT_MS = Math.max(Number(process.env.PLC_IO_TIMEOUT_MS || 6000), 500);
 const DEFAULT_WRITE_RETRY_COUNT = Math.max(Number(process.env.PLC_IO_WRITE_RETRY_COUNT || 2), 1);
 const DEFAULT_SLMP_FRAME_MODE = String(process.env.PLC_SLMP_FRAME_MODE || "AUTO")
   .trim()
@@ -687,7 +687,7 @@ async function readSlmpRegisters({
   const routes = getSlmpRouteCandidates();
   const frameModes = getSlmpFrameModeCandidates(frameMode);
   // Use bounded per-operation timeouts to prevent cascading delays
-  const perAttemptTimeoutMs = Math.min(Math.max(timeoutMs, 300), 2000);
+  const perAttemptTimeoutMs = Math.min(Math.max(timeoutMs, 500), 8000);
   // Overall deadline to prevent total time from exceeding caller's expectations
   const overallDeadline = Date.now() + Math.max(timeoutMs * 2, 6000);
   let lastError = null;

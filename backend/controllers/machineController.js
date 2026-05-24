@@ -161,11 +161,12 @@ function normalizePlcSignalMap(value) {
 
 function normalizeSpcConfig(value) {
   const source = value && typeof value === "object" ? value : {};
+  const resolvedMode = String(source.mode || "IP_PUSH").trim().toUpperCase();
   return {
     enabled: source.enabled === true,
-    mode: String(source.mode || "IP_PUSH").trim().toUpperCase(),
-    activeProtocols: Array.isArray(source.activeProtocols) ? source.activeProtocols : [String(source.mode || "IP_PUSH").toUpperCase()],
-    priority: Array.isArray(source.priority) ? source.priority : ["HTTP_API", "PLC_REGISTER", "IP_PUSH", "FOLDER", "FTP_FILE"],
+    mode: resolvedMode,
+    activeProtocols: [resolvedMode],
+    priority: [resolvedMode],
     
     // Core acquisition settings
     sourceIp: toText(source.sourceIp) || null,
@@ -173,9 +174,9 @@ function normalizeSpcConfig(value) {
     payloadResultKey: toText(source.payloadResultKey || "RESULT") || "RESULT",
     
     // Reliability Engine (Requirement 5)
-    retryCount: toInt(source.retryCount) ?? 3,
-    retryDelayMs: toInt(source.retryDelayMs) ?? 1000,
-    timeoutMs: toInt(source.timeoutMs) ?? 5000,
+    retryCount: toInt(source.retryCount) ?? 4,
+    retryDelayMs: toInt(source.retryDelayMs) ?? 1500,
+    timeoutMs: toInt(source.timeoutMs) ?? 12000,
 
     // Dynamic Register Mapping (Requirement 21)
     dynamicRegisters: Array.isArray(source.dynamicRegisters) ? source.dynamicRegisters.map(r => ({
@@ -1080,15 +1081,53 @@ exports.readPlcRegisters = async (req, res) => {
 
 exports.testConnection = async (req, res) => {
   try {
-    const { mode, sourceIp, sourcePort, endpoint, folderConfig } = req.body;
+    const {
+      mode,
+      sourceIp,
+      sourcePort,
+      endpoint,
+      folderConfig,
+      payloadResultKey,
+      registerNo,
+      plcRegister,
+      plcProtocol,
+      plcSlmpDevice,
+      plcSlmpFrameMode,
+      timeoutMs,
+    } = req.body;
     const protocolMode = String(mode || "IP_PUSH").trim().toUpperCase();
+    const testTimeoutMs = toPositiveInt(timeoutMs) || 12000;
+
+    const testTcpReachability = async (ip, port) => {
+      const net = require("net");
+      return new Promise((resolve, reject) => {
+        const client = new net.Socket();
+        let settled = false;
+        const done = (fn) => (arg) => {
+          if (settled) return;
+          settled = true;
+          client.destroy();
+          fn(arg);
+        };
+        client.setTimeout(testTimeoutMs);
+        client.connect(Number(port), ip, done(resolve));
+        client.on("error", done(reject));
+        client.on("timeout", done(() => reject(new Error("Connection timeout"))));
+      });
+    };
 
     if (protocolMode === "IP_PUSH") {
       if (!sourceIp) return res.status(400).json({ error: "Source IP required for IP_PUSH test" });
-      const { exec } = require("child_process");
+      const { spawn } = require("child_process");
       return new Promise((resolve) => {
-        exec(`ping -n 1 -w 2000 ${sourceIp}`, (error, stdout) => {
-          if (error || stdout.includes("Destination host unreachable") || stdout.includes("Request timed out")) {
+        const ping = spawn("ping", ["-n", "1", "-w", String(testTimeoutMs), String(sourceIp)]);
+        let stdout = "";
+        let stderr = "";
+        ping.stdout.on("data", (chunk) => { stdout += String(chunk || ""); });
+        ping.stderr.on("data", (chunk) => { stderr += String(chunk || ""); });
+        ping.on("close", (code) => {
+          const output = `${stdout}\n${stderr}`.toLowerCase();
+          if (code !== 0 || output.includes("unreachable") || output.includes("timed out")) {
             resolve(res.status(502).json({ error: "IP Unreachable", details: "Ping failed or timed out" }));
           } else {
             resolve(res.json({ success: true, message: "IP Reachable (Ping Success)" }));
@@ -1097,50 +1136,129 @@ exports.testConnection = async (req, res) => {
       });
     }
 
-    if (protocolMode === "PLC_REGISTER") {
+    if (["PLC_REGISTER", "TCP_CLIENT"].includes(protocolMode)) {
       if (!sourceIp || !sourcePort) return res.status(400).json({ error: "IP and Port required for PLC connection test" });
+      try {
+        await testTcpReachability(sourceIp, sourcePort);
+      } catch (err) {
+        return res.status(502).json({ error: "Endpoint Unreachable", details: err.message });
+      }
+
+      // Optional real register read validation when register is provided and protocol is PLC-like.
+      const registerCandidate = toInt(registerNo ?? plcRegister ?? payloadResultKey);
+      const normalizedPlcProtocol = normalizeProtocol(plcProtocol, "MODBUS_TCP");
+      if (registerCandidate !== null && ["PLC_REGISTER"].includes(protocolMode)) {
+        try {
+          if (normalizedPlcProtocol === "MODBUS_TCP") {
+            const read = await readModbusRegisters({
+              ip: sourceIp,
+              port: Number(sourcePort),
+              unitId: 1,
+              registers: [registerCandidate],
+              timeoutMs: testTimeoutMs,
+            });
+            return res.json({
+              success: true,
+              message: "PLC reachable and register read successful",
+              registerRead: {
+                protocol: "MODBUS_TCP",
+                register: registerCandidate,
+                value: read?.values?.[registerCandidate] ?? null,
+                errors: Array.isArray(read?.errors) ? read.errors : [],
+              },
+            });
+          }
+          if (normalizedPlcProtocol === "SLMP") {
+            const device = toText(plcSlmpDevice || "D").toUpperCase() || "D";
+            const read = await readSlmpRegisters({
+              ip: sourceIp,
+              port: Number(sourcePort),
+              registers: [{ register: registerCandidate, device }],
+              timeoutMs: testTimeoutMs,
+              defaultDevice: device,
+              frameMode: toText(plcSlmpFrameMode || "AUTO").toUpperCase() || "AUTO",
+            });
+            return res.json({
+              success: true,
+              message: "PLC reachable and register read successful",
+              registerRead: {
+                protocol: "SLMP",
+                register: registerCandidate,
+                device,
+                value: read?.values?.[registerCandidate] ?? null,
+                errors: Array.isArray(read?.errors) ? read.errors : [],
+              },
+            });
+          }
+        } catch (readError) {
+          return res.status(502).json({
+            error: "PLC reachable but register read failed",
+            details: readError.message,
+          });
+        }
+      }
+
+      return res.json({
+        success: true,
+        message: protocolMode === "TCP_CLIENT" ? "TCP source reachable" : "PLC Reachable",
+      });
+    }
+
+    if (protocolMode === "TCP_SERVER") {
       const net = require("net");
-      const client = new net.Socket();
+      const bindIp = sourceIp || "0.0.0.0";
+      const port = Number(sourcePort);
+      if (!Number.isFinite(port) || port <= 0) {
+        return res.status(400).json({ error: "Valid listener port required for TCP_SERVER test" });
+      }
       return new Promise((resolve) => {
-        client.setTimeout(3000);
-        client.connect(Number(sourcePort), sourceIp, () => {
-          client.destroy();
-          resolve(res.json({ success: true, message: "PLC Reachable" }));
+        const server = net.createServer();
+        server.once("error", (err) => {
+          server.close(() => resolve(res.status(502).json({ error: "TCP listener bind failed", details: err.message })));
         });
-        client.on("error", (err) => {
-          client.destroy();
-          resolve(res.status(502).json({ error: "PLC Unreachable", details: err.message }));
-        });
-        client.on("timeout", () => {
-          client.destroy();
-          resolve(res.status(504).json({ error: "PLC Connection Timeout" }));
+        server.listen(port, bindIp, () => {
+          server.close(() => resolve(res.json({ success: true, message: `TCP listener bind OK on ${bindIp}:${port}` })));
         });
       });
     }
 
     if (protocolMode === "HTTP_API") {
-      if (!endpoint) return res.status(400).json({ error: "Endpoint URL required" });
+      const url = endpoint || sourceIp;
+      if (!url) return res.status(400).json({ error: "Endpoint URL required" });
       const axios = require("axios");
       try {
-        await axios.get(endpoint, { timeout: 3000 });
+        await axios.get(url, { timeout: testTimeoutMs });
         return res.json({ success: true, message: "HTTP API Reachable" });
       } catch (err) {
         return res.status(502).json({ error: "HTTP API Unreachable", details: err.message });
       }
     }
 
-    if (protocolMode === "FOLDER") {
-      if (!folderConfig?.path) return res.status(400).json({ error: "Folder path required" });
+    if (protocolMode === "FOLDER" || protocolMode === "FILE_WATCH") {
+      const folderPath = toText(folderConfig?.path || sourceIp);
+      if (!folderPath) return res.status(400).json({ error: "Folder path required" });
       const fs = require("fs");
       try {
-        await fs.promises.access(folderConfig.path, fs.constants.R_OK);
+        await fs.promises.access(folderPath, fs.constants.R_OK);
         return res.json({ success: true, message: "Folder Reachable" });
       } catch (err) {
         return res.status(502).json({ error: "Folder Unreachable", details: err.message });
       }
     }
 
-    // IP_PUSH and FTP_FILE defaults
+    if (protocolMode === "SERIAL") {
+      const comPort = String(sourceIp || "").trim().toUpperCase();
+      if (!comPort) return res.status(400).json({ error: "COM port required for SERIAL test" });
+      if (!/^COM\d+$/.test(comPort)) {
+        return res.status(400).json({ error: "Invalid COM port format. Example: COM3" });
+      }
+      return res.json({
+        success: true,
+        message: `Serial configuration accepted (${comPort}). Runtime COM open check handled by scanner adapter.`,
+      });
+    }
+
+    // Unknown mode defaults
     return res.json({ success: true, message: `${protocolMode} connection simulated (Test not fully implemented for this mode)` });
   } catch (error) {
     res.status(500).json({ error: error.message });

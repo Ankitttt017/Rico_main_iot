@@ -5,6 +5,7 @@ const { normalizeIp } = require("../utils/networkAddress");
 const scannerService = require("../services/scannerConnectionService");
 const { getScannerHealthSnapshot } = require("../services/scannerHealthService");
 const { emitRealtime } = require("../services/realtimeService");
+const { normalizeScannerConfig, readPartIdFromScannerPlc } = require("../services/scannerPlcDataService");
 
 function toInt(value) {
   if (value === undefined || value === null || value === "") {
@@ -15,10 +16,31 @@ function toInt(value) {
 }
 
 function toPayload(body = {}) {
+  const scannerMode = String(body.scannerMode ?? body.scanner_mode ?? "TCP_CLIENT").trim().toUpperCase() || "TCP_CLIENT";
+  const plcCfg = normalizeScannerConfig(body);
+  const scannerIpInput = normalizeIp(body.scannerIp ?? body.scanner_ip);
+  const scannerIp = scannerMode === "PLC_REGISTER"
+    ? (plcCfg.plcIp || scannerIpInput)
+    : scannerIpInput;
+
   return {
     scanner_name: String(body.scannerName ?? body.scanner_name ?? "").trim(),
-    scanner_ip: normalizeIp(body.scannerIp ?? body.scanner_ip),
+    scanner_ip: scannerIp,
     scanner_port: toInt(body.scannerPort ?? body.scanner_port),
+    scanner_mode: scannerMode,
+    plc_ip: plcCfg.plcIp || null,
+    plc_port: plcCfg.plcPort,
+    plc_protocol: plcCfg.plcProtocol,
+    plc_unit_id: plcCfg.plcUnitId,
+    plc_device: plcCfg.plcDevice,
+    plc_frame_mode: plcCfg.plcFrameMode,
+    plc_start_register: plcCfg.plcStartRegister,
+    plc_end_register: plcCfg.plcEndRegister,
+    plc_data_type: plcCfg.plcDataType,
+    plc_timeout_ms: plcCfg.plcTimeoutMs,
+    plc_read_retry_count: plcCfg.plcReadRetryCount,
+    plc_read_retry_delay_ms: plcCfg.plcReadRetryDelayMs,
+    concat_separator: plcCfg.concatSeparator || null,
     mapped_machine_id: toInt(body.mappedMachineId ?? body.mapped_machine_id),
     is_active:
       body.isActive === undefined && body.is_active === undefined
@@ -38,6 +60,20 @@ async function toResponse(scanner) {
     scannerName: scanner.scanner_name,
     scannerIp: scanner.scanner_ip,
     scannerPort: scanner.scanner_port,
+    scannerMode: scanner.scanner_mode || "TCP_CLIENT",
+    plcIp: scanner.plc_ip || null,
+    plcPort: scanner.plc_port || null,
+    plcProtocol: scanner.plc_protocol || "MODBUS_TCP",
+    plcUnitId: scanner.plc_unit_id || 1,
+    plcDevice: scanner.plc_device || "D",
+    plcFrameMode: scanner.plc_frame_mode || "AUTO",
+    plcStartRegister: scanner.plc_start_register,
+    plcEndRegister: scanner.plc_end_register,
+    plcDataType: scanner.plc_data_type || "ASCII",
+    plcTimeoutMs: scanner.plc_timeout_ms || 8000,
+    plcReadRetryCount: scanner.plc_read_retry_count || 3,
+    plcReadRetryDelayMs: scanner.plc_read_retry_delay_ms || 300,
+    concatSeparator: scanner.concat_separator || null,
     mappedMachineId: scanner.mapped_machine_id,
     isActive: scanner.is_active,
     isSimulation: Boolean(scanner.is_simulation),
@@ -54,6 +90,23 @@ async function toResponse(scanner) {
     createdAt: scanner.createdAt,
     updatedAt: scanner.updatedAt,
   };
+}
+
+function validateScannerPayload(payload) {
+  if (!payload.scanner_name || !payload.mapped_machine_id) {
+    return "scannerName and mappedMachineId are required";
+  }
+  if (payload.scanner_mode === "PLC_REGISTER") {
+    if (!payload.plc_ip || !payload.plc_port) {
+      return "PLC IP and port are required for PLC_REGISTER mode";
+    }
+    if (payload.plc_start_register === null || payload.plc_start_register === undefined) {
+      return "PLC start register is required for PLC_REGISTER mode";
+    }
+  } else if (!payload.scanner_ip) {
+    return "scannerIp is required for selected scanner mode";
+  }
+  return null;
 }
 
 function toConnectionResponse(connection) {
@@ -171,6 +224,33 @@ exports.testScannerConnection = async (req, res) => {
       return res.status(404).json({ error: "Scanner not found" });
     }
 
+    const mode = String(scanner.scanner_mode || "TCP_CLIENT").trim().toUpperCase();
+    if (mode === "PLC_REGISTER") {
+      const read = await readPartIdFromScannerPlc(scanner.get({ plain: true }));
+      const hasPartId = Boolean(read.partId);
+      return res.json({
+        scannerId: scanner.id,
+        scannerMode: mode,
+        reachable: true,
+        status: hasPartId ? "REACHABLE" : "REACHABLE_EMPTY_DATA",
+        checkedAt: new Date().toISOString(),
+        message: hasPartId ? "PLC register read successful" : "PLC reachable but part ID is empty",
+        partIdPreview: read.partId || null,
+        read,
+      });
+    }
+
+    if (mode === "USB_SERIAL") {
+      return res.json({
+        scannerId: scanner.id,
+        scannerMode: mode,
+        reachable: true,
+        status: "REACHABLE",
+        checkedAt: new Date().toISOString(),
+        message: `USB/Serial mode configured. Runtime COM adapter should be verified on station system.`,
+      });
+    }
+
     const targetPort = toInt(scanner.scanner_port) || 9001;
     const result = await scannerService.probeScannerEndpoint({
       ip: scanner.scanner_ip,
@@ -180,6 +260,7 @@ exports.testScannerConnection = async (req, res) => {
     const reachable = Boolean(result?.reachable);
     res.json({
       scannerId: scanner.id,
+      scannerMode: mode,
       scannerIp: scanner.scanner_ip,
       scannerPort: targetPort,
       reachable,
@@ -195,14 +276,43 @@ exports.testScannerConnection = async (req, res) => {
   }
 };
 
+exports.testScannerRead = async (req, res) => {
+  try {
+    const payload = toPayload(req.body);
+    const validationError = validateScannerPayload(payload);
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
+    }
+
+    const mode = String(payload.scanner_mode || "TCP_CLIENT").toUpperCase();
+    if (mode !== "PLC_REGISTER") {
+      return res.json({
+        success: true,
+        scannerMode: mode,
+        message: `Read preview is only required for PLC_REGISTER mode. Current mode: ${mode}`,
+      });
+    }
+
+    const read = await readPartIdFromScannerPlc(payload);
+    return res.json({
+      success: true,
+      scannerMode: mode,
+      partIdPreview: read.partId || null,
+      read,
+      message: read.partId
+        ? "PLC read success. Part ID decoded."
+        : "PLC read success but decoded part ID is empty.",
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};
+
 exports.createScanner = async (req, res) => {
   try {
     const payload = toPayload(req.body);
-    if (!payload.scanner_name || !payload.scanner_ip || !payload.mapped_machine_id) {
-      return res.status(400).json({
-        error: "scannerName, scannerIp and mappedMachineId are required",
-      });
-    }
+    const validationError = validateScannerPayload(payload);
+    if (validationError) return res.status(400).json({ error: validationError });
 
 
 
@@ -227,11 +337,8 @@ exports.updateScanner = async (req, res) => {
     }
 
     const payload = toPayload(req.body);
-    if (!payload.scanner_name || !payload.scanner_ip || !payload.mapped_machine_id) {
-      return res.status(400).json({
-        error: "scannerName, scannerIp and mappedMachineId are required",
-      });
-    }
+    const validationError = validateScannerPayload(payload);
+    if (validationError) return res.status(400).json({ error: validationError });
 
     const machine = await Machine.findByPk(payload.mapped_machine_id);
     if (!machine) {

@@ -255,6 +255,50 @@ async function ensureScannerColumnsExist() {
         UPDATE [dbo].[Scanners] SET [is_simulation] = 0 WHERE [is_simulation] IS NULL;
       END
     `);
+
+    const scannerColumns = [
+      { name: "scanner_mode", type: "NVARCHAR(30)", defaultValue: "'TCP_CLIENT'" },
+      { name: "plc_ip", type: "NVARCHAR(100)", defaultValue: "NULL" },
+      { name: "plc_port", type: "INT", defaultValue: "NULL" },
+      { name: "plc_protocol", type: "NVARCHAR(30)", defaultValue: "'MODBUS_TCP'" },
+      { name: "plc_unit_id", type: "INT", defaultValue: "1" },
+      { name: "plc_device", type: "NVARCHAR(20)", defaultValue: "'D'" },
+      { name: "plc_frame_mode", type: "NVARCHAR(20)", defaultValue: "'AUTO'" },
+      { name: "plc_start_register", type: "INT", defaultValue: "NULL" },
+      { name: "plc_end_register", type: "INT", defaultValue: "NULL" },
+      { name: "plc_data_type", type: "NVARCHAR(20)", defaultValue: "'ASCII'" },
+      { name: "plc_timeout_ms", type: "INT", defaultValue: "8000" },
+      { name: "plc_read_retry_count", type: "INT", defaultValue: "3" },
+      { name: "plc_read_retry_delay_ms", type: "INT", defaultValue: "300" },
+      { name: "concat_separator", type: "NVARCHAR(20)", defaultValue: "NULL" },
+    ];
+
+    for (const col of scannerColumns) {
+      await sequelize.query(`
+        IF NOT EXISTS (
+          SELECT 1 FROM sys.columns
+          WHERE object_id = OBJECT_ID(N'dbo.Scanners')
+            AND name = N'${col.name}'
+        )
+        BEGIN
+          ALTER TABLE [dbo].[Scanners] ADD [${col.name}] ${col.type} NULL;
+        END
+      `);
+
+      if (col.defaultValue !== "NULL") {
+        await sequelize.query(`
+          IF NOT EXISTS (
+            SELECT 1 FROM sys.default_constraints
+            WHERE parent_object_id = OBJECT_ID(N'dbo.Scanners')
+              AND name = N'DF_Scanners_${col.name}'
+          )
+          BEGIN
+            ALTER TABLE [dbo].[Scanners] ADD CONSTRAINT [DF_Scanners_${col.name}] DEFAULT ${col.defaultValue} FOR [${col.name}];
+            UPDATE [dbo].[Scanners] SET [${col.name}] = ${col.defaultValue} WHERE [${col.name}] IS NULL;
+          END
+        `);
+      }
+    }
   } catch (err) {
     if (err.message && !err.message.includes("already exists")) {
       console.warn(`[SchemaService] Note: Column is_simulation check/add skipped in Scanners.`);

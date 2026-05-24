@@ -44,9 +44,13 @@ export function useAlarmToasts() {
   useEffect(() => {
     const socket = io(SOCKET_URL, {
       path: "/socket.io/",
-      transports: ["websocket", "polling"],
+      transports: ["polling", "websocket"],
+      autoConnect: false,
       reconnectionAttempts: 5,
     });
+    const connectTimer = setTimeout(() => {
+      socket.connect();
+    }, 0);
 
     // Alarms
     socket.on("alarm:ng_rate", (data) => {
@@ -150,6 +154,12 @@ export function useAlarmToasts() {
       }
     });
 
-    return () => socket.disconnect();
+    return () => {
+      clearTimeout(connectTimer);
+      socket.removeAllListeners();
+      if (socket.connected || socket.active) {
+        socket.disconnect();
+      }
+    };
   }, []);
 }

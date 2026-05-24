@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Save, ShieldCheck, Monitor, Eye, EyeOff, Lock, AlertCircle, CheckCircle, Users, HardDrive } from "lucide-react";
 import { roleAccessApi } from "../api/services";
-import GlobalPopup from "../components/GlobalPopup";
 import {
   ACCESS_LEVEL_OPTIONS,
   MODULE_ACCESS_META,
@@ -118,7 +117,6 @@ const RoleAccess = () => {
 
   return (
     <div className="space-y-6 rise-in" style={{ fontFamily: "var(--font-outfit)" }}>
-      <GlobalPopup popup={popup} onClose={() => setPopup(null)} />
 
       {/* Header matching Station Control */}
       <div className="db-header-card mb-6">

@@ -62,8 +62,12 @@ export const NotificationProvider = ({ children }) => {
 
     const socket = io(SOCKET_URL, {
       path: "/socket.io/",
-      transports: ["websocket", "polling"],
+      transports: ["polling", "websocket"],
+      autoConnect: false,
     });
+    const connectTimer = setTimeout(() => {
+      socket.connect();
+    }, 0);
 
     socket.on("alarm:ng_rate", (data) => {
       addNotification({
@@ -99,7 +103,13 @@ export const NotificationProvider = ({ children }) => {
       }
     });
 
-    return () => socket.disconnect();
+    return () => {
+      clearTimeout(connectTimer);
+      socket.removeAllListeners();
+      if (socket.connected || socket.active) {
+        socket.disconnect();
+      }
+    };
   }, []);
 
   return (

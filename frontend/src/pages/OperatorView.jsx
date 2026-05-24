@@ -21,6 +21,7 @@ const LIVE_REFRESH_COOLDOWN = 350;
 const QR_EVENT_DEDUPE_MS = 3000;
 const POPUP_EVENT_DEDUPE_MS = 1800;
 const QR_STORAGE_KEY = "operator-last-qr-signal";
+const OPERATOR_STATION_LOCK_KEY = "operator-view-station-lock-v1";
 
 // ── Design tokens & responsive breakpoints ───────────────────────────────
 const DS = `
@@ -42,18 +43,18 @@ const DS = `
     --ov-breakpoint-2xl: 1536px;
   }
   [data-theme="light"]{
-    --ov-bg-card:   255,255,255; --ov-bg-surf:  240,236,230;
+    --ov-bg-card:   255,255,255; --ov-bg-surf:  244,247,252;
     --ov-bg-input:  255,255,255;
-    --ov-txt-pri:   26,50,99;    --ov-txt-sec:  84,119,146;
-    --ov-txt-muted: 140,160,180;
-    --ov-bdr: 84,119,146; --ov-bop: 0.14;
+    --ov-txt-pri:   23,37,66;    --ov-txt-sec:  64,89,120;
+    --ov-txt-muted: 88,110,140;
+    --ov-bdr: 84,119,146; --ov-bop: 0.18;
   }
   [data-theme="dark"]{
-    --ov-bg-card:   20,34,62;  --ov-bg-surf:  16,26,50;
-    --ov-bg-input:  14,22,44;
-    --ov-txt-pri:   232,226,219; --ov-txt-sec: 120,160,190;
-    --ov-txt-muted: 84,119,146;
-    --ov-bdr: 84,119,146; --ov-bop: 0.18;
+    --ov-bg-card:   20,32,56;  --ov-bg-surf:  16,26,46;
+    --ov-bg-input:  12,21,39;
+    --ov-txt-pri:   238,244,252; --ov-txt-sec: 180,203,228;
+    --ov-txt-muted: 136,161,189;
+    --ov-bdr: 112,144,178; --ov-bop: 0.28;
   }
   
   /* Responsive base */
@@ -92,17 +93,39 @@ const C = {
   txt: (v = "pri") => `rgb(var(--ov-txt-${v}))`,
   bdr: (o) => `rgba(var(--ov-bdr),${o || "var(--ov-bop)"})`,
 };
-const SH = `0 2px 12px rgba(var(--ov-navy),.08),0 1px 3px rgba(var(--ov-navy),.05)`;
-const SHM = `0 4px 20px rgba(var(--ov-navy),.14),0 2px 6px rgba(var(--ov-navy),.07)`;
+const SH = `0 8px 22px rgba(var(--ov-navy),.16),0 2px 8px rgba(0,0,0,.12)`;
+const SHM = `0 14px 34px rgba(var(--ov-navy),.2),0 4px 12px rgba(0,0,0,.16)`;
 
 // ── Utility functions ────────────────────────────────────────────────────
 function normalizePartId(v) { return String(v || "").trim(); }
 function extractQrDecision(payload = {}) {
   const p = String(payload.qrResult || payload.decision || payload.outcome || payload.scanOutcome || payload.qrDecision || payload.qrStatus || "").trim().toUpperCase();
   if (p) return p;
-  const f = String(payload.reason || payload.result || "").trim().toUpperCase();
+  const f = String(payload.reason || payload.result || payload.validationResult || "").trim().toUpperCase();
   if (["PASS", "OK", "ALLOW"].includes(f)) return "ALLOW";
   if (["FAIL", "NG", "BLOCK", "REJECT"].includes(f)) return "BLOCK";
+  // Validation failure reasons should still be treated as BLOCK for popup + operator visibility.
+  if (
+    [
+      "INVALID_QR_FORMAT",
+      "QR_RULE_CONFIG_ERROR",
+      "PART_NOT_FOUND",
+      "PREVIOUS_STATION_NOT_COMPLETED",
+      "CUSTOMER_CODE_INVALID",
+      "CUSTOMER_CODE_RULE_INVALID",
+      "INVALID_INPUT",
+      "STATION_NOT_CONFIGURED",
+      "STATION_NOT_FOUND",
+      "PART_INTERLOCKED",
+      "MACHINE_RUNNING",
+      "DUPLICATE_SCAN",
+      "ALREADY_COMPLETED",
+      "DUPLICATE_SCAN_IN_FLIGHT",
+      "SCAN_RESULT_NG",
+    ].includes(f)
+  ) {
+    return "BLOCK";
+  }
   return "";
 }
 function hasQrDecision(payload = {}) {
@@ -128,27 +151,45 @@ function formatScanErrorMessage(payload = {}) {
   const reason = String(payload.reason || "").trim().toUpperCase();
   const station = String(payload.stationNo || payload.station_no || "").trim().toUpperCase();
   const expected = String(payload.expectedStation || payload.expected_station || "").trim().toUpperCase();
+  const rawMessage = String(payload.message || payload.error || "").trim();
+  const msgUpper = rawMessage.toUpperCase();
   if (reason === "DUPLICATE_SCAN") return "Duplicate scan. Operation has already passed.";
   if (reason === "ALREADY_COMPLETED") return "Duplicate scan. Operation has already passed.";
+  if (reason === "DUPLICATE_SCAN_IN_FLIGHT") return "Scan already in progress. Wait for current cycle processing.";
   if (reason === "RESET_REQUIRED_AFTER_PLC_COMM_ERROR") return `Previous PLC cycle timed out at ${station || "station"}. Use Reset Operation, then scan again.`;
   if (reason.startsWith("PLC_TIMEOUT")) return "PLC response timeout. Use Reset Operation, then scan again.";
-  if (reason === "PREVIOUS_STATION_NOT_COMPLETED") return expected ? `Previous station not completed with OP number ${expected}.` : "Station sequence error. Previous station not completed.";
-  if (reason === "INVALID_QR_FORMAT") return String(payload.message || "").trim() || "Invalid QR format. Scan correct component code.";
+  if (reason === "PREVIOUS_STATION_NOT_COMPLETED") {
+    const lastCompleted = String(payload.lastCompletedStation || payload.last_completed_station || "").trim().toUpperCase();
+    if (expected && lastCompleted) return `Sequence mismatch. Scan at ${expected} first. Last completed station: ${lastCompleted}.`;
+    if (expected) return `Sequence mismatch. Scan at ${expected} first.`;
+    return "Station sequence error. Previous station is not completed.";
+  }
+  if (reason === "INVALID_QR_FORMAT") return rawMessage || "Invalid QR format. Scan correct component code.";
+  if (reason === "PART_NOT_FOUND" || msgUpper.includes("PART NOT FOUND") || msgUpper.includes("NOT FOUND IN MOULDING")) {
+    return "Part not found in moulding records. Verify scanned QR and bridge source data.";
+  }
   if (reason === "QR_RULE_CONFIG_ERROR") return String(payload.message || "").trim() || "QR rule configuration is invalid. Contact supervisor.";
-  if (reason === "PART_INTERLOCKED") return "Part interlocked. Reset required from control flow.";
+  if (reason === "PART_INTERLOCKED") return "Part is NG. Please reject this part and send to rejection flow.";
   if (reason === "MACHINE_RUNNING") return String(payload.message || "").trim() || "Machine is currently busy with another cycle.";
-  if (reason === "STATION_NOT_CONFIGURED") return "Station not configured in machine master. Contact supervisor.";
+  if (reason === "STATION_NOT_CONFIGURED" || reason === "STATION_NOT_FOUND" || msgUpper.includes("STATION NOT FOUND")) {
+    return `Station ${station || "selected station"} is not configured in active route. Check Machine + Station Control mapping.`;
+  }
+  if (reason === "CUSTOMER_CODE_INVALID") return "Customer code mismatch in scanned QR.";
+  if (reason === "CUSTOMER_CODE_RULE_INVALID") return "Customer code rule configuration is invalid. Contact supervisor.";
   if (reason === "INVALID_INPUT") return "Invalid scan input. Re-scan the QR code.";
-  if (reason === "SCAN_RESULT_NG") return "QR validation failed (NG). Send part to rejection flow.";
+  if (reason === "SCAN_RESULT_NG") return "This part is marked NG. Please reject this part and send to rejection flow.";
+  if (msgUpper.includes("PREVIOUS_STATION_NOT_COMPLETED")) return expected ? `Previous station not completed with OP number ${expected}.` : "Station sequence error. Previous station not completed.";
+  if (msgUpper.includes("INVALID_QR_FORMAT") || msgUpper.includes("QR FORMAT MISMATCH")) return "QR format mismatch. Scan correct component code.";
+  if (msgUpper.includes("DUPLICATE_SCAN") || msgUpper.includes("ALREADY_COMPLETED")) return "Duplicate scan. Operation has already passed.";
+  if (msgUpper.includes("SCAN_RESULT_NG")) return "This part is marked NG. Send it to rejection flow.";
   if (reason) return reason.replaceAll("_", " ");
-  return String(payload.message || payload.reason || "").trim() || "Process Blocked. Contact supervisor.";
+  return rawMessage.replace(/\s+/g, " ").trim() || "Process blocked. Contact supervisor.";
 }
 function shouldSuppressPopupPayload(payload = {}) {
   const partId = normalizePartId(payload.partId || payload.part_id);
   const station = String(payload.stationNo || payload.station_no || "").trim();
   const message = String(payload.message || payload.error || "").trim().toUpperCase();
   if (!partId && !station && !message) return true;
-  if (!partId && message.includes("PART NOT FOUND")) return true;
   return false;
 }
 function normalizeDecisionState(value) {
@@ -204,10 +245,10 @@ function formatElapsed(timestamp, now) {
 
 // ── Responsive Atoms ─────────────────────────────────────────────────────
 const STATUS_MAP = {
-  ok: { fg: C.ok(), bg: C.ok(0.1), bd: C.ok(0.28) },
-  ng: { fg: C.ng(), bg: C.ng(0.1), bd: C.ng(0.28) },
-  wip: { fg: C.wip(), bg: C.wip(0.1), bd: C.wip(0.28) },
-  idle: { fg: C.idle(), bg: C.idle(0.08), bd: C.idle(0.2) },
+  ok: { fg: C.ok(), bg: C.ok(0.16), bd: C.ok(0.38) },
+  ng: { fg: C.ng(), bg: C.ng(0.16), bd: C.ng(0.38) },
+  wip: { fg: C.wip(), bg: C.wip(0.16), bd: C.wip(0.38) },
+  idle: { fg: C.idle(), bg: C.idle(0.14), bd: C.idle(0.3) },
 };
 
 const Badge = ({ variant = "idle", label, pulse, size = "sm" }) => {
@@ -250,16 +291,16 @@ const ConnDot = ({ connected }) => (
 const InfoRow = ({ label, value, mono, valueColor }) => (
   <div style={{
     display: "flex", alignItems: "center", justifyContent: "space-between",
-    gap: 8, padding: "5px 0", borderBottom: `1px solid ${C.bdr()}`,
+    gap: 8, padding: "6px 0", borderBottom: `1px solid ${C.bdr(0.35)}`,
     flexWrap: "wrap", minWidth: 0,
   }}>
-    <span style={{ fontSize: 11, color: C.txt("muted"), fontWeight: 600, flexShrink: 0 }}>{label}</span>
+    <span style={{ fontSize: 11, color: C.txt("sec"), fontWeight: 700, flexShrink: 0 }}>{label}</span>
     <span style={{
-      fontSize: 11, fontWeight: 700,
+      fontSize: 11, fontWeight: 800,
       color: valueColor || C.txt("pri"),
       fontFamily: mono ? "'DM Mono',monospace" : "inherit",
       textAlign: "right", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-      maxWidth: "min(160px, 100%)",
+      maxWidth: "min(220px, 100%)",
     }}>{value || "—"}</span>
   </div>
 );
@@ -270,21 +311,21 @@ const Card = ({ title, icon: Icon, accent, children, right, noPad, collapsible, 
 
   return (
     <div style={{
-      background: C.bg("card"), border: `1px solid ${C.bdr()}`,
+      background: C.bg("card"), border: `1px solid ${C.bdr(0.45)}`,
       borderRadius: 14, overflow: "hidden", boxShadow: SH,
-      borderLeft: accent ? `3px solid ${accent}` : "none",
+      borderLeft: accent ? `4px solid ${accent}` : "none",
       height: collapsed && isCollapsible ? "auto" : "auto",
     }}>
       {(title || right) && (
         <div style={{
           padding: "12px 16px", borderBottom: !collapsed || !isCollapsible ? `1px solid ${C.bdr()}` : "none",
-          background: C.bg("surf"), display: "flex", alignItems: "center",
+          background: `linear-gradient(180deg, ${C.bg("surf")} 0%, ${C.bg("card")} 100%)`, display: "flex", alignItems: "center",
           justifyContent: "space-between", gap: 8,
           cursor: isCollapsible ? "pointer" : "default",
         }} onClick={() => isCollapsible && setCollapsed(!collapsed)}>
           <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-            {Icon && <Icon size={14} color={C.steel()} />}
-            <p style={{ fontSize: 13, fontWeight: 700, color: C.txt("pri") }}>{title}</p>
+            {Icon && <Icon size={14} color={accent || C.steel()} />}
+            <p style={{ fontSize: 13, fontWeight: 800, color: C.txt("pri"), letterSpacing: "0.01em" }}>{title}</p>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {right}
@@ -321,24 +362,26 @@ const FeatureRow = ({ label, enabled }) => (
 
 const DecisionDisplay = ({ label, variant, sub1, sub2, accent, compact = false }) => {
   const s = STATUS_MAP[variant] || STATUS_MAP.idle;
+  const stateText = variant === "ok" ? "PASS" : variant === "ng" ? "FAIL" : variant === "wip" ? "RUNNING" : "WAITING";
   return (
     <div style={{
       borderRadius: 12, padding: compact ? "10px 12px" : "14px 16px",
       background: s.bg, border: `1px solid ${s.bd}`,
       borderLeft: accent ? `3px solid ${s.fg}` : "none",
+      boxShadow: `inset 0 0 0 1px ${s.bd}`,
     }}>
       <p style={{
         fontSize: 10, fontWeight: 800, textTransform: "uppercase",
-        letterSpacing: "0.1em", color: C.txt("muted"), marginBottom: 6
+        letterSpacing: "0.1em", color: C.txt("sec"), marginBottom: 6
       }}>{label}</p>
       <p style={{
         fontSize: compact ? 18 : 24, fontWeight: 900, color: s.fg, lineHeight: 1,
-        fontFamily: "'DM Mono',monospace", marginBottom: 6
+        fontFamily: "DM Mono, monospace", marginBottom: 6
       }}>
-        {variant === "ok" ? "✓ PASS" : variant === "ng" ? "✗ FAIL" : variant === "wip" ? "● RUNNING" : "○ WAITING"}
+        {stateText}
       </p>
-      {sub1 && <p style={{ fontSize: 11, color: C.txt("muted"), fontFamily: "'DM Mono',monospace", marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sub1}</p>}
-      {sub2 && <p style={{ fontSize: 10, color: C.txt("muted"), overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sub2}</p>}
+      {sub1 && <p style={{ fontSize: 11, color: C.txt("pri"), fontFamily: "DM Mono, monospace", fontWeight: 700, marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sub1}</p>}
+      {sub2 && <p style={{ fontSize: 10, color: C.txt("sec"), overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sub2}</p>}
     </div>
   );
 };
@@ -422,11 +465,22 @@ const OperatorView = () => {
   const [loadingStats, setLoadingStats] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [popup, setPopup] = useState(null);
+  const [suppressReadyPopup, setSuppressReadyPopup] = useState(false);
   const [qrSignal, setQrSignal] = useState(null);
   const [qrFeed, setQrFeed] = useState([]);
   const [resetConfirm, setResetConfirm] = useState(null);
   const [clockTick, setClockTick] = useState(Date.now());
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [stationLock, setStationLock] = useState(() => {
+    try {
+      const raw = localStorage.getItem(OPERATOR_STATION_LOCK_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [showStationSelectModal, setShowStationSelectModal] = useState(false);
+  const [pendingMachineId, setPendingMachineId] = useState("");
 
   // Responsive breakpoints
   const [breakpoint, setBreakpoint] = useState(() => {
@@ -450,6 +504,12 @@ const OperatorView = () => {
   const isMobile = breakpoint === "sm" || breakpoint === "md";
   const isTablet = breakpoint === "lg";
   const isCompact = isMobile || isTablet;
+  const isAppDisplayMode = typeof window !== "undefined" && window.matchMedia?.("(display-mode: standalone)")?.matches;
+  const isIosStandalone = typeof window !== "undefined" && typeof window.navigator !== "undefined" && window.navigator.standalone === true;
+  const isStandaloneAppMode = Boolean(isAppDisplayMode || isIosStandalone);
+  const enforceStationLockMode = isCompact || isStandaloneAppMode;
+  const hasLockedSelection = Boolean(stationLock?.machineId);
+  const machineSelectionLocked = enforceStationLockMode && hasLockedSelection;
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -465,11 +525,45 @@ const OperatorView = () => {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
+
   const selectedMachine = useMemo(() => machines.find(e => e.id === Number(selectedMachineId)) || null, [machines, selectedMachineId]);
   const selectedStation = useMemo(() => getMachineStage(selectedMachine), [selectedMachine]);
 
   useEffect(() => { selectedMachineIdRef.current = String(selectedMachineId || ""); }, [selectedMachineId]);
   useEffect(() => { selectedStationRef.current = String(selectedStation || "").toUpperCase(); }, [selectedStation]);
+
+  useEffect(() => {
+    try {
+      if (stationLock) localStorage.setItem(OPERATOR_STATION_LOCK_KEY, JSON.stringify(stationLock));
+      else localStorage.removeItem(OPERATOR_STATION_LOCK_KEY);
+    } catch {
+      // ignore storage errors
+    }
+  }, [stationLock]);
+
+  useEffect(() => {
+    if (!enforceStationLockMode) return;
+    if (!Array.isArray(machines) || machines.length === 0) return;
+
+    const lockedMachineId = String(stationLock?.machineId || "");
+    if (lockedMachineId && machines.some((m) => String(m.id) === lockedMachineId)) {
+      if (String(selectedMachineId || "") !== lockedMachineId) {
+        setSelectedMachineId(lockedMachineId);
+      }
+      setShowStationSelectModal(false);
+      return;
+    }
+
+    if (!stationLock) {
+      const fallbackMachineId = String(selectedMachineId || machines[0]?.id || "");
+      setPendingMachineId(fallbackMachineId);
+      setShowStationSelectModal(true);
+    } else {
+      setStationLock(null);
+      setPendingMachineId(String(machines[0]?.id || ""));
+      setShowStationSelectModal(true);
+    }
+  }, [enforceStationLockMode, machines, selectedMachineId, stationLock]);
 
   const stationFeatureConfig = useMemo(() => getStationFeatures(selectedStation, stationSettings), [selectedStation, stationSettings]);
 
@@ -513,44 +607,62 @@ const OperatorView = () => {
   const opVariant = useMemo(() => getOperationVariant(opStatusSource), [opStatusSource]);
   const opLabel = useMemo(() => getOperationLabel(opStatusSource), [opStatusSource]);
 
-  useEffect(() => {
+  const openScannerReadyPopup = useCallback(() => {
     if (!selectedMachineId || !selectedStation) return;
-    
-    const cStat = String(currentContext?.plcStatus || "").trim().toUpperCase();
-    const isManualResultStation = stationFeatureConfig?.manualResult === true || String(selectedStation).toUpperCase() === "OP020";
-    const isOperationEnabled = stationFeatureConfig?.operation !== false;
-    
-    // For manual stations, or stations with PLC operations disabled, the station itself never needs a "reset" to proceed.
-    const isManualResetRequired = isOperationEnabled && !isManualResultStation && ["INTERLOCKED", "BLOCKED", "ENDED_NG", "FAILED", "NG"].includes(cStat);
+    const scannerMode = String(scannerInfo?.scannerMode || scannerInfo?.mode || "").trim().toUpperCase();
+    const isUsbScannerMode = ["USB_SERIAL", "USB", "USB_HID", "HID"].includes(scannerMode);
+    const shouldOpenUsbOrSimulationPopup = Boolean(scannerInfo?.isSimulation) || isUsbScannerMode;
+    if (!shouldOpenUsbOrSimulationPopup) return;
 
-    if (currentContext?.partId && isManualResetRequired) {
-      setPopup({
-        partId: currentContext.partId,
+    setPopup((prev) => {
+      const isActiveScanPopup =
+        prev &&
+        prev.isSimulationPlaceholder !== true &&
+        Boolean(String(prev.partId || prev.part_id || "").trim());
+      if (isActiveScanPopup) return prev;
+
+      const nextPopup = {
+        partId: "",
         stationNo: selectedStation,
         machineId: selectedMachineId,
-        type: "ERROR",
-        title: "Operation Blocked",
-        message: `Part ${currentContext.partId} is currently blocked or NG. Reset required to proceed.`,
-        isSimulationPlaceholder: false,
-        qrResult: "FAILED",
-        plcStatus: cStat,
-      });
+        machineName: selectedMachine?.machineName || "",
+        type: "INFO",
+        title: isUsbScannerMode ? "USB Scanner Active" : "Simulation Active",
+        message: isUsbScannerMode
+          ? `USB scanner ready at ${selectedStation}. Scan QR to validate.`
+          : "Scan Simulation Active. Enter QR code below to validate.",
+        isSimulationPlaceholder: true,
+        manualScanMode: true,
+      };
+
+      const same =
+        prev &&
+        prev.isSimulationPlaceholder === true &&
+        String(prev.stationNo || prev.station_no || "").toUpperCase() === String(nextPopup.stationNo || "").toUpperCase() &&
+        String(prev.title || "") === String(nextPopup.title || "") &&
+        String(prev.message || "") === String(nextPopup.message || "");
+
+      return same ? prev : nextPopup;
+    });
+  }, [selectedMachineId, selectedStation, selectedMachine?.machineName, scannerInfo?.isSimulation, scannerInfo?.scannerMode, scannerInfo?.mode]);
+
+  useEffect(() => {
+    if (!selectedMachineId || !selectedStation) return;
+    if (suppressReadyPopup) return;
+
+    const scannerMode = String(scannerInfo?.scannerMode || scannerInfo?.mode || "").trim().toUpperCase();
+    const isUsbScannerMode = ["USB_SERIAL", "USB", "USB_HID", "HID"].includes(scannerMode);
+    const shouldOpenUsbOrSimulationPopup = Boolean(scannerInfo?.isSimulation) || isUsbScannerMode;
+
+    if (shouldOpenUsbOrSimulationPopup) {
+      openScannerReadyPopup();
       return;
     }
 
-    const isSim = Boolean(scannerInfo?.isSimulation);
-    setPopup({
-      partId: "",
-      stationNo: selectedStation,
-      machineId: selectedMachineId,
-      type: "INFO",
-      title: isSim ? "Simulation Active" : "Station Active",
-      message: isSim 
-        ? "Scan Simulation Active. Enter QR code below to validate."
-        : `Selected Station ${selectedStation}. Ready for scan.`,
-      isSimulationPlaceholder: true,
-    });
-  }, [selectedMachineId, selectedStation, scannerInfo?.isSimulation, currentContext?.partId, currentContext?.plcStatus, stationFeatureConfig]);
+    // Event-driven popup mode for non-USB/non-simulation scanners:
+    // Do not auto-open info popup just because station is selected.
+    setPopup((prev) => (prev?.isSimulationPlaceholder ? null : prev));
+  }, [selectedMachineId, selectedStation, scannerInfo?.isSimulation, scannerInfo?.scannerMode, scannerInfo?.mode, popup, suppressReadyPopup, openScannerReadyPopup]);
 
   const quickResetPartId = useMemo(
     () => normalizePartId(currentContext?.partId || popup?.partId || popup?.part_id),
@@ -652,6 +764,9 @@ const OperatorView = () => {
   }, [loadMachineTelemetry]);
 
   const isDuplicatePopupEvent = useCallback((payload = {}) => {
+    const type = String(payload.type || "").trim().toUpperCase();
+    // Never suppress hard error popups; operators need immediate feedback on each bad scan.
+    if (type === "ERROR") return false;
     const key = [String(payload.type || "").trim().toUpperCase(), normalizePartId(payload.partId || payload.part_id),
     String(payload.stationNo || payload.station_no || "").trim().toUpperCase(),
     normalizeDecisionState(payload.qrResult || payload.qr_result),
@@ -664,12 +779,32 @@ const OperatorView = () => {
     lastPopupEventRef.current = { key, at: now }; return false;
   }, []);
 
+  const isPayloadForActiveMachine = useCallback((payload = {}) => {
+    const payloadMachineId = String(payload.machineId || payload.machine_id || "").trim();
+    const payloadStation = String(payload.stationNo || payload.station_no || "").trim().toUpperCase();
+    const activeMachineId = String(selectedMachineIdRef.current || "").trim();
+    const activeStation = String(selectedStationRef.current || "").trim().toUpperCase();
+
+    if (payloadMachineId) {
+      return payloadMachineId === activeMachineId;
+    }
+    if (payloadStation) {
+      return payloadStation === activeStation;
+    }
+    // If backend payload does not include machine/station identity,
+    // allow it for active Operator screen instead of dropping messages.
+    return true;
+  }, []);
+
+  useEffect(() => {
+    if (!suppressReadyPopup) return undefined;
+    const timer = setTimeout(() => setSuppressReadyPopup(false), 15000);
+    return () => clearTimeout(timer);
+  }, [suppressReadyPopup]);
+
   const processQrSignal = useCallback((payload = {}) => {
     if (!hasQrDecision(payload)) return false;
-    const pm = String(payload.machineId || payload.machine_id || "");
-    const ps = String(payload.stationNo || payload.station_no || "").trim().toUpperCase();
-    const am = selectedMachineIdRef.current, as_ = selectedStationRef.current;
-    if (!(pm && pm === am) && !(ps && ps === as_)) return false;
+    if (!isPayloadForActiveMachine(payload)) return false;
     const sig = toQrSignal(payload);
     const dedupeR = ["BLOCK", "FAIL", "NG", "REJECT", "INVALID"].includes(sig.decision) ? sig.reason : "";
     const key = [sig.partId, sig.stationNo, sig.decision, dedupeR].join("|");
@@ -677,47 +812,63 @@ const OperatorView = () => {
     if (lastQrEventRef.current.key === key && now - lastQrEventRef.current.at < QR_EVENT_DEDUPE_MS) return false;
     lastQrEventRef.current = { key, at: now };
     setQrSignal(sig); setQrFeed(prev => [sig, ...prev].slice(0, 6));
+    // Failsafe: always raise/update popup when a valid QR decision is received,
+    // even if the event arrived from a path that didn't emit operator_popup.
+    const decision = String(sig.decision || "").trim().toUpperCase();
+    const isBlockedDecision = ["BLOCK", "FAIL", "NG", "REJECT", "INVALID"].includes(decision);
+    const fallbackMessage = isBlockedDecision
+      ? formatScanErrorMessage(payload)
+      : `QR Validated at ${sig.stationNo || "Station"}`;
+    setPopup((prev) => ({
+      ...prev,
+      type: isBlockedDecision ? "ERROR" : "INFO",
+      title: isBlockedDecision ? "Scan Blocked" : "Scan Passed",
+      message: fallbackMessage,
+      reason: String(payload.reason || payload.qrReason || "").trim(),
+      partId: sig.partId || prev?.partId || prev?.part_id || "",
+      stationNo: sig.stationNo || prev?.stationNo || prev?.station_no || "",
+      machineId: payload.machineId || payload.machine_id || prev?.machineId || prev?.machine_id || "",
+      machineName: payload.machineName || prev?.machineName || "",
+      qrStatus: isBlockedDecision ? "FAILED" : "PASSED",
+      operationStatus: isBlockedDecision ? "BLOCKED" : "WAITING_MACHINE",
+      timestamp: payload.timestamp || new Date().toISOString(),
+      _shownAtMs: Date.now(),
+    }));
+    setSuppressReadyPopup(false);
     const mk = selectedMachineIdRef.current;
     if (mk) { try { const c = JSON.parse(localStorage.getItem(QR_STORAGE_KEY) || "{}"); c[mk] = sig; localStorage.setItem(QR_STORAGE_KEY, JSON.stringify(c)); } catch { } }
     return true;
-  }, []);
+  }, [isPayloadForActiveMachine]);
+
+  useEffect(() => {
+    setPopup((prev) => {
+      if (!prev) return prev;
+      if (prev.isSimulationPlaceholder) return prev;
+      return isPayloadForActiveMachine(prev) ? prev : null;
+    });
+  }, [selectedMachineId, selectedStation, isPayloadForActiveMachine]);
 
   const mergePopupPayload = useCallback((payload = {}) => {
     setPopup(prev => {
-      const nowMs = Date.now();
-      const prevShownAt = Number(prev?._shownAtMs || 0);
-      const prevType = String(prev?.type || "").trim().toUpperCase();
-      const nextType = String(payload?.type || "").trim().toUpperCase();
-      const prevPart = normalizePartId(prev?.partId || prev?.part_id);
-      const nextPart = normalizePartId(payload?.partId || payload?.part_id);
-      const prevStation = String(prev?.stationNo || prev?.station_no || "").trim().toUpperCase();
-      const nextStation = String(payload?.stationNo || payload?.station_no || "").trim().toUpperCase();
-      const sameContext = Boolean(prevPart && nextPart && prevPart === nextPart && prevStation && nextStation && prevStation === nextStation);
-      const freezeErrorWindowMs = 4000;
-      const keepExistingErrorVisible =
-        prevType === "ERROR" &&
-        nextType !== "ERROR" &&
-        sameContext &&
-        nowMs - prevShownAt < freezeErrorWindowMs;
-
       const iqr = payload.qrResult || payload.qr_result || "", iqrS = normalizeDecisionState(iqr), pqrS = normalizeDecisionState(prev?.qrResult || prev?.qr_result || "");
       const iplc = payload.plcStatus || payload.plc_status || "", iplcS = String(iplc || "").trim().toUpperCase(), pplcS = String(prev?.plcStatus || prev?.plc_status || "").trim().toUpperCase();
       const rl = isResetLikePayload(payload);
       const applyQr = Boolean(iqr) && (iqrS !== "WAIT" || !pqrS || pqrS === "WAIT" || rl);
       const applyPlc = Boolean(iplc) && (iplcS !== "WAIT" || !pplcS || pplcS === "WAIT" || rl);
       return {
-        ...prev, ...(!keepExistingErrorVisible && payload.type && { type: payload.type }), ...(!keepExistingErrorVisible && payload.title && { title: payload.title }),
+        ...prev, ...(payload.type && { type: payload.type }), ...(payload.title && { title: payload.title }),
         ...(applyQr && { qrResult: iqr }), ...(applyPlc && { plcStatus: iplc }),
         ...(payload.operationStatus && { operationStatus: payload.operationStatus }),
         ...(payload.status && { status: payload.status }),
-        ...(!keepExistingErrorVisible && payload.message && { message: payload.message }), ...(!keepExistingErrorVisible && payload.reason && { reason: payload.reason }),
+        ...(payload.message && { message: payload.message }), ...(payload.reason && { reason: payload.reason }),
         ...(payload.expectedStation && { expectedStation: payload.expectedStation }),
+        ...(payload.lastCompletedStation && { lastCompletedStation: payload.lastCompletedStation }),
         ...((payload.partId || payload.part_id) && { partId: payload.partId || payload.part_id }),
         ...((payload.stationNo || payload.station_no) && { stationNo: payload.stationNo || payload.station_no }),
         ...((payload.machineId || payload.machine_id) && { machineId: payload.machineId || payload.machine_id }),
         ...(payload.machineName && { machineName: payload.machineName }),
         ...(payload.timestamp && { timestamp: payload.timestamp }),
-        ...(!prev?._shownAtMs || !keepExistingErrorVisible ? { _shownAtMs: nowMs } : {}),
+        _shownAtMs: Date.now(),
       };
     });
   }, []);
@@ -776,6 +927,10 @@ const OperatorView = () => {
     setStationStats(null);
     loadMachineTelemetry(selectedMachineId, true);
   }, [selectedMachineId, loadMachineTelemetry]);
+  useEffect(() => {
+    setPopup(null);
+    setSuppressReadyPopup(false);
+  }, [selectedMachineId, selectedStation]);
   useEffect(() => { const t = setInterval(() => { if (selectedMachineIdRef.current) loadMachineTelemetry(selectedMachineIdRef.current, false); }, 15000); return () => clearInterval(t); }, [loadMachineTelemetry]);
   useEffect(() => { const t = setInterval(() => setClockTick(Date.now()), 1000); return () => clearInterval(t); }, []);
 
@@ -791,26 +946,34 @@ const OperatorView = () => {
   }, []);
 
   useEffect(() => {
-    const socket = io(SOCKET_URL, { path: "/socket.io/", transports: ["websocket", "polling"] });
+    const socket = io(SOCKET_URL, {
+      path: "/socket.io/",
+      transports: ["polling", "websocket"],
+      autoConnect: false,
+    });
+    const connectTimer = setTimeout(() => {
+      socket.connect();
+    }, 0);
     socket.on("scan_event", (p = {}) => {
+      if (!isPayloadForActiveMachine(p)) return;
       const rel = processQrSignal(p);
-      if (rel) { 
-        const d = extractQrDecision(p); 
-        if (d === "BLOCK") { 
-          if (isDuplicatePopupEvent({ ...p, type: "ERROR" })) { scheduleLiveRefresh(); return; } 
-          if (shouldSuppressPopupPayload(p)) { scheduleLiveRefresh(); return; } 
-          mergePopupPayload({ 
-            type: "ERROR", 
-            title: "Scan Blocked", 
-            message: formatScanErrorMessage(p), 
-            reason: p.reason || "", 
-            partId: p.partId || p.part_id, 
-            stationNo: p.stationNo || p.station_no, 
-            machineId: p.machineId || p.machine_id, 
-            qrStatus: "FAILED", 
-            operationStatus: "BLOCKED", 
-            timestamp: p.timestamp 
-          }); 
+      const d = extractQrDecision(p);
+      if (d) {
+        setSuppressReadyPopup(false);
+        if (d === "BLOCK") {
+          if (shouldSuppressPopupPayload(p)) { scheduleLiveRefresh(); return; }
+          mergePopupPayload({
+            type: "ERROR",
+            title: "Scan Blocked",
+            message: formatScanErrorMessage(p),
+            reason: p.reason || "",
+            partId: p.partId || p.part_id,
+            stationNo: p.stationNo || p.station_no,
+            machineId: p.machineId || p.machine_id,
+            qrStatus: "FAILED",
+            operationStatus: "BLOCKED",
+            timestamp: p.timestamp
+          });
         } else {
           mergePopupPayload({
             type: "INFO",
@@ -822,21 +985,94 @@ const OperatorView = () => {
             operationStatus: "WAITING_MACHINE"
           });
         }
-        scheduleLiveRefresh(); 
       }
+      if (rel || d) scheduleLiveRefresh();
     });
-    socket.on("QR_VALIDATED", (p = {}) => { processQrSignal(p); scheduleLiveRefresh(); });
+    socket.on("QR_VALIDATED", (p = {}) => {
+      if (!isPayloadForActiveMachine(p)) return;
+      const rel = processQrSignal(p);
+      const d = extractQrDecision(p);
+      if (d) {
+        setSuppressReadyPopup(false);
+        if (d === "BLOCK") {
+          mergePopupPayload({
+            type: "ERROR",
+            title: "Scan Blocked",
+            message: formatScanErrorMessage(p),
+            reason: p.reason || "",
+            partId: p.partId || p.part_id,
+            stationNo: p.stationNo || p.station_no,
+            machineId: p.machineId || p.machine_id,
+            qrStatus: "FAILED",
+            operationStatus: "BLOCKED",
+            timestamp: p.timestamp,
+          });
+        } else {
+          mergePopupPayload({
+            type: "INFO",
+            title: "Scan Passed",
+            message: `QR Validated at ${p.stationNo || "Station"}`,
+            partId: p.partId || p.part_id,
+            stationNo: p.stationNo || p.station_no,
+            machineId: p.machineId || p.machine_id,
+            qrStatus: "PASSED",
+            operationStatus: "WAITING_MACHINE",
+            timestamp: p.timestamp,
+          });
+        }
+      }
+      if (rel || d) scheduleLiveRefresh();
+    });
     socket.on("PLC_RUNNING", (p = {}) => { scheduleLiveRefresh(); });
     socket.on("PLC_COMPLETED_OK", (p = {}) => { scheduleLiveRefresh(); });
     socket.on("PLC_COMPLETED_NG", (p = {}) => { scheduleLiveRefresh(); });
     socket.on("RESET_COMPLETED", (p = {}) => { setQrSignal(null); setQrFeed([]); scheduleLiveRefresh(); });
     
-    socket.on("journey_update", (p = {}) => { if (String(p.sourceEvent || "").toLowerCase() === "scan_event") return; if (hasQrDecision(p) && processQrSignal(p)) scheduleLiveRefresh(); });
+    socket.on("journey_update", (p = {}) => {
+      if (String(p.sourceEvent || "").toLowerCase() === "scan_event") return;
+      if (!isPayloadForActiveMachine(p)) return;
+      const d = extractQrDecision(p);
+      const rel = hasQrDecision(p) ? processQrSignal(p) : false;
+      if (d) {
+        setSuppressReadyPopup(false);
+        if (d === "BLOCK") {
+          mergePopupPayload({
+            type: "ERROR",
+            title: "Scan Blocked",
+            message: formatScanErrorMessage(p),
+            reason: p.reason || "",
+            partId: p.partId || p.part_id,
+            stationNo: p.stationNo || p.station_no,
+            machineId: p.machineId || p.machine_id,
+            qrStatus: "FAILED",
+            operationStatus: "BLOCKED",
+            timestamp: p.timestamp,
+          });
+        } else {
+          mergePopupPayload({
+            type: "INFO",
+            title: "Scan Passed",
+            message: `QR Validated at ${p.stationNo || "Station"}`,
+            partId: p.partId || p.part_id,
+            stationNo: p.stationNo || p.station_no,
+            machineId: p.machineId || p.machine_id,
+            qrStatus: "PASSED",
+            operationStatus: "WAITING_MACHINE",
+            timestamp: p.timestamp,
+          });
+        }
+      }
+      if (rel || d) scheduleLiveRefresh();
+    });
     socket.on("operator_popup", (p = {}) => {
       if (shouldSuppressPopupPayload(p) || isDuplicatePopupEvent(p)) return;
-      const ps = String(p.stationNo || p.station_no || "").trim().toUpperCase(), pm = String(p.machineId || p.machine_id || "");
-      if (!(pm === selectedMachineIdRef.current || (ps && ps === selectedStationRef.current))) return;
-      const nm = String(p.type || "").toUpperCase() === "ERROR" && String(p.reason || p.qrReason || "").trim() ? formatScanErrorMessage({ ...p, reason: p.reason || p.qrReason }) : p.message;
+      if (!isPayloadForActiveMachine(p)) return;
+      if (String(p.partId || p.part_id || "").trim()) {
+        setSuppressReadyPopup(false);
+      }
+      const nm = String(p.type || "").toUpperCase() === "ERROR"
+        ? formatScanErrorMessage({ ...p, reason: p.reason || p.qrReason })
+        : p.message;
       mergePopupPayload({ ...p, ...(nm ? { message: nm } : {}) });
       if (hasQrDecision(p) || String(p.sourceEvent || "").toLowerCase() === "scan_event") processQrSignal(p);
       scheduleLiveRefresh();
@@ -844,8 +1080,36 @@ const OperatorView = () => {
     socket.on("dashboard_refresh", () => scheduleLiveRefresh());
     // Avoid noisy refresh storms caused by transient health flaps.
     // Operator telemetry already refreshes on interval and on scan/popup events.
-    return () => { if (liveRefreshTimerRef.current) { clearTimeout(liveRefreshTimerRef.current); liveRefreshTimerRef.current = null; } socket.disconnect(); };
-  }, [scheduleLiveRefresh, processQrSignal, mergePopupPayload, isDuplicatePopupEvent]);
+    return () => {
+      clearTimeout(connectTimer);
+      if (liveRefreshTimerRef.current) {
+        clearTimeout(liveRefreshTimerRef.current);
+        liveRefreshTimerRef.current = null;
+      }
+      socket.removeAllListeners();
+      if (socket.connected || socket.active) {
+        socket.disconnect();
+      }
+    };
+  }, [scheduleLiveRefresh, processQrSignal, mergePopupPayload, isDuplicatePopupEvent, isPayloadForActiveMachine]);
+
+  const handleClosePopup = useCallback((reason = "manual") => {
+    setPopup((prev) => {
+      if (prev?.isSimulationPlaceholder) {
+        setSuppressReadyPopup(reason === "manual");
+      } else {
+        setSuppressReadyPopup(false);
+      }
+      return null;
+    });
+  }, []);
+
+  const handleRefreshWithPopup = useCallback(async () => {
+    if (!selectedMachineId) return;
+    setSuppressReadyPopup(false);
+    await loadMachineTelemetry(selectedMachineId, false);
+    openScannerReadyPopup();
+  }, [selectedMachineId, loadMachineTelemetry, openScannerReadyPopup]);
 
   useEffect(() => {
     const mk = String(selectedMachineId || "");
@@ -853,6 +1117,21 @@ const OperatorView = () => {
     try { const saved = JSON.parse(localStorage.getItem(QR_STORAGE_KEY) || "{}"); const r = saved[mk] || null; if (r) { setQrSignal(r); setQrFeed([r]); return; } } catch { }
     setQrSignal(null); setQrFeed([]);
   }, [selectedMachineId]);
+
+  const handleConfirmStationSelection = useCallback(() => {
+    const machineId = String(pendingMachineId || "");
+    if (!machineId) return;
+    const machine = machines.find((m) => String(m.id) === machineId);
+    if (!machine) return;
+    const lockedStation = String(getMachineStage(machine) || "").trim().toUpperCase();
+    setStationLock({
+      machineId,
+      stationNo: lockedStation,
+      lockedAt: new Date().toISOString(),
+    });
+    setSelectedMachineId(machineId);
+    setShowStationSelectModal(false);
+  }, [machines, pendingMachineId]);
 
   // Do not infer QR PASS/FAIL from PLC status.
   // Backend scan + PLC pipeline is the single source of truth.
@@ -867,11 +1146,127 @@ const OperatorView = () => {
       animation: "ovFadeIn .3s ease",
       maxWidth: "100%", overflowX: "hidden",
     }}>
-      <GlobalPopup popup={popup} onClose={() => setPopup(null)}
+      <GlobalPopup popup={popup} onClose={handleClosePopup}
         onResetOperation={handleResetOperation}
-        autoCloseMs={3500} criticalAutoCloseMs={9000} showAcknowledge={false}
+        autoCloseMs={12000} criticalAutoCloseMs={18000} showAcknowledge={false}
         machineId={selectedMachineId}
-        scannerInfo={scannerInfo} />
+        scannerInfo={scannerInfo}
+        showJourney
+        journeyScope="station" />
+
+      {showStationSelectModal && enforceStationLockMode && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1200,
+            background: "rgba(2, 6, 23, 0.8)",
+            backdropFilter: "blur(4px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              width: "100%",
+              maxWidth: 460,
+              background: C.bg("card"),
+              border: `1px solid ${C.bdr()}`,
+              borderRadius: 14,
+              boxShadow: SHM,
+              overflow: "hidden",
+            }}
+          >
+            <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.bdr()}`, background: C.bg("surf") }}>
+              <p style={{ fontSize: 14, fontWeight: 800, color: C.txt("pri") }}>
+                {hasLockedSelection ? "Change Machine / Station" : "Select Machine / Station"}
+              </p>
+              <p style={{ fontSize: 11, color: C.txt("muted"), marginTop: 3 }}>
+                This selection will stay fixed on this device for Operator View.
+              </p>
+            </div>
+            <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+              <label style={{ fontSize: 11, color: C.txt("muted"), fontWeight: 700 }}>Machine</label>
+              <select
+                value={pendingMachineId}
+                onChange={(e) => setPendingMachineId(e.target.value)}
+                style={{
+                  height: 38,
+                  padding: "0 10px",
+                  width: "100%",
+                  background: C.bg("input"),
+                  border: `1px solid ${C.bdr()}`,
+                  borderRadius: 9,
+                  fontSize: 13,
+                  color: C.txt("pri"),
+                  outline: "none",
+                }}
+              >
+                <option value="">Select Machine</option>
+                {machines.map((m) => (
+                  <option key={m.id} value={String(m.id)}>
+                    {m.machineName} - {getMachineStage(m) || "N/A"}
+                  </option>
+                ))}
+              </select>
+              <div
+                style={{
+                  borderRadius: 10,
+                  background: C.bg("surf"),
+                  border: `1px solid ${C.bdr()}`,
+                  padding: "10px 12px",
+                  fontSize: 12,
+                  color: C.txt("sec"),
+                }}
+              >
+                Station:{" "}
+                <strong style={{ color: C.amber() }}>
+                  {getMachineStage(machines.find((m) => String(m.id) === String(pendingMachineId))) || "-"}
+                </strong>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                {hasLockedSelection && (
+                  <button
+                    type="button"
+                    onClick={() => setShowStationSelectModal(false)}
+                    style={{
+                      height: 38,
+                      borderRadius: 9,
+                      border: `1px solid ${C.bdr()}`,
+                      background: "transparent",
+                      color: C.txt("sec"),
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      padding: "0 12px",
+                    }}
+                  >
+                    Keep Current
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleConfirmStationSelection}
+                  disabled={!pendingMachineId}
+                  style={{
+                    flex: 1,
+                    height: 38,
+                    borderRadius: 9,
+                    border: "none",
+                    background: !pendingMachineId ? C.idle(0.25) : C.navy(),
+                    color: "#fff",
+                    fontWeight: 700,
+                    cursor: !pendingMachineId ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {hasLockedSelection ? "Save & Switch" : "Confirm & Continue"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Page Header ───────────────────────────────────────────── */}
       <div style={{
@@ -954,12 +1349,13 @@ const OperatorView = () => {
             {/* Mobile menu toggle for machine selector (simplified on mobile) */}
             {isMobile && (
               <button
-                onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+                onClick={() => { if (!machineSelectionLocked) setMobileMenuOpen(!mobileMenuOpen); }}
                 style={{
                   display: "flex", alignItems: "center", gap: 6,
                   height: 36, padding: "0 12px", borderRadius: 9,
                   background: C.bg("surf"), border: `1px solid ${C.bdr()}`,
                   color: C.txt("sec"), fontSize: 12,
+                  opacity: machineSelectionLocked ? 0.7 : 1,
                 }}
               >
                 <Menu size={14} />
@@ -973,7 +1369,21 @@ const OperatorView = () => {
               display: isMobile && !mobileMenuOpen ? "none" : "block",
             }}>
               <select value={selectedMachineId}
-                onChange={e => { setSelectedMachineId(e.target.value); setMobileMenuOpen(false); }}
+                onChange={e => {
+                  const nextId = String(e.target.value || "");
+                  if (enforceStationLockMode) {
+                    if (!nextId || nextId === String(selectedMachineId || "")) {
+                      setMobileMenuOpen(false);
+                      return;
+                    }
+                    setPendingMachineId(nextId);
+                    setShowStationSelectModal(true);
+                    setMobileMenuOpen(false);
+                    return;
+                  }
+                  setSelectedMachineId(nextId);
+                  setMobileMenuOpen(false);
+                }}
                 disabled={loadingMachines}
                 style={{
                   height: isMobile ? 36 : 38, padding: "0 10px", width: "100%",
@@ -991,7 +1401,7 @@ const OperatorView = () => {
             </div>
 
             {/* Refresh button */}
-            <button onClick={() => selectedMachineId && loadMachineTelemetry(selectedMachineId, false)}
+            <button onClick={handleRefreshWithPopup}
               disabled={loadingStats || refreshing || !selectedMachineId}
               style={{
                 display: "inline-flex", alignItems: "center", gap: 6,
@@ -1004,6 +1414,7 @@ const OperatorView = () => {
               <RefreshCw size={isMobile ? 12 : 13} style={{ animation: refreshing ? "ovSpin .9s linear infinite" : "none" }} />
               {isMobile ? "" : (refreshing ? "Updating…" : "Refresh")}
             </button>
+
           </div>
         </div>
 
@@ -1267,8 +1678,8 @@ const OperatorView = () => {
                 <p style={{ fontSize: 11, color: C.txt("muted") }}>No trend data for this station.</p>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  <div style={{ height: isCompact ? 220 : 250 }}>
-                    <ResponsiveContainer width="100%" height="100%">
+                  <div style={{ minHeight: isCompact ? 220 : 250 }}>
+                    <ResponsiveContainer width="100%" height={isCompact ? 220 : 250} minWidth={1} minHeight={1}>
                       <ComposedChart data={trendChartData} margin={{ top: 6, right: 8, left: -14, bottom: 0 }}>
                         <CartesianGrid stroke={C.bdr(0.18)} strokeDasharray="3 4" vertical={false} />
                         <XAxis dataKey="hour" tick={{ fontSize: 10, fill: C.txt("muted"), fontFamily: "'DM Mono',monospace" }} axisLine={false} tickLine={false} />

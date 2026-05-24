@@ -17,7 +17,6 @@ import {
   MapPin, Zap, Package, QrCode, Trash2, Eye, EyeOff, Download,
 } from "lucide-react";
 import { machineApi, shiftApi, stationSettingsApi, traceabilityApi } from "../api/services";
-import GlobalPopup from "../components/GlobalPopup";
 import {
   getStationFeatureSettings, getStationFeatures, saveStationFeatureSettings,
 } from "../utils/stationSettings";
@@ -876,7 +875,6 @@ const ComponentJourney = () => {
   // ─────────────────────────────────────────────────────────────────────
   return (
     <div style={{display:"flex",flexDirection:"column",gap:20,padding:"4px 2px"}}>
-      <GlobalPopup popup={popup} onClose={()=>setPopup(null)} autoCloseMs={3500} criticalAutoCloseMs={9000}/>
 
       {/* ── QR Modal ─────────────────────────────────────────────────── */}
       {qrModalPartId && (

@@ -7,12 +7,12 @@ import {
   Network, Settings, Layout, Database, ChevronRight, Info,
   AlertTriangle, Eye, CheckCircle2, XCircle, ShieldOff, ShieldCheck,
   ArrowUp, ArrowDown, ArrowDownUp, GripVertical, Copy, Download,
-  Zap, Layers, Signal, Activity, Hash, ToggleLeft, ToggleRight,
-  TableProperties, ScanLine, Gauge, FlaskConical,
+  Zap, Signal, Activity, Hash, ToggleLeft, ToggleRight,
+  TableProperties, ScanLine, Gauge,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import ConfirmModal from "../components/ConfirmModal";
-import { machineApi, plcConfigApi, stationSettingsApi, traceabilityApi } from "../api/services";
+import { machineApi, plcConfigApi, traceabilityApi } from "../api/services";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -138,7 +138,58 @@ const SPC_MODE_FIELDS = {
     hint3: "Result key inside the written files",
     hint4: "Values representing NG/failure",
   },
+  TCP_CLIENT: {
+    label1: "Machine Source IP",
+    placeholder1: "192.168.1.120",
+    label2: "Machine Source Port",
+    placeholder2: "9001",
+    type2: "number",
+    label3: "Result key / parser key",
+    placeholder3: "RESULT",
+    label4: "NG Values",
+    placeholder4: "NG, FAIL, 0",
+    hint3: "Key to evaluate quality from incoming TCP payload",
+    hint4: "Values representing NG/failure",
+  },
+  TCP_SERVER: {
+    label1: "Listener Bind IP",
+    placeholder1: "0.0.0.0",
+    label2: "Listener Port",
+    placeholder2: "9001",
+    type2: "number",
+    label3: "Result key / parser key",
+    placeholder3: "RESULT",
+    label4: "NG Values",
+    placeholder4: "NG, FAIL, 0",
+    hint3: "Key to evaluate quality from incoming payload",
+    hint4: "Values representing NG/failure",
+  },
+  SERIAL: {
+    label1: "COM Port",
+    placeholder1: "COM3",
+    label2: "Baud Rate",
+    placeholder2: "9600",
+    type2: "number",
+    label3: "Result key / parser key",
+    placeholder3: "RESULT",
+    label4: "NG Values",
+    placeholder4: "NG, FAIL, 0",
+    hint3: "Key used to parse quality result from serial payload",
+    hint4: "Values representing NG/failure",
+  },
 };
+
+const ACQUISITION_PROTOCOLS = [
+  { id: "IP_PUSH", label: "IP Push", hint: "Machine software pushes payload to bridge listener" },
+  { id: "PLC_REGISTER", label: "PLC Register", hint: "Read part/result directly from PLC registers" },
+  { id: "HTTP_API", label: "HTTP API", hint: "Poll/fetch payload from machine-side API endpoint" },
+  { id: "FOLDER", label: "File / Folder", hint: "Watch TXT/CSV/LOG/JSON output generated on system" },
+  { id: "TCP_CLIENT", label: "TCP Client", hint: "Bridge connects to machine IP:Port and reads packets" },
+  { id: "TCP_SERVER", label: "TCP Server", hint: "Bridge opens listener and machine sends packets" },
+  { id: "SERIAL", label: "Serial / USB", hint: "COM scanner input via serial adapter provision" },
+];
+
+const PARSER_TYPES = ["JSON", "CSV", "XML", "KEYVALUE", "RAW"];
 
 // ─── Small helpers ────────────────────────────────────────────────────────────
 
@@ -377,6 +428,17 @@ function emptyForm() {
     spcMode: "IP_PUSH",
     spcSourceIp: "", spcSourcePort: "",
     spcPayloadKey: "RESULT", spcNgValues: "NG,FAIL,0",
+    spcActiveProtocols: ["IP_PUSH"],
+    spcPriority: ["IP_PUSH"],
+    spcFolderPath: "",
+    spcFolderPattern: "*.json",
+    spcFolderParser: "JSON",
+    spcFolderDeleteAfterRead: true,
+    spcDynamicRegisters: [],
+    spcRetryCount: "4",
+    spcRetryDelayMs: "1500",
+    spcTimeoutMs: "12000",
+    sourceConfigNotes: "",
     // Description
     description: "",
   };
@@ -406,7 +468,7 @@ function formFromMachine(m) {
     }));
   } else {
     // Legacy flat fields → build default with values
-    signals = DEFAULT_HANDSHAKE.map((def, i) => {
+    signals = DEFAULT_HANDSHAKE.map((def) => {
       const keyMap = {
         "Start":          { reg: cfg.startRegister,    val: cfg.startValue    },
         "Block/Interlock":{ reg: cfg.blockRegister,    val: cfg.blockValue    },
@@ -482,6 +544,27 @@ function formFromMachine(m) {
     spcNgValues: Array.isArray(spc.payloadResultNgValues)
       ? spc.payloadResultNgValues.join(", ")
       : String(spc.payloadResultNgValues || "NG,FAIL,0"),
+    spcActiveProtocols: [spc.mode || "IP_PUSH"],
+    spcPriority: [spc.mode || "IP_PUSH"],
+    spcFolderPath: spc.folderConfig?.path || "",
+    spcFolderPattern: spc.folderConfig?.pattern || "*.json",
+    spcFolderParser: spc.folderConfig?.parser || "JSON",
+    spcFolderDeleteAfterRead: spc.folderConfig?.deleteAfterRead !== false,
+    spcDynamicRegisters: Array.isArray(spc.dynamicRegisters)
+      ? spc.dynamicRegisters.map((r) => ({
+          id: uid(),
+          name: r.name || "",
+          register: String(r.register ?? ""),
+          device: r.device || "D",
+          type: r.type || "INT16",
+          scale: String(r.scale ?? "1"),
+          unit: r.unit || "",
+        }))
+      : [],
+    spcRetryCount: String(spc.retryCount ?? 4),
+    spcRetryDelayMs: String(spc.retryDelayMs ?? 1500),
+    spcTimeoutMs: String(spc.timeoutMs ?? 12000),
+    sourceConfigNotes: spc.sourceConfigNotes || "",
     description: m.description || "",
   };
 }
@@ -549,10 +632,30 @@ function buildPayload(f) {
   const spcConfig = {
     enabled: f.spcEnabled,
     mode: f.spcMode,
+    activeProtocols: [f.spcMode || "IP_PUSH"],
+    priority: [f.spcMode || "IP_PUSH"],
     sourceIp: f.spcSourceIp || null,
     sourcePort: toNum(f.spcSourcePort),
     payloadResultKey: f.spcPayloadKey || "RESULT",
     payloadResultNgValues: f.spcNgValues.split(/[,;|]/).map((v) => v.trim().toUpperCase()).filter(Boolean),
+    retryCount: Math.max(0, toNum(f.spcRetryCount, 4)),
+    retryDelayMs: Math.max(0, toNum(f.spcRetryDelayMs, 1500)),
+    timeoutMs: Math.max(1000, toNum(f.spcTimeoutMs, 12000)),
+    folderConfig: {
+      path: f.spcFolderPath || "",
+      pattern: f.spcFolderPattern || "*.*",
+      parser: (f.spcFolderParser || "JSON").toUpperCase(),
+      deleteAfterRead: f.spcFolderDeleteAfterRead !== false,
+    },
+    dynamicRegisters: (f.spcDynamicRegisters || []).map((r) => ({
+      name: r.name || "PARAM",
+      register: toNum(r.register),
+      device: (r.device || "D").toUpperCase(),
+      type: (r.type || "INT16").toUpperCase(),
+      scale: parseFloat(r.scale) || 1,
+      unit: r.unit || "",
+    })).filter((r) => r.register !== null),
+    sourceConfigNotes: (f.sourceConfigNotes || "").trim() || null,
   };
 
   return {
@@ -809,11 +912,11 @@ const modalOv = {
 // ─── TABS CONFIG ──────────────────────────────────────────────────────────────
 
 const FORM_TABS = [
-  { id: "identity", label: "Identity",         icon: Layout     },
-  { id: "network",  label: "Network / PLC",    icon: Network    },
-  { id: "signals",  label: "Signals",          icon: Signal     },
-  { id: "data",     label: "Data Registers",   icon: TableProperties },
-  { id: "quality",  label: "Quality / SPC",    icon: FlaskConical },
+  { id: "identity", label: "Identity", icon: Layout },
+  { id: "network", label: "Network / PLC", icon: Network },
+  { id: "signals", label: "Signals", icon: Signal },
+  { id: "data", label: "Data Registers", icon: TableProperties },
+  { id: "acquisition", label: "Acquisition + Quality", icon: ScanLine },
 ];
 
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
@@ -842,6 +945,7 @@ export default function MachinePage() {
   const [showTestModal, setShowTestModal] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
+  const [showSourceFieldGuide, setShowSourceFieldGuide] = useState(false);
 
   const uniqueIps = useMemo(() => {
     const ips = new Set();
@@ -1034,54 +1138,80 @@ export default function MachinePage() {
     }
   };
 
-  const handleTestConnection = () => {
+  const handleTestConnection = async () => {
     setShowTestModal(true);
     setTesting(true);
-    setTimeout(() => {
-      setTesting(false);
-      let msg = "";
-      let pay = {};
-      const key = form.spcPayloadKey || "RESULT";
-      if (form.spcMode === "IP_PUSH") {
-        msg = `Successfully listening on port ${form.spcSourcePort || 5000}. Received a mock client payload.`;
-        pay = {
-          PART_ID: "RICO-PART-20260517-001",
-          [key]: "OK",
-          OPERATOR: "Manoj Kumar",
-          CYCLE_TIME: "42.5s"
-        };
-      } else if (form.spcMode === "PLC_REGISTER") {
-        msg = `Successfully connected to PLC ${form.plcIp || "192.168.1.100"}:${form.plcPort || 502}. Read register ${key || "2065"}.`;
-        pay = {
-          REGISTER: key || "2065",
-          RAW_VALUE: 1,
-          MEANING: "OK / PASS"
-        };
-      } else if (form.spcMode === "HTTP_API") {
-        msg = `Successfully sent GET request to ${form.spcSourceIp || "http://192.168.1.50/api/quality"}.`;
-        pay = {
-          PART_ID: "RICO-PART-20260517-002",
-          [key]: "OK",
-          STATION: form.operationNo || "OP10",
-          TIMESTAMP: new Date().toISOString()
-        };
-      } else {
-        msg = `Successfully scanned folder ${form.spcSourceIp || "C:\\QualityData"}. Found 1 new file matching ${key || "*.json"}.`;
-        pay = {
-          FILENAME: "RICO-PART-20260517-003.json",
-          CONTENT: {
-            PART_ID: "RICO-PART-20260517-003",
-            [key]: "OK",
-            INSPECTED_BY: "MES_AUTO"
-          }
-        };
-      }
-      setTestResult({
-        message: msg,
-        payload: pay,
-        outcome: "PASS"
+    setTestResult(null);
+    try {
+      const mode = String(form.spcMode || "IP_PUSH").toUpperCase();
+      const endpoint =
+        mode === "HTTP_API"
+          ? form.spcSourceIp
+          : mode === "FOLDER"
+            ? null
+            : undefined;
+      const folderConfig = {
+        path: form.spcFolderPath || form.spcSourceIp,
+        pattern: form.spcFolderPattern || form.spcPayloadKey || "*.*",
+        parser: (form.spcFolderParser || "JSON").toUpperCase(),
+        deleteAfterRead: form.spcFolderDeleteAfterRead !== false,
+      };
+
+      const connection = await machineApi.testConnection({
+        mode,
+        sourceIp: form.spcSourceIp || form.plcIp,
+        sourcePort: toNum(form.spcSourcePort || form.plcPort),
+        endpoint,
+        folderConfig,
+        plcProtocol: form.plcProtocol,
+        payloadResultKey: form.spcPayloadKey,
+        plcSlmpDevice: form.plcDevice || "D",
+        plcSlmpFrameMode: form.plcFrameMode || "AUTO",
+        timeoutMs: toNum(form.spcTimeoutMs, 12000),
       });
-    }, 1200);
+
+      const payload = {
+        mode,
+        connectivity: connection,
+      };
+
+      if (mode === "PLC_REGISTER" && form.spcPayloadKey && /^\d+$/.test(String(form.spcPayloadKey).trim())) {
+        try {
+          const read = await machineApi.readPlcValue({
+            machineId: editingId || undefined,
+            ip: form.plcIp || form.spcSourceIp,
+            port: toNum(form.plcPort || form.spcSourcePort),
+            protocol: form.plcProtocol,
+            registerNo: toNum(form.spcPayloadKey),
+            plcSlmpDevice: form.plcDevice || "D",
+            plcSlmpFrameMode: form.plcFrameMode || "AUTO",
+            timeoutMs: toNum(form.spcTimeoutMs, 12000),
+          });
+          payload.plcRegisterRead = read;
+        } catch (readError) {
+          payload.plcRegisterRead = {
+            error: readError?.response?.data?.error || readError?.message || "PLC register read failed",
+            details: readError?.response?.data || null,
+          };
+        }
+      }
+
+      setTestResult({
+        message: connection?.message || "Connection test completed",
+        payload,
+        outcome: "PASS",
+      });
+      toast.success("Connection test passed");
+    } catch (err) {
+      setTestResult({
+        message: err?.response?.data?.error || err?.message || "Connection test failed",
+        payload: err?.response?.data || null,
+        outcome: "FAIL",
+      });
+      toast.error("Connection test failed");
+    } finally {
+      setTesting(false);
+    }
   };
 
   // ── Load data ───────────────────────────────────────────────────────────────
@@ -1103,8 +1233,6 @@ export default function MachinePage() {
   useEffect(() => { load(); }, [load]);
 
   // ── Derived ─────────────────────────────────────────────────────────────────
-  const rangeById = useMemo(() => (plcRanges || []).reduce((a, r) => { a[r.id] = r; return a; }, {}), [plcRanges]);
-
   const lines = useMemo(() => [...new Set((machines || []).map((m) => m.lineName).filter(Boolean))].sort(), [machines]);
 
   const filtered = useMemo(() => {
@@ -1125,6 +1253,33 @@ export default function MachinePage() {
 
   // ── Form helpers ────────────────────────────────────────────────────────────
   const setF = (key, val) => setForm((p) => ({ ...p, [key]: val }));
+
+  const addDynamicRegister = () => {
+    setForm((p) => ({
+      ...p,
+      spcDynamicRegisters: [
+        ...(Array.isArray(p.spcDynamicRegisters) ? p.spcDynamicRegisters : []),
+        { id: uid(), name: "", register: "", device: p.plcDevice || "D", type: "INT16", scale: "1", unit: "" },
+      ],
+    }));
+  };
+
+  const updateDynamicRegister = (index, key, value) => {
+    setForm((p) => {
+      const arr = Array.isArray(p.spcDynamicRegisters) ? [...p.spcDynamicRegisters] : [];
+      if (!arr[index]) return p;
+      arr[index] = { ...arr[index], [key]: value };
+      return { ...p, spcDynamicRegisters: arr };
+    });
+  };
+
+  const removeDynamicRegister = (index) => {
+    setForm((p) => ({
+      ...p,
+      spcDynamicRegisters: (Array.isArray(p.spcDynamicRegisters) ? p.spcDynamicRegisters : [])
+        .filter((_, i) => i !== index),
+    }));
+  };
 
   // Signals
   const addSignal = (preset) => {
@@ -1408,7 +1563,7 @@ export default function MachinePage() {
                       <td style={{ padding: "11px 14px", textAlign: "right" }}>
                         <div style={{ display: "flex", gap: 3, justifyContent: "flex-end" }}>
                           <IconBtn icon={Eye} title="View" onClick={() => setViewMachine(m)} color={C.blue} hoverBg={C.blueLt} hoverColor={C.blue} />
-                          <IconBtn icon={Boolean(m.machineBypassEnabled) ? ShieldCheck : ShieldOff} title={Boolean(m.machineBypassEnabled) ? "Disable Bypass" : "Enable Bypass"} onClick={() => openBypass(m)} color={C.amber} hoverBg={C.amberLt} hoverColor={C.amber} />
+                          <IconBtn icon={m.machineBypassEnabled ? ShieldCheck : ShieldOff} title={m.machineBypassEnabled ? "Disable Bypass" : "Enable Bypass"} onClick={() => openBypass(m)} color={C.amber} hoverBg={C.amberLt} hoverColor={C.amber} />
                           <IconBtn icon={Edit} title="Edit" onClick={() => openEdit(m)} color={C.text} />
                           <IconBtn icon={Trash2} title="Delete" onClick={() => setDeleteId(m.id)} color={C.red} hoverBg={C.redLt} hoverColor={C.red} />
                         </div>
@@ -1804,68 +1959,143 @@ export default function MachinePage() {
                 </div>
               )}
 
-              {/* ── QUALITY / SPC TAB ────────────────────────────────────── */}
-              {activeTab === "quality" && (
+
+              {activeTab === "acquisition" && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: C.card, border: `1px solid ${C.border}`, borderRadius: 8 }}>
                     <div>
-                      <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: C.text }}>Quality / SPC Integration</p>
-                      <p style={{ margin: "2px 0 0", fontSize: 11, color: C.hint }}>Enable to receive quality results from external source</p>
+                      <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: C.text }}>Acquisition + Quality Integration</p>
+                      <p style={{ margin: "2px 0 0", fontSize: 11, color: C.hint }}>Use one protocol profile at a time for stable MES traceability communication</p>
                     </div>
                     <Toggle checked={form.spcEnabled} onChange={(v) => setF("spcEnabled", v)} color={C.green} />
+                  </div>
+
+                  <div style={{ padding: "10px 12px", background: C.card, border: `1px solid ${C.border}`, borderRadius: 7 }}>
+                    <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: C.text }}>Bridge Connectivity Guide</p>
+                    <ol style={{ margin: "6px 0 0 16px", padding: 0, fontSize: 11, color: C.sec, lineHeight: 1.5 }}>
+                      <li>Bridge runs on station system and reads source data (PLC/file/TCP/serial).</li>
+                      <li>Bridge sends JSON to MES backend using MES server IP and port.</li>
+                      <li>System IP is needed only when source is remote (remote PLC/TCP/folder share).</li>
+                      <li>If bridge is already reading and forwarding directly, no extra file-read setup is required here.</li>
+                    </ol>
                   </div>
 
                   {form.spcEnabled && (
                     <>
                       <div>
                         <Label>Data source mode</Label>
-                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 8 }}>
-                          {[
-                            { id: "IP_PUSH",      label: "IP Push",     hint: "Equipment sends data to our server" },
-                            { id: "PLC_REGISTER", label: "PLC Register", hint: "Read quality result from PLC register" },
-                            { id: "HTTP_API",     label: "HTTP API",    hint: "Poll an HTTP endpoint for result" },
-                            { id: "FOLDER",       label: "Folder Watch", hint: "Watch a local/network folder for result files" },
-                          ].map((m) => (
-                            <button key={m.id} type="button" onClick={() => setF("spcMode", m.id)}
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, alignItems: "end" }}>
+                          <div>
+                            <Label>Protocol</Label>
+                            <FSelect
+                              value={form.spcMode}
+                              onChange={(e) => {
+                                const nextMode = e.target.value;
+                                setF("spcMode", nextMode);
+                                setF("spcActiveProtocols", [nextMode]);
+                                setF("spcPriority", [nextMode]);
+                              }}
+                            >
+                              {ACQUISITION_PROTOCOLS.map((m) => (
+                                <option key={m.id} value={m.id}>{m.label}</option>
+                              ))}
+                            </FSelect>
+                          </div>
+                          <div style={{ paddingBottom: 6 }}>
+                            <p style={{ margin: 0, fontSize: 10, color: C.hint }}>
+                              {(ACQUISITION_PROTOCOLS.find((m) => m.id === form.spcMode) || {}).hint || "Select source protocol."}
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => setShowSourceFieldGuide((s) => !s)}
                               style={{
-                                padding: "10px 12px", borderRadius: 7, textAlign: "left",
-                                border: `1px solid ${form.spcMode === m.id ? C.blue : C.border}`,
-                                background: form.spcMode === m.id ? C.blueLt : C.card,
+                                marginTop: 6,
+                                padding: "4px 8px",
+                                borderRadius: 6,
+                                border: `1px solid ${C.border}`,
+                                background: C.card,
+                                color: C.sec,
+                                fontSize: 10,
+                                fontWeight: 700,
                                 cursor: "pointer",
-                              }}>
-                              <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: form.spcMode === m.id ? C.blue : C.text }}>{m.label}</p>
-                              <p style={{ margin: "2px 0 0", fontSize: 10, color: C.hint }}>{m.hint}</p>
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 4,
+                              }}
+                              title="Show protocol-wise field guide"
+                            >
+                              <Info size={10} /> {showSourceFieldGuide ? "Hide Field Guide" : "Show Field Guide"}
                             </button>
-                          ))}
+                          </div>
                         </div>
+                        {showSourceFieldGuide && (
+                          <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.card }}>
+                            <p style={{ margin: 0, fontSize: 10, color: C.sec }}>
+                              `PLC_REGISTER` uses Network/PLC endpoint and register-based quality read.
+                              `FOLDER` uses folder settings below.
+                              Other modes use source endpoint + payload key + NG values.
+                            </p>
+                          </div>
+                        )}
                       </div>
 
                       {(() => {
+                        const mode = String(form.spcMode || "IP_PUSH").toUpperCase();
                         const cfg = SPC_MODE_FIELDS[form.spcMode || "IP_PUSH"] || SPC_MODE_FIELDS.IP_PUSH;
+                        const showEndpointFields = !["PLC_REGISTER", "FOLDER"].includes(mode);
                         return (
                           <>
-                            <div style={{ display: "grid", gridTemplateColumns: "1fr 130px 1fr 1fr", gap: 12 }}>
-                              <div>
-                                <Label>{cfg.label1}</Label>
-                                <FInput value={form.spcSourceIp} onChange={(e) => setF("spcSourceIp", e.target.value)} placeholder={cfg.placeholder1} mono />
+                            {mode === "PLC_REGISTER" ? (
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                                <div style={{ gridColumn: "1 / -1", padding: "8px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.card }}>
+                                  <p style={{ margin: 0, fontSize: 10, color: C.hint }}>
+                                    PLC endpoint will be taken from Network/PLC tab: {form.plcIp || "—"}:{form.plcPort || "—"} ({form.plcProtocol || "TCP_TEXT"})
+                                  </p>
+                                </div>
+                                <div>
+                                  <Label hint={cfg.hint3}>{cfg.label3}</Label>
+                                  <FInput type="number" value={form.spcPayloadKey} onChange={(e) => setF("spcPayloadKey", e.target.value)} placeholder={cfg.placeholder3} mono />
+                                </div>
+                                <div>
+                                  <Label hint={cfg.hint4}>{cfg.label4}</Label>
+                                  <FInput value={form.spcNgValues} onChange={(e) => setF("spcNgValues", e.target.value)} placeholder={cfg.placeholder4} mono />
+                                </div>
                               </div>
-                              <div>
-                                <Label>{cfg.label2}</Label>
-                                <FInput type={cfg.type2 || "text"} value={form.spcSourcePort} onChange={(e) => setF("spcSourcePort", e.target.value)} placeholder={cfg.placeholder2} mono />
+                            ) : (
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 130px 1fr 1fr", gap: 12 }}>
+                                {showEndpointFields ? (
+                                  <>
+                                    <div>
+                                      <Label>{cfg.label1}</Label>
+                                      <FInput value={form.spcSourceIp} onChange={(e) => setF("spcSourceIp", e.target.value)} placeholder={cfg.placeholder1} mono />
+                                    </div>
+                                    <div>
+                                      <Label>{cfg.label2}</Label>
+                                      <FInput type={cfg.type2 || "text"} value={form.spcSourcePort} onChange={(e) => setF("spcSourcePort", e.target.value)} placeholder={cfg.placeholder2} mono />
+                                    </div>
+                                  </>
+                                ) : (
+                                  <div style={{ gridColumn: "1 / span 2", paddingTop: 6 }}>
+                                    <p style={{ margin: 0, fontSize: 10, color: C.hint }}>
+                                      Endpoint fields are not required here. Use folder settings below.
+                                    </p>
+                                  </div>
+                                )}
+                                <div>
+                                  <Label hint={cfg.hint3}>{cfg.label3}</Label>
+                                  <FInput value={form.spcPayloadKey} onChange={(e) => setF("spcPayloadKey", e.target.value)} placeholder={cfg.placeholder3} mono />
+                                </div>
+                                <div>
+                                  <Label hint={cfg.hint4}>{cfg.label4}</Label>
+                                  <FInput value={form.spcNgValues} onChange={(e) => setF("spcNgValues", e.target.value)} placeholder={cfg.placeholder4} />
+                                </div>
                               </div>
-                              <div>
-                                <Label hint={cfg.hint3}>{cfg.label3}</Label>
-                                <FInput value={form.spcPayloadKey} onChange={(e) => setF("spcPayloadKey", e.target.value)} placeholder={cfg.placeholder3} mono />
-                              </div>
-                              <div>
-                                <Label hint={cfg.hint4}>{cfg.label4}</Label>
-                                <FInput value={form.spcNgValues} onChange={(e) => setF("spcNgValues", e.target.value)} placeholder={cfg.placeholder4} />
-                              </div>
-                            </div>
+                            )}
 
                             {/* Test Connection Button */}
                             <div style={{ display: "flex", justifyContent: "flex-end" }}>
                               <button type="button" onClick={handleTestConnection}
+                                title="Tests selected source configuration and optional PLC register read"
                                 style={{
                                   display: "inline-flex", alignItems: "center", gap: 6,
                                   padding: "8px 16px", borderRadius: 8,
@@ -1887,7 +2117,118 @@ export default function MachinePage() {
                           <Info size={11} style={{ verticalAlign: "middle", marginRight: 4 }} />
                           Quality result acknowledgement is handled via the Confirmation signal defined in the Signals tab.
                           Data register ranges defined in the Data Registers tab are also read on cycle end and attached to the quality record.
+                          For machine onboarding standards, use this tab to maintain a single stable protocol profile and dynamic register mapping.
                         </p>
+                      </div>
+
+                      {String(form.spcMode || "").toUpperCase() === "FOLDER" && (
+                        <SectionCard title="Folder Source Settings" subtitle="TXT/CSV/LOG/JSON from machine software" icon={Database}>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 140px 170px", gap: 10 }}>
+                            <div>
+                              <Label>Folder Path</Label>
+                              <FInput value={form.spcFolderPath} onChange={(e) => setF("spcFolderPath", e.target.value)} placeholder="C:\\MachineData\\Output" mono />
+                            </div>
+                            <div>
+                              <Label>Pattern</Label>
+                              <FInput value={form.spcFolderPattern} onChange={(e) => setF("spcFolderPattern", e.target.value)} placeholder="*.csv" mono />
+                            </div>
+                            <div>
+                              <Label>Parser</Label>
+                              <FSelect value={form.spcFolderParser} onChange={(e) => setF("spcFolderParser", e.target.value)}>
+                                {PARSER_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                              </FSelect>
+                            </div>
+                            <div style={{ display: "flex", alignItems: "flex-end", paddingBottom: 4 }}>
+                              <Toggle
+                                checked={form.spcFolderDeleteAfterRead !== false}
+                                onChange={(v) => setF("spcFolderDeleteAfterRead", v)}
+                                label="Delete After Read"
+                                color={C.amber}
+                              />
+                            </div>
+                          </div>
+                        </SectionCard>
+                      )}
+
+                      <SectionCard title="Dynamic PLC Registers" subtitle="Read additional fields like partId/customerQR/measurements" icon={TableProperties}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          {(form.spcDynamicRegisters || []).map((row, i) => (
+                            <div key={row.id || i}
+                              style={{
+                                display: "grid",
+                                gridTemplateColumns: "1fr 90px 70px 90px 80px 70px 28px",
+                                gap: 6,
+                                alignItems: "end",
+                                padding: "8px 10px",
+                                border: `1px solid ${C.border}`,
+                                borderRadius: 7,
+                                background: C.card,
+                              }}>
+                              <div>
+                                <Label>Name</Label>
+                                <FInput value={row.name} onChange={(e) => updateDynamicRegister(i, "name", e.target.value)} placeholder="customerQr / partId / torque" />
+                              </div>
+                              <div>
+                                <Label>Register</Label>
+                                <FInput value={row.register} onChange={(e) => updateDynamicRegister(i, "register", e.target.value)} placeholder="2065" mono type="number" />
+                              </div>
+                              <div>
+                                <Label>Device</Label>
+                                <FSelect value={row.device || "D"} onChange={(e) => updateDynamicRegister(i, "device", e.target.value)} mono>
+                                  {DEVICES.map((d) => <option key={d} value={d}>{d}</option>)}
+                                </FSelect>
+                              </div>
+                              <div>
+                                <Label>Type</Label>
+                                <FSelect value={row.type || "INT16"} onChange={(e) => updateDynamicRegister(i, "type", e.target.value)}>
+                                  {DATA_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                                </FSelect>
+                              </div>
+                              <div>
+                                <Label>Scale</Label>
+                                <FInput value={row.scale} onChange={(e) => updateDynamicRegister(i, "scale", e.target.value)} placeholder="1" mono />
+                              </div>
+                              <div>
+                                <Label>Unit</Label>
+                                <FInput value={row.unit} onChange={(e) => updateDynamicRegister(i, "unit", e.target.value)} placeholder="mm" />
+                              </div>
+                              <div style={{ paddingBottom: 2 }}>
+                                <IconBtn icon={Trash2} title="Remove" onClick={() => removeDynamicRegister(i)} color={C.red} hoverColor={C.red} hoverBg={C.redLt} />
+                              </div>
+                            </div>
+                          ))}
+                          <button type="button" onClick={addDynamicRegister}
+                            style={{ alignSelf: "flex-start", display: "inline-flex", alignItems: "center", gap: 5, padding: "7px 12px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.card, color: C.sec, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                            <Plus size={12} /> Add Dynamic Register
+                          </button>
+                        </div>
+                      </SectionCard>
+
+                      <SectionCard title="Reliability Controls" subtitle="Timeout and retry for source read operations" icon={Activity}>
+                        <div style={{ display: "grid", gridTemplateColumns: "140px 140px 160px", gap: 10 }}>
+                          <div>
+                            <Label>Retry Count</Label>
+                            <FInput type="number" value={form.spcRetryCount} onChange={(e) => setF("spcRetryCount", e.target.value)} placeholder="4" mono />
+                          </div>
+                          <div>
+                            <Label>Retry Delay ms</Label>
+                            <FInput type="number" value={form.spcRetryDelayMs} onChange={(e) => setF("spcRetryDelayMs", e.target.value)} placeholder="1500" mono />
+                          </div>
+                          <div>
+                            <Label>Timeout ms</Label>
+                            <FInput type="number" value={form.spcTimeoutMs} onChange={(e) => setF("spcTimeoutMs", e.target.value)} placeholder="12000" mono />
+                          </div>
+                        </div>
+                      </SectionCard>
+
+                      <div>
+                        <Label>Source Notes / SOP</Label>
+                        <textarea
+                          value={form.sourceConfigNotes}
+                          onChange={(e) => setF("sourceConfigNotes", e.target.value)}
+                          placeholder="Document per-machine data pickup strategy (file path, PLC register plan, scanner source, fallback)."
+                          style={{ ...inp, height: 70, padding: 10, resize: "vertical", fontFamily: "inherit" }}
+                        />
                       </div>
                     </>
                   )}
@@ -1925,6 +2266,7 @@ export default function MachinePage() {
             background: C.card, border: `1px solid ${C.border}`,
             borderRadius: 12, overflow: "hidden",
             boxShadow: "0 20px 50px rgba(15,23,42,.18)",
+            maxHeight: "82vh",
           }}>
             <div style={{ height: 3, background: `linear-gradient(90deg,${C.green},${C.blue})` }} />
             <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -1936,7 +2278,7 @@ export default function MachinePage() {
                 <X size={13} />
               </button>
             </div>
-            <div style={{ padding: 18, background: C.bg, display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ padding: 18, background: C.bg, display: "flex", flexDirection: "column", gap: 14, overflowY: "auto", maxHeight: "60vh" }}>
               {testing ? (
                 <div style={{ padding: "40px 20px", textAlign: "center", color: C.hint }}>
                   <RefreshCw size={28} style={{ margin: "0 auto 10px", opacity: 0.8, animation: "spin 1s linear infinite" }} color={C.blue} />
@@ -1945,10 +2287,20 @@ export default function MachinePage() {
                 </div>
               ) : testResult ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  <div style={{ padding: "10px 12px", background: C.greenLt, border: `1px solid ${C.greenBd}`, borderRadius: 8, display: "flex", alignItems: "center", gap: 8 }}>
-                    <CheckCircle2 size={16} color={C.green} />
+                  <div style={{
+                    padding: "10px 12px",
+                    background: testResult.outcome === "FAIL" ? C.redLt : C.greenLt,
+                    border: `1px solid ${testResult.outcome === "FAIL" ? C.redBd : C.greenBd}`,
+                    borderRadius: 8,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8
+                  }}>
+                    {testResult.outcome === "FAIL" ? <XCircle size={16} color={C.red} /> : <CheckCircle2 size={16} color={C.green} />}
                     <div>
-                      <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: C.green }}>Connection Successful</p>
+                      <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: testResult.outcome === "FAIL" ? C.red : C.green }}>
+                        {testResult.outcome === "FAIL" ? "Connection Failed" : "Connection Successful"}
+                      </p>
                       <p style={{ margin: "2px 0 0", fontSize: 10, color: C.sec }}>{testResult.message}</p>
                     </div>
                   </div>
@@ -1961,6 +2313,8 @@ export default function MachinePage() {
                       borderRadius: 8, border: "1px solid #334155",
                       fontFamily: "ui-monospace,monospace", fontSize: 11,
                       overflowX: "auto",
+                      overflowY: "auto",
+                      maxHeight: 220,
                     }}>
                       {JSON.stringify(testResult.payload, null, 2)}
                     </pre>
@@ -1974,9 +2328,11 @@ export default function MachinePage() {
                     <span style={{
                       display: "inline-flex", alignItems: "center", gap: 4,
                       padding: "4px 10px", borderRadius: 99, fontSize: 11, fontWeight: 800,
-                      background: C.greenLt, color: C.green, border: `1px solid ${C.greenBd}`
+                      background: testResult.outcome === "FAIL" ? C.redLt : C.greenLt,
+                      color: testResult.outcome === "FAIL" ? C.red : C.green,
+                      border: `1px solid ${testResult.outcome === "FAIL" ? C.redBd : C.greenBd}`
                     }}>
-                      <CheckCircle2 size={12} /> {testResult.outcome}
+                      {testResult.outcome === "FAIL" ? <XCircle size={12} /> : <CheckCircle2 size={12} />} {testResult.outcome}
                     </span>
                   </div>
                 </div>

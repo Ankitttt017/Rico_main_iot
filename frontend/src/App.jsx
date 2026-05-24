@@ -23,6 +23,7 @@ import StationControls from "./pages/StationControls";
 import PlcConfiguration from "./pages/PlcConfiguration";
 import IoMonitor from "./pages/IoMonitor";
 import ReportConfiguration from "./pages/ReportConfiguration";
+import ReportsPage from "./pages/Reports/ReportsPage";
 import { getUserRole, isAuthenticated } from "./utils/authStorage";
 import { APP_ROUTES } from "./constants/routes";
 import { canAccessModule, getRoleAccessSettings } from "./utils/roleAccess";
@@ -41,6 +42,7 @@ const MODULE_REDIRECT_ORDER = [
   { moduleKey: "packing", path: APP_ROUTES.packing },
   { moduleKey: "packing_management", path: APP_ROUTES.packingManagement },
   { moduleKey: "production", path: APP_ROUTES.production },
+  { moduleKey: "production", path: APP_ROUTES.reports },
   { moduleKey: "io_monitor", path: APP_ROUTES.ioMonitor },
   { moduleKey: "part_journey", path: APP_ROUTES.partJourney },
   { moduleKey: "process_flow", path: APP_ROUTES.processFlow },
@@ -182,6 +184,14 @@ function App() {
               element={
                 <ModuleRoute moduleKey="production">
                   <ProductionCharts />
+                </ModuleRoute>
+              }
+            />
+            <Route
+              path={APP_ROUTES.reports.slice(1)}
+              element={
+                <ModuleRoute moduleKey="production">
+                  <ReportsPage />
                 </ModuleRoute>
               }
             />

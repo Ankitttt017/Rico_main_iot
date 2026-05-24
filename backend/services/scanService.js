@@ -2,11 +2,14 @@ const Part = require("../models/Part");
 const OperationLog = require("../models/OperationLog");
 const ProductionLog = require("../models/ProductionLog");
 const Machine = require("../models/Machine");
+const StationFeatureSetting = require("../models/StationFeatureSetting");
 const QrFormatRule = require("../models/QrFormatRule");
 const { emitRealtime } = require("./realtimeService");
 const { testQrPattern } = require("../utils/qrRegex");
 const { getStationFeatureConfig } = require("./stationFeatureService");
+const { isMachineBypassEnabled } = require("./machineBypassService");
 const sequelize = require("../config/db");
+const { Op } = require("sequelize");
 const RECENT_DUPLICATE_GRACE_MS = Math.max(Number(process.env.RECENT_DUPLICATE_GRACE_MS || 1500), 0);
 const SCAN_INFLIGHT_GUARD_MS = Math.max(Number(process.env.SCAN_INFLIGHT_GUARD_MS || 8000), 1000);
 const scanInflightKeys = new Map();
@@ -167,7 +170,10 @@ async function checkPlcCycleReading(barcode) {
 
   if (parsed.success) {
     console.log(`[PLC_CYCLE_AUDIT] Scanned barcode: ${barcode} -> Parsed fields:`, parsed);
-    await ensurePlcCycleReadingExists(parsed);
+    const allowAutoSeed = String(process.env.PLC_CYCLE_AUTO_SEED || "").trim() === "1";
+    if (allowAutoSeed) {
+      await ensurePlcCycleReadingExists(parsed);
+    }
 
     const query = `
       SELECT TOP 1 * FROM PlcCycleReadings 
@@ -357,7 +363,40 @@ async function getActiveStations() {
     where: { is_active: true },
     order: [["sequence_no", "ASC"]],
   });
-  return uniqueStages(machines.map((machine) => getMachineOperationStage(machine)));
+  const machineStageRows = machines
+    .map((machine) => ({ machine, stage: getMachineOperationStage(machine) }))
+    .filter((row) => Boolean(row.stage));
+  const staged = uniqueStages(machineStageRows.map((row) => row.stage));
+  if (staged.length === 0) return [];
+
+  const settings = await StationFeatureSetting.findAll({
+    where: { station_no: staged },
+    attributes: ["station_no", "operation_enabled"],
+  });
+  const byStation = settings.reduce((acc, row) => {
+    acc[normalizeStation(row.station_no)] = row.operation_enabled !== false;
+    return acc;
+  }, {});
+
+  const machinesByStage = machineStageRows.reduce((acc, row) => {
+    if (!acc[row.stage]) acc[row.stage] = [];
+    acc[row.stage].push(row.machine);
+    return acc;
+  }, {});
+
+  return staged.filter((stage) => {
+    if (byStation[stage] === false) return false;
+    const stageMachines = machinesByStage[stage] || [];
+    if (stageMachines.length === 0) return false;
+    // If all machines at this stage are bypassed, skip this stage in validation sequence.
+    // This allows downstream stations to scan without "previous station not completed" blocks.
+    const hasAtLeastOneNonBypassedMachine = stageMachines.some((machine) => {
+      const runtimeBypass = isMachineBypassEnabled(machine.id);
+      const persistedBypass = machine.bypass_enabled === true;
+      return !(runtimeBypass || persistedBypass);
+    });
+    return hasAtLeastOneNonBypassedMachine;
+  });
 }
 
 async function saveAuditLog(partId, machineId, status, reason, userId = null) {
@@ -418,6 +457,56 @@ function getExpectedStation(part, sequence) {
   return sequence[currentIndex + 1];
 }
 
+async function deriveSequenceStateFromHistory(partId, sequence) {
+  if (!partId || !Array.isArray(sequence) || sequence.length === 0) {
+    return { expectedStation: null, lastCompletedStation: null };
+  }
+
+  const logs = await OperationLog.findAll({
+    where: { part_id: partId },
+    attributes: ["station_no", "operation_no", "plc_status", "result", "createdAt"],
+    order: [["createdAt", "DESC"]],
+    limit: 400,
+  });
+
+  const completedStations = new Set();
+  for (const log of logs) {
+    const plcStatus = String(log.plc_status || "").trim().toUpperCase();
+    const result = String(log.result || "").trim().toUpperCase();
+    const station = normalizeStation(log.station_no || log.operation_no);
+    if (!station || !sequence.includes(station)) continue;
+
+    const isCompleted =
+      ["ENDED_OK", "COMPLETED_OK", "ENDED_NG", "COMPLETED_NG"].includes(plcStatus) ||
+      ["OK", "NG"].includes(result);
+
+    if (isCompleted) {
+      completedStations.add(station);
+    }
+  }
+
+  let lastCompletedIndex = -1;
+  for (let i = 0; i < sequence.length; i += 1) {
+    if (completedStations.has(sequence[i])) {
+      lastCompletedIndex = i;
+    } else {
+      break;
+    }
+  }
+
+  if (lastCompletedIndex < 0) {
+    return {
+      expectedStation: sequence[0] || null,
+      lastCompletedStation: null,
+    };
+  }
+
+  return {
+    expectedStation: sequence[lastCompletedIndex + 1] || null,
+    lastCompletedStation: sequence[lastCompletedIndex] || null,
+  };
+}
+
 function toUpper(value) {
   return String(value || "").trim().toUpperCase();
 }
@@ -454,6 +543,10 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
   const skipInterlockValidation = options?.skipInterlockValidation === true;
   const skipDuplicateValidation = options?.skipDuplicateValidation === true;
   const skipSequenceValidation = options?.skipSequenceValidation === true;
+  const skipQrFormatValidation = options?.skipQrFormatValidation === true;
+  const skipShotValidation = options?.skipShotValidation === true;
+  const skipCustomerCodeValidation = options?.skipCustomerCodeValidation === true;
+  const customerCodePattern = String(options?.customerCodePattern || "").trim();
   const mId = Number(machineId) || 0;
   const scanInflightKey = makeScanInflightKey(normalizedPartId, station, mId);
   const scanStartAllowed = beginScanInflight(scanInflightKey);
@@ -481,7 +574,7 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
     const applicableRules = activeRules.filter((rule) => isRuleApplicableToStation(rule, station));
     let matchedRule = null;
 
-    if (applicableRules.length > 0) {
+    if (!skipQrFormatValidation && applicableRules.length > 0) {
       for (const rule of applicableRules) {
         try {
           if (testQrPattern(rule.regex_pattern, normalizedPartId)) {
@@ -519,14 +612,14 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
       return {
         decision: "BLOCK",
         reason: "STATION_NOT_CONFIGURED",
-        message: `BLOCKED\nStation Not Found\n\nStation: ${station}\nPlease check configuration.`,
+        message: `Station ${station} is not configured in active station sequence.`,
         currentStatus: "UNKNOWN"
       };
     }
     const firstStation = sequence[0] || null;
 
     // First operation gate: scanned QR must exist in PLC reading table.
-    if (station === firstStation) {
+    if (!skipShotValidation && station === firstStation) {
       const plcMatch = await checkPlcCycleReading(normalizedPartId);
       if (!plcMatch?.success) {
         return {
@@ -535,6 +628,29 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
           validationResult: "FAILED",
           message: "Part QR not found in moulding records. Verify part was recorded first.",
           currentStatus: "REJECTED_PLC_MATCH",
+        };
+      }
+    }
+
+    if (!skipCustomerCodeValidation && customerCodePattern) {
+      try {
+        const customerRegex = new RegExp(customerCodePattern, "i");
+        if (!customerRegex.test(normalizedPartId)) {
+          return {
+            decision: "BLOCK",
+            reason: "CUSTOMER_CODE_INVALID",
+            validationResult: "FAILED",
+            message: "Customer code validation failed for scanned QR.",
+            currentStatus: "REJECTED_CUSTOMER_CODE",
+          };
+        }
+      } catch (_error) {
+        return {
+          decision: "BLOCK",
+          reason: "CUSTOMER_CODE_RULE_INVALID",
+          validationResult: "FAILED",
+          message: "Customer code rule is invalid. Contact supervisor.",
+          currentStatus: "REJECTED_CUSTOMER_RULE",
         };
       }
     }
@@ -561,16 +677,60 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
 
     const stationFeatures = await getStationFeatureConfig(station);
 
-    const expectedStation = getExpectedStation(part, sequence);
+    const partExpectedStation = getExpectedStation(part, sequence);
+    const derivedSequenceState = await deriveSequenceStateFromHistory(normalizedPartId, sequence);
+    const expectedStation = derivedSequenceState.expectedStation || partExpectedStation;
+    const lastCompletedStation =
+      derivedSequenceState.lastCompletedStation ||
+      normalizeStation(part.current_operation || part.current_station);
 
-    // 1. DUPLICATE VALIDATION
-    const hasExistingSuccess = await OperationLog.findOne({
-      where: { 
-        part_id: normalizedPartId, 
-        station_no: station,
-        plc_status: ["ENDED_OK", "PASSED", "COMPLETED_OK", "ENDED_NG", "COMPLETED_NG"]
-      }
+    if (
+      derivedSequenceState.lastCompletedStation &&
+      normalizeStation(part.current_operation) !== derivedSequenceState.lastCompletedStation
+    ) {
+      part.current_operation = derivedSequenceState.lastCompletedStation;
+      part.current_station = derivedSequenceState.lastCompletedStation;
+      await part.save();
+    }
+
+    // 1. DUPLICATE VALIDATION (cycle-aware + latest-station-log aware)
+    const stationSequenceIndex = sequence.indexOf(station);
+    const firstStationInSequence = sequence[0] || null;
+    let cycleAnchorAt = null;
+
+    if (stationSequenceIndex > 0 && firstStationInSequence) {
+      const latestFirstStationPassLog = await OperationLog.findOne({
+        where: {
+          part_id: normalizedPartId,
+          station_no: firstStationInSequence,
+          [Op.or]: [
+            { plc_status: { [Op.in]: ["ENDED_OK", "PASSED", "COMPLETED_OK", "ENDED_NG", "COMPLETED_NG"] } },
+            { result: { [Op.in]: ["OK", "NG", "PASS", "FAIL"] } },
+          ],
+        },
+        attributes: ["createdAt"],
+        order: [["createdAt", "DESC"]],
+      });
+      cycleAnchorAt = latestFirstStationPassLog?.createdAt || null;
+    }
+
+    const latestStationWhere = {
+      part_id: normalizedPartId,
+      station_no: station,
+    };
+    if (cycleAnchorAt && stationSequenceIndex > 0) {
+      latestStationWhere.createdAt = { [Op.gte]: cycleAnchorAt };
+    }
+
+    const latestStationLog = await OperationLog.findOne({
+      where: latestStationWhere,
+      order: [["createdAt", "DESC"]],
     });
+    const latestStationStatus = String(latestStationLog?.plc_status || "").trim().toUpperCase();
+    const latestStationResult = String(latestStationLog?.result || "").trim().toUpperCase();
+    const hasExistingSuccess =
+      ["ENDED_OK", "PASSED", "COMPLETED_OK", "ENDED_NG", "COMPLETED_NG"].includes(latestStationStatus) ||
+      ["OK", "NG", "PASS", "FAIL"].includes(latestStationResult);
 
     const scanAttemptType = hasExistingSuccess ? "RE-SCAN" : "INITIAL";
 
@@ -618,12 +778,11 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
 
     // 2. SEQUENCE VALIDATION
     if (!skipSequenceValidation && sequence.length > 0) {
-      const currentIdx = sequence.indexOf(station);
-      if (currentIdx > 0 && expectedStation && expectedStation !== station) {
+      if (stationSequenceIndex > 0 && expectedStation && expectedStation !== station) {
         const expectedIdx = sequence.indexOf(expectedStation);
 
         // Allow rework parts to be rescanned/re-run at current/previous stages if they are in rework state
-        if (part.is_rework && currentIdx <= expectedIdx) {
+        if (part.is_rework && stationSequenceIndex <= expectedIdx) {
           // Allow
         } else {
           const blockedLog = await OperationLog.create({
@@ -648,8 +807,10 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
             reason: "PREVIOUS_STATION_NOT_COMPLETED",
             qrStatus: "BLOCKED",
             operationStatus: "INTERLOCKED",
-            message: `Previous station not completed with OP number ${expectedStation}.`,
+            message: `Previous station not completed. Expected ${expectedStation}.`,
             expectedStation,
+            lastCompletedStation,
+            scannedStation: station,
             currentStatus: part.status,
             operationLogId: blockedLog.id,
           };
@@ -658,18 +819,25 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
     }
 
     // 3. INTERLOCK / NG VALIDATION
-    if (!skipInterlockValidation && (part.is_interlocked || part.status === "INTERLOCKED")) {
-      if (["NG", "ENDED_NG", "FAILED"].includes(part.status) || part.interlock_reason === "SCAN_RESULT_NG") {
-        return {
-          decision: "ALLOW",
-          reason: "GLOBAL_REJECTION",
-          qrStatus: "PASSED",
-          operationStatus: "FAILED",
-          message: "Part is marked as NG (Rejected). Further operations are not allowed. Please move to rejection bin.",
-          currentStatus: part.status,
-          forceNg: true
-        };
-      }
+    // Always block further stations when part is NG/interlocked,
+    // unless part is explicitly in rework flow.
+    const normalizedPartStatus = String(part.status || "").trim().toUpperCase();
+    const interlockReason = String(part.interlock_reason || "").trim().toUpperCase();
+    const isNgTerminalState = ["NG", "ENDED_NG", "FAILED", "COMPLETED_NG"].includes(normalizedPartStatus);
+    const isNgReason =
+      ["SCAN_RESULT_NG", "PLC_END_NG", "MANUAL_REJECT", "REJECTION_BIN_CONFIRMED"].includes(interlockReason) ||
+      interlockReason.startsWith("NG_") ||
+      interlockReason.includes("NG");
+    if (!part.is_rework && (isNgTerminalState || isNgReason)) {
+      return {
+        decision: "BLOCK",
+        reason: "PART_INTERLOCKED",
+        qrStatus: "FAILED",
+        operationStatus: "BLOCKED",
+        message: "Part is marked as NG (Rejected). Further operations are not allowed. Please move to rejection bin.",
+        currentStatus: part.status,
+        forceNg: true
+      };
     }
 
     if (normalizedResult === "NG") {
@@ -694,9 +862,9 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
       return {
         decision: "BLOCK",
         reason: forcedNgReason,
-        qrStatus: "PASSED",
+        qrStatus: "FAILED",
         operationStatus: "FAILED",
-        message: "FAILED\nScan Result NG\n\nOperation rejected.",
+        message: "Scan result NG. Operation rejected.",
         expectedStation,
         currentStatus: part.status,
         operationLogId: ngLog.id

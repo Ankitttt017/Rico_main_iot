@@ -1,11 +1,31 @@
-import { useState } from "react";
-import { Outlet } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Outlet, useLocation } from "react-router-dom";
 import Sidebar from "../components/Sidebar";
 import Header from "../components/Header";
 import Footer from "../components/Footer";
 
 const MainLayout = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const location = useLocation();
+
+  useEffect(() => {
+    setSidebarOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const media = window.matchMedia("(min-width: 1024px)");
+    const closeDrawerOnDesktop = (event) => {
+      if (event.matches) setSidebarOpen(false);
+    };
+    if (media.matches) setSidebarOpen(false);
+    if (typeof media.addEventListener === "function") {
+      media.addEventListener("change", closeDrawerOnDesktop);
+      return () => media.removeEventListener("change", closeDrawerOnDesktop);
+    }
+    media.addListener(closeDrawerOnDesktop);
+    return () => media.removeListener(closeDrawerOnDesktop);
+  }, []);
 
   return (
     <div className="flex h-screen bg-bg-base text-text-main overflow-hidden">
@@ -20,7 +40,7 @@ const MainLayout = () => {
 
       {/* Sidebar - hidden on mobile, slides in when sidebarOpen */}
       <div
-        className={`fixed inset-y-0 left-0 z-40 lg:static lg:z-auto transition-transform duration-300
+        className={`fixed inset-y-0 left-0 z-40 w-[240px] max-w-[88vw] lg:static lg:z-auto lg:w-auto transition-transform duration-300
           ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0`}
       >
         <Sidebar onClose={() => setSidebarOpen(false)} />

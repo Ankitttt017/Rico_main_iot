@@ -15,7 +15,6 @@ import {
   LayoutGrid, List, Zap, Radio, Eye,
 } from "lucide-react";
 import { packingApi } from "../api/services";
-import GlobalPopup from "../components/GlobalPopup";
 
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:4000";
 
@@ -414,7 +413,6 @@ const Packing=()=>{
       animation:"pkFadeIn .3s ease",outline:scanFlash?`3px solid ${C.ok()}`:"none",
       transition:"outline .1s",borderRadius:4}}>
 
-      <GlobalPopup popup={popup} onClose={()=>setPopup(null)} simple/>
 
       {/* ── QR Scan Result Modal ─────────────────────────────────── */}
       {scanResult&&(
