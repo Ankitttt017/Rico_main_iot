@@ -504,6 +504,61 @@ async function resolveScannerFromRequest({ machine, body, req }) {
   return null;
 }
 
+async function enforceScannerProtocolBinding({ machine, body, req, scanner }) {
+  if (!machine) return { ok: false, status: 404, error: "Machine not found" };
+  const requestSourceIp = normalizeIp(
+    body?.scannerIp || body?.systemIp || body?.sourceIp || req?.ip || req?.socket?.remoteAddress || req?.connection?.remoteAddress || ""
+  );
+  if (!requestSourceIp) return { ok: false, status: 400, error: "Source IP not detected" };
+
+  const isLoopbackSource = ["::1", "127.0.0.1", "localhost"].includes(String(requestSourceIp || "").toLowerCase());
+  let resolvedScanner = scanner || await resolveScannerFromRequest({ machine, body, req });
+  if (!resolvedScanner && isLoopbackSource) {
+    resolvedScanner = await Scanner.findOne({
+      where: { mapped_machine_id: machine.id, is_active: true },
+      order: [["updatedAt", "DESC"]],
+    });
+  }
+  if (!resolvedScanner) {
+    return { ok: false, status: 403, error: `No active scanner mapped for source IP ${requestSourceIp}` };
+  }
+
+  const scannerMode = String(resolvedScanner.scanner_mode || "TCP_CLIENT").trim().toUpperCase();
+  const scannerIp = normalizeIp(resolvedScanner.scanner_ip);
+
+  if (!isLoopbackSource && !sameIp(scannerIp, requestSourceIp)) {
+    return {
+      ok: false,
+      status: 403,
+      error: `Scanner source IP mismatch. Expected ${scannerIp}, got ${requestSourceIp}`,
+    };
+  }
+
+  if (Number(resolvedScanner.mapped_machine_id) !== Number(machine.id)) {
+    return {
+      ok: false,
+      status: 403,
+      error: `Scanner-machine mismatch. Scanner mapped to machine ${resolvedScanner.mapped_machine_id}, request machine ${machine.id}`,
+    };
+  }
+
+  // Mode-specific hard guard: USB scans must come from mapped tablet/scanner IP only.
+  if (scannerMode === "USB_SERIAL" && !isLoopbackSource && !sameIp(scannerIp, requestSourceIp)) {
+    return {
+      ok: false,
+      status: 403,
+      error: `USB source mismatch. Expected tablet/scanner IP ${scannerIp}, got ${requestSourceIp}`,
+    };
+  }
+
+  return {
+    ok: true,
+    scanner: resolvedScanner,
+    scannerMode,
+    sourceIp: requestSourceIp,
+  };
+}
+
 async function getActiveStationSequence() {
   const machines = await Machine.findAll({
     where: { is_active: true },
@@ -2607,9 +2662,14 @@ exports.processScan = async (req, res) => {
       return res.status(404).json({ error: "Machine not found for scanner/IP mapping" });
     }
 
+    const bound = await enforceScannerProtocolBinding({ machine, body: req.body, req });
+    if (!bound.ok) {
+      return res.status(bound.status).json({ error: bound.error });
+    }
+
     let scannerRead = null;
     if (!normalizedPartId) {
-      const scanner = await resolveScannerFromRequest({ machine, body: req.body, req });
+      const scanner = bound.scanner;
       const mode = String(scanner?.scanner_mode || "").trim().toUpperCase();
       if (scanner && mode === "PLC_REGISTER") {
         try {
@@ -2735,7 +2795,7 @@ exports.processScan = async (req, res) => {
       skipShotValidation: !validateShotNumber || skipAllBypassValidations,
       skipCustomerCodeValidation: !qrValidationEnabled || !validateCustomerCode || skipAllBypassValidations,
       skipInterlockValidation: skipAllBypassValidations,
-      skipDuplicateValidation: !qrValidationEnabled || !validateDuplicateBarcode || skipAllBypassValidations,
+      skipDuplicateValidation: false,
       skipSequenceValidation: !validatePreviousStation || skipAllBypassValidations,
     });
     if (response?.decision === "ALLOW" && response?.operationLogId) {
@@ -2857,6 +2917,10 @@ exports.verifyScanForOperator = async (req, res) => {
     if (!machine) {
       return res.status(404).json({ error: "Machine not found" });
     }
+    const bound = await enforceScannerProtocolBinding({ machine, body: req.body, req });
+    if (!bound.ok) {
+      return res.status(bound.status).json({ error: bound.error });
+    }
 
     const stationNo = getMachineOperationStage(machine);
     const stationFeatures = await getStationFeatureConfig(stationNo);
@@ -2939,7 +3003,7 @@ exports.verifyScanForOperator = async (req, res) => {
       skipShotValidation: !validateShotNumber || skipAllBypassValidations,
       skipCustomerCodeValidation: !qrValidationEnabled || !validateCustomerCode || skipAllBypassValidations,
       skipInterlockValidation: skipAllBypassValidations,
-      skipDuplicateValidation: !qrValidationEnabled || !validateDuplicateBarcode || skipAllBypassValidations,
+      skipDuplicateValidation: false,
       skipSequenceValidation: !validatePreviousStation || skipAllBypassValidations,
     });
     if (response?.decision === "ALLOW" && response?.operationLogId) {

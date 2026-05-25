@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 //  ProductionCharts.jsx — IndusTrace Premium v4
 //  ✓ Download bar at TOP
 //  ✓ Tabs: Overview | Hourly | Machine | Shift | Parts List
@@ -409,7 +409,7 @@ const ProductionCharts=()=>{
               <div>
                 <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
                   <h1 style={{fontSize:17,fontWeight:800,color:C.txt("pri"),letterSpacing:"-0.02em"}}>
-                    Production Report
+                    Production Analytics
                   </h1>
                   <span style={{fontSize:10,fontWeight:700,color:C.amber(),
                     background:C.amber(0.1),padding:"2px 9px",borderRadius:99,
@@ -537,7 +537,7 @@ const ProductionCharts=()=>{
             <Download size={16} color={C.navy()}/>
           </div>
           <div>
-            <p style={{fontSize:13,fontWeight:800,color:C.txt("pri")}}>Download Report</p>
+            <p style={{fontSize:13,fontWeight:800,color:C.txt("pri")}}>Export & Filters</p>
             <p style={{fontSize:10,color:C.txt("muted")}}>
               {timeLabel} · {totalUnits} units · {efficiency}% quality rate
             </p>
@@ -622,11 +622,11 @@ const ProductionCharts=()=>{
 
       {/* ══ TAB: OVERVIEW ══════════════════════════════════════════════ */}
       {activeTab==="overview"&&(
-        <div style={{display:"grid",gridTemplateColumns:"1fr 300px",gap:14,alignItems:"start",animation:"pcFadeIn .2s ease"}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(320px,1fr))",gap:14,alignItems:"start",animation:"pcFadeIn .2s ease"}}>
           {/* Quality donut + parts status */}
           <div style={{display:"flex",flexDirection:"column",gap:14}}>
             <Card title="Quality Summary" subtitle="Pass vs Fail ratio" icon={PieIcon} accent={C.amber()}>
-              <div style={{display:"flex",alignItems:"center",gap:24,padding:"8px 0"}}>
+              <div style={{display:"flex",alignItems:"center",gap:24,padding:"8px 0",flexWrap:"wrap"}}>
                 {/* Donut */}
                 <div style={{position:"relative",width:160,height:160,flexShrink:0}}>
                   <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} aspect={undefined}>
@@ -648,7 +648,7 @@ const ProductionCharts=()=>{
                   </div>
                 </div>
                 {/* Stats */}
-                <div style={{flex:1,display:"flex",flexDirection:"column",gap:10}}>
+                <div style={{flex:1,minWidth:220,display:"flex",flexDirection:"column",gap:10}}>
                   {[
                     {l:"Pass (OK)",  v:totalOk,  c:C.ok(),   bg:C.ok(0.08),  bd:C.ok(0.2)},
                     {l:"Fail (NG)",  v:totalNg,  c:C.ng(),   bg:C.ng(0.08),  bd:C.ng(0.2)},
@@ -666,7 +666,7 @@ const ProductionCharts=()=>{
 
             {/* Parts status */}
             <Card title="Parts Status" subtitle="Breakdown" icon={Settings2} accent={C.navy()}>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:8}}>
                 {[
                   {l:"Completed",  v:summary.parts?.completed||0,  c:C.ok()  },
                   {l:"In Progress",v:summary.parts?.inProgress||0, c:C.steel()},

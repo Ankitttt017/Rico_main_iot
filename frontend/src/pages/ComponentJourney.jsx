@@ -159,7 +159,7 @@ function getStationMeta(status) {
   if (["PASSED","ENDED_OK","COMPLETED","COMPLETED_OK"].includes(s))    return {variant:"ok",  label:"Pass",       icon:CheckCircle2};
   if (["FAILED","INTERLOCKED","ENDED_NG","NG","COMPLETED_NG"].includes(s)) return {variant:"ng",  label:"Fail",       icon:XCircle};
   if (["COMM_ERROR","PLC_COMM_ERROR","PLC_TIMEOUT","TIMEOUT","PLC_ERROR","ACK_TIMEOUT","RUNNING_TIMEOUT","END_TIMEOUT","RESET_TIMEOUT"].includes(s)) return {variant:"ng", label:"Error", icon:AlertTriangle};
-  if (["RUNNING","IN_PROGRESS","STARTED","REWORK","WAITING_RUNNING","WAITING_END","START_SENT","VALIDATED","SCANNED","WAITING_ACK","ACK_RECEIVED"].includes(s)) return {variant:"wip",label:"In Progress",icon:Clock3};
+  if (["RUNNING","IN_PROGRESS","STARTED","REWORK"].includes(s)) return {variant:"wip",label:"In Progress",icon:Clock3};
   return {variant:"idle",label:"Waiting",icon:Clock3};
 }
 function getPartMeta(status) {
@@ -553,9 +553,11 @@ const ComponentJourney = () => {
   const patchPartFromRealtime = useCallback((payload={})=>{
     const rPartId=normalizePartId(payload.partId||payload.part_id);
     if (!rPartId) return;
-    const rStatus=String(payload.currentStatus||payload.partStatus||payload.status||"").trim().toUpperCase();
+    const opStatus=String(payload.operationStatus||payload.plcStatus||"").trim().toUpperCase();
+    const rStatus=String(payload.currentStatus||payload.partStatus||opStatus||payload.status||"").trim().toUpperCase();
     const resolved=["COMPLETED","IN_PROGRESS","NG","INTERLOCKED","REWORK"].includes(rStatus)?rStatus
       :rStatus==="ENDED_OK" || rStatus==="COMPLETED_OK"?"COMPLETED"
+      :rStatus==="PASSED" || rStatus==="PASS" || rStatus==="OK"?"COMPLETED"
       :rStatus==="STARTED" || rStatus==="RUNNING" || rStatus.startsWith("WAITING") || rStatus === "ACK_RECEIVED" || rStatus === "START_SENT"?"IN_PROGRESS"
       :rStatus==="PENDING"?"PENDING"
       :rStatus==="ENDED_NG" || rStatus==="COMPLETED_NG"?"NG":"";
@@ -1308,10 +1310,22 @@ const ComponentJourney = () => {
 
               {/* Station cards */}
               {stationTimeline.map((station,idx)=>{
-                const meta     = getStationMeta(station.stageState);
-                const sColor   = STATUS[meta.variant]||STATUS.idle;
                 const settings = getStationFeatures(station.stationNo,stationSettings);
                 const qrMeta   = qrByStation[station.stationNo];
+                const qrState = String(station.qrVerification || "").trim().toUpperCase();
+                const liveQrLabel = String(qrMeta?.label || "").trim().toUpperCase();
+                const hasPassQrSignal = qrState === "PASS" || liveQrLabel.includes("QR PASS");
+                const opState = String(station.operation || "").trim().toUpperCase();
+                const opFailLike = ["FAIL", "FAILED", "NG", "COMM", "COMM_ERROR", "PLC_COMM_ERROR", "TIMEOUT", "PLC_TIMEOUT"].includes(opState);
+                const qrFailLike = ["FAIL", "FAILED", "NG", "BLOCK", "REJECT", "INVALID"].includes(qrState);
+                const forcePassForAutoStations =
+                  settings.manualResult !== true &&
+                  hasPassQrSignal &&
+                  !opFailLike &&
+                  !qrFailLike;
+                const effectiveStageState = forcePassForAutoStations ? "COMPLETED" : station.stageState;
+                const meta     = getStationMeta(effectiveStageState);
+                const sColor   = STATUS[meta.variant]||STATUS.idle;
                 const isReset  = resettingStation===station.stationNo;
                 const modules  = [
                   settings.qr          ?"QR Scan"  :null,

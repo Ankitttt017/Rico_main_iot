@@ -22,6 +22,7 @@ export const ENDPOINTS = {
   scanners: "/scanners",
   scannerConnections: "/scanners/connections",
   scannerTestRead: "/scanners/test-read",
+  scannerUsbActivity: "/scanners/usb-activity",
   scannerTestConnection: (id) => `/scanners/${encodeURIComponent(id)}/test-connection`,
   users: "/users",
   shifts: "/shifts",

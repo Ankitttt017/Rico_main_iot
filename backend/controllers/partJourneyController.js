@@ -150,7 +150,7 @@ async function getPartJourney(req, res) {
         stationStatus = "COMPLETED";
       } else if (
         hasActivity &&
-        (operation === "RUN" || qrVerification === "RUN" || (qrVerification === "PASS" && operation === "WAIT"))
+        (operation === "RUN" || qrVerification === "RUN")
       ) {
         stationStatus = "IN_PROGRESS";
       } else if (hasActivity) {

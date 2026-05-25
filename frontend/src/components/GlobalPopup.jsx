@@ -542,7 +542,7 @@ const GlobalPopup = ({
         return;
       }
 
-      setValidationInfo(normalized.message || `QR validated successfully for ${String(normalized.stationNo || stationNo || "").trim().toUpperCase() || "current station"}.`);
+      setValidationInfo(normalized.message || `QR accepted for ${String(normalized.stationNo || stationNo || "").trim().toUpperCase() || "current station"}.`);
       setLocalScanDecision("PASS");
       localValidatedPartIdRef.current = scannedCode;
       setLocalQrValidated(true);
@@ -700,7 +700,7 @@ const GlobalPopup = ({
         status: manualSelection === "OK" ? "OK" : "NG",
         reason: manualSelection === "NG" ? normalizedReason : undefined,
       });
-      setManualSuccessMsg(res?.message || `Part ${manualSelection === "OK" ? "PASSED ✓" : "REJECTED ✗"} — Ready for next scan.`);
+      setManualSuccessMsg(res?.message || `Part ${manualSelection === "OK" ? "accepted" : "rejected"} - ready for next scan.`);
       setTimeout(() => {
         // return popup to initial state after successful submit
         setLocalQrValidated(false);
@@ -759,6 +759,7 @@ const GlobalPopup = ({
     const popupQrState = resolveQrState(popup);
     const popupOpState = resolveOperationState(popup);
     const closeContextKey = [
+      String(popup?._shownAtMs || popup?.createdAt || ""),
       String(socketPartId || localValidatedPartIdRef.current || "").trim().toUpperCase(),
       String(targetStationNo || "").trim().toUpperCase(),
       popupType,
@@ -769,25 +770,35 @@ const GlobalPopup = ({
 
     let duration = 0;
 
-    // Auto-close / Auto-reset for ONLY QR Check enabled stations (15 seconds)
+    // Faster auto-close / auto-reset for QR-focused industrial flow
     if (isOnlyQrCheck) {
       const qrState = popupQrState;
       if (qrState === "PASS" || qrState === "DUPLICATE") {
         duration = 7000;
       } else if (popup?.type === "ERROR" || qrState === "FAIL" || qrState === "BLOCKED") {
-        duration = Math.max(criticalAutoCloseMs || 0, 9000);
+        duration = Math.max(criticalAutoCloseMs || 0, 8000);
       } else {
-        setAutoCloseTimeLeft(null);
-        setAutoCloseDuration(0);
-        return undefined; // stay open so operator can see format / sequence error
+        // Even when upstream state is partial/WAIT, close quickly to be ready for next industrial scan.
+        duration = 7000;
       }
     } else if (isManual) {
-      if (validationError) {
-        duration = 8000; // Auto-close on error for manual stations
+      // Manual-result station behavior:
+      // Keep popup open until operator submits final OK/NG action.
+      if (submittingManual) {
+        setAutoCloseTimeLeft(null);
+        setAutoCloseDuration(0);
+        return undefined;
+      }
+      const hasManualDecisionPending = Boolean(manualSelection);
+      if ((validationError || popupType === "ERROR") && !hasManualDecisionPending) {
+        duration = 7000; // auto-close plain validation errors so next scan can start
+      } else
+      if (manualSuccessMsg) {
+        duration = 2200; // close quickly after final manual submit success
       } else {
         setAutoCloseTimeLeft(null);
         setAutoCloseDuration(0);
-        return undefined; // manual stations stay open for OK input
+        return undefined;
       }
     } else {
       if (autoCloseMs > 0) {
@@ -795,24 +806,24 @@ const GlobalPopup = ({
         const operationState = resolveOperationState(popup);
 
         if (operationState === "PASS") {
-          duration = 5000; // Auto-close for PASS
+          duration = 7000; // Auto-close for PASS
         } else if (["FAIL", "COMM", "TIMEOUT"].includes(operationState) || popupType === "ERROR" || qrState === "FAIL") {
-          duration = Math.max(criticalAutoCloseMs || 0, 9000); // shorter for errors
+          duration = Math.max(criticalAutoCloseMs || 0, 8000); // shorter for errors
         } else {
           const isCritical = popupType === "ERROR" || qrState === "FAIL";
           const hasStateDetails = Boolean(partId || stationNo || qrState !== "WAIT" || operationState !== "IDLE");
           if (!hasStateDetails) {
-            duration = 5000;
+            duration = 7000;
           } else {
-            duration = isCritical ? Math.max(criticalAutoCloseMs || 0, 9000) : Math.max(autoCloseMs || 0, 7000);
+            duration = isCritical ? Math.max(criticalAutoCloseMs || 0, 8000) : Math.max(autoCloseMs || 0, 7000);
           }
         }
       }
     }
 
-    // Increased minimum duration for better readability
-    if (duration > 0 && duration < 4000) {
-      duration = 4000;
+    // Keep a small minimum for readability while staying fast.
+    if (duration > 0 && duration < 2200) {
+      duration = 2200;
     }
 
     if (!Number.isFinite(duration) || duration <= 0) {
@@ -864,7 +875,11 @@ const GlobalPopup = ({
     stationSettings,
     validationError,
     disableAutoClose,
+    submittingManual,
+    manualSuccessMsg,
     popup?.type,
+    popup?._shownAtMs,
+    popup?.createdAt,
     popup?.qrStatus,
     popup?.qrResult,
     popup?.qrDecision,
@@ -890,7 +905,7 @@ const GlobalPopup = ({
       if (!submittingManual) {
         setManualSuccessMsg("");
       }
-    }, 5000);
+    }, 2200);
 
     return () => clearTimeout(timer);
   }, [popup, stationNo, stationSettings, validationInfo, validationError, manualSuccessMsg, submittingManual]);
@@ -1805,5 +1820,6 @@ const GlobalPopup = ({
 };
 
 export default React.memo(GlobalPopup);
+
 
 

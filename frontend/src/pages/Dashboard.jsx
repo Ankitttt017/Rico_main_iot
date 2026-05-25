@@ -7,7 +7,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { io } from "socket.io-client";
 import {
-  Download, RefreshCw, Filter, CheckCircle2, XCircle,
+  RefreshCw, Filter, CheckCircle2, XCircle,
   AlertTriangle, Cpu, Activity, History, Clock,
   BellRing, X, Shield, Zap, Target, Layers,
   TrendingUp, BarChart3, Settings2, ChevronDown,
@@ -16,9 +16,9 @@ import {
 import {
   ResponsiveContainer, PieChart, Pie, Cell, Tooltip,
   LineChart, Line, XAxis, YAxis, CartesianGrid,
-  BarChart, Bar, Legend,
+  BarChart, Bar, Legend, AreaChart, Area,
 } from "recharts";
-import { dashboardApi, machineApi, reportApi } from "../api/services";
+import { dashboardApi, machineApi } from "../api/services";
 import ChartTooltip from "../components/charts/ChartTooltip";
 import axios from "axios";
 import { CHART_COLORS, chartAxisProps, chartGridProps } from "../constants/chartTheme";
@@ -97,11 +97,13 @@ const C = {
 const SHADOW = `0 2px 12px rgba(var(--db-navy),.08),0 1px 3px rgba(var(--db-navy),.05)`;
 const SHADOW_MD = `0 4px 20px rgba(var(--db-navy),.12),0 2px 6px rgba(var(--db-navy),.06)`;
 
-function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href=url; a.download=filename; document.body.appendChild(a);
-  a.click(); a.remove(); URL.revokeObjectURL(url);
+function normalizeRejectionType(reason = "") {
+  const r = String(reason || "").trim().toUpperCase();
+  if (!r) return "MR - MR Defects";
+  if (r.includes("DUPLICATE") || r.includes("FORMAT") || r.includes("QR") || r.includes("SCAN")) return "MR - MR Defects";
+  if (r.includes("CRAM") || r.includes("CHAMFER") || r.includes("ROUGHNESS") || r.includes("PROFILE") || r.includes("POSITION")) return "CRAM - Cram Defects";
+  if (r.includes("CR") || r.includes("CAST") || r.includes("POROSITY") || r.includes("BLOW HOLE") || r.includes("LEAK")) return "CR - Casting Defects";
+  return "MR - MR Defects";
 }
 
 function localDateTimeToIso(value) {
@@ -296,16 +298,47 @@ const SectionHead = ({ title, right }) => (
   </div>
 );
 
+const ChartModeToggle = ({ mode, onChange }) => {
+  const btn = (id, Icon) => (
+    <button
+      key={id}
+      onClick={() => onChange(id)}
+      style={{
+        width: 26, height: 26, borderRadius: 7, border: `1px solid ${C.bdr()}`,
+        background: mode === id ? C.navy(0.12) : "transparent",
+        color: mode === id ? C.navy() : C.txt("muted"),
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        cursor: "pointer",
+      }}
+      title={`${id} view`}
+    >
+      <Icon size={13} />
+    </button>
+  );
+  return <div style={{ display: "inline-flex", gap: 6 }}>{btn("bar", BarChart3)}{btn("line", Activity)}{btn("area", Layers)}</div>;
+};
+
 // —— Chart tooltip theme ———————————————————————————————————————————————————————
 const TooltipStyle = {
   contentStyle:{
     background:C.bg("card"),border:`1px solid ${C.bdr()}`,
     borderRadius:10,fontSize:12,color:C.txt("pri"),
     boxShadow:SHADOW_MD,
+    maxWidth: 220,
+    whiteSpace: "normal",
+    wordBreak: "break-word",
   },
   labelStyle:{ color:C.txt("sec"), fontWeight:700 },
   itemStyle:{ color:C.txt("pri") },
+  wrapperStyle:{ zIndex: 9999, pointerEvents: "none" },
+  allowEscapeViewBox:{ x: true, y: true },
 };
+
+function piePctLabel({ percent = 0, value = 0 }) {
+  const p = Math.round((percent || 0) * 100);
+  if (!Number(value) || p < 5) return "";
+  return `${p}%`;
+}
 
 // ==============================================================================
 //  DASHBOARD
@@ -326,6 +359,9 @@ const Dashboard = () => {
     dateFrom:"", dateTo:"", machineId:"", lineName:"", partId:"", status:"", shiftCode:"",
   });
   const [dateDraft, setDateDraft] = useState({ from: "", to: "" });
+  const [chartModeHourly, setChartModeHourly] = useState("line");
+  const [chartModeShift, setChartModeShift] = useState("bar");
+  const [chartModeRejectTrend, setChartModeRejectTrend] = useState("area");
 
   const query = useMemo(()=>({
     dateFrom:   localDateTimeToIso(filters.dateFrom),
@@ -416,25 +452,68 @@ const Dashboard = () => {
   const hasFilters = Object.values(filters).some(Boolean);
   const selectedFilterCount = useMemo(() => Object.values(filters).filter(Boolean).length, [filters]);
   
-  const handleExportReport = useCallback(async () => {
-    try {
-      const rawBlob = await reportApi.exportFull(query);
-      downloadBlob(
-        rawBlob,
-        `Traceability_Report_${new Date().toISOString().slice(0, 10)}.xlsx`
-      );
-    } catch (e) {
-      console.error("Dashboard export error", e);
+  const rejectionAnalysisRows = useMemo(() => {
+    const historyRows = Array.isArray(report.interlockHistory) ? report.interlockHistory : [];
+    if (historyRows.length > 0) {
+      return historyRows.map((row) => ({
+        partId: row.partId || row.part_id || "—",
+        reason: row.reason || row.interlock_reason || row.message || "Unknown reason",
+        result: "NG",
+      }));
     }
-  }, [query]);
+    return (report.recentScans || []).filter((row) => String(row.result || "").toUpperCase() === "NG");
+  }, [report.interlockHistory, report.recentScans]);
+
+  const rejectionPieData = useMemo(() => {
+    const grouped = rejectionAnalysisRows.reduce((acc, row) => {
+      const k = normalizeRejectionType(row.reason || row.interlock_reason || "");
+      acc[k] = (acc[k] || 0) + 1;
+      return acc;
+    }, {});
+    return [
+      { name: "CR - Casting Defects", value: grouped["CR - Casting Defects"] || 0, color: C.ng() },
+      { name: "CRAM - Cram Defects", value: grouped["CRAM - Cram Defects"] || 0, color: C.amber() },
+      { name: "MR - MR Defects", value: grouped["MR - MR Defects"] || 0, color: C.steel() },
+    ];
+  }, [rejectionAnalysisRows]);
+
+  const rejectionTopReasons = useMemo(() => {
+    const grouped = rejectionAnalysisRows.reduce((acc, row) => {
+      const reason = String(row.reason || row.interlock_reason || "Unknown reason").trim() || "Unknown reason";
+      acc[reason] = (acc[reason] || 0) + 1;
+      return acc;
+    }, {});
+    return Object.entries(grouped)
+      .map(([reason, count]) => ({ reason, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 6);
+  }, [rejectionAnalysisRows]);
+
+  const rejectionTrend = useMemo(() => {
+    const rows = rejectionAnalysisRows
+      .map((row) => {
+        const ts = new Date(row.timestamp || row.createdAt || Date.now());
+        const slot = `${String(ts.getHours()).padStart(2, "0")}:00`;
+        return { slot, category: normalizeRejectionType(row.reason || row.interlock_reason || "") };
+      });
+    const bucket = rows.reduce((acc, row) => {
+      if (!acc[row.slot]) acc[row.slot] = { slot: row.slot, total: 0, cr: 0, cram: 0, mr: 0 };
+      acc[row.slot].total += 1;
+      if (row.category === "CR - Casting Defects") acc[row.slot].cr += 1;
+      else if (row.category === "CRAM - Cram Defects") acc[row.slot].cram += 1;
+      else acc[row.slot].mr += 1;
+      return acc;
+    }, {});
+    return Object.values(bucket).sort((a, b) => String(a.slot).localeCompare(String(b.slot)));
+  }, [rejectionAnalysisRows]);
 
   // —— Tabs config ——
   const TABS = [
     { id:"overview",  label:"Overview",          icon:BarChart3  },
     { id:"machines",  label:"Machine KPIs",      icon:Cpu        },
     { id:"oee",       label:"OEE Analysis",      icon:Activity   },
-    { id:"history",   label:"Production History",icon:History    },
-  ];
+    { id:"rejection", label:"Rejection Analysis",icon:AlertTriangle },
+      ];
 
   return (
     <div style={{display:"flex",flexDirection:"column",gap:20,paddingBottom:32,
@@ -516,19 +595,6 @@ const Dashboard = () => {
               {loading?"Updating…":"Refresh"}
             </button>
 
-            <button onClick={handleExportReport}
-              style={{
-                display:"inline-flex",alignItems:"center",gap:7,
-                height:38,padding:"0 16px",borderRadius:9,
-                fontSize:12,fontWeight:800,cursor:"pointer",
-                background:C.amber(),border:"none",
-                color:C.navy(),boxShadow:`0 3px 12px ${C.amber(0.3)}`,
-                transition:"filter 0.15s",
-              }}
-              onMouseEnter={e=>e.currentTarget.style.filter="brightness(1.06)"}
-              onMouseLeave={e=>e.currentTarget.style.filter="none"}>
-              <Download size={14}/> Export Report
-            </button>
           </div>
         </div>
 
@@ -812,7 +878,8 @@ const Dashboard = () => {
                     <PieChart>
                       <Pie data={pieData} cx="50%" cy="50%"
                         innerRadius={50} outerRadius={75}
-                        paddingAngle={3} dataKey="value" strokeWidth={0}>
+                        paddingAngle={3} dataKey="value" strokeWidth={0}
+                        labelLine={false}>
                         <Cell fill={C.ok()} />
                         <Cell fill={C.ng()} />
                         <Cell fill={C.amber()} />
@@ -850,7 +917,8 @@ const Dashboard = () => {
               borderRadius:14,padding:20,boxShadow:SHADOW}}>
               <SectionHead title="Hourly Production"
                 right={
-                  <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <ChartModeToggle mode={chartModeHourly} onChange={setChartModeHourly} />
                     <div style={{width:6,height:6,borderRadius:"50%",background:C.ok(),
                       animation:"dbPing 1.6s ease-out infinite",opacity:0.7}}/>
                     <span style={{fontSize:11,color:C.ok(),fontWeight:700}}>Live</span>
@@ -859,24 +927,38 @@ const Dashboard = () => {
               />
               <div style={{height:220,width:"100%",minWidth:1,minHeight:1,position:"relative"}}>
                 <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
-                  <LineChart data={report.hourlyProduction}
-                    margin={{top:4,right:8,bottom:0,left:-10}}>
-                    <CartesianGrid stroke={C.bdr(0.12)} strokeDasharray="3 4" vertical={false}/>
-                    <XAxis dataKey="hour"
-                      tickFormatter={h=>`${String(h).padStart(2,"0")}:00`}
-                      tick={{fontSize:11,fill:C.txt("muted"),fontFamily:"'DM Mono',monospace"}}
-                      axisLine={false} tickLine={false}/>
-                    <YAxis tick={{fontSize:11,fill:C.txt("muted")}}
-                      axisLine={false} tickLine={false}/>
-                    <Tooltip {...TooltipStyle}
-                      labelFormatter={h=>`${String(h).padStart(2,"0")}:00`}/>
-                    <Line type="monotone" dataKey="ok"    stroke={C.ok()}    strokeWidth={2.5}
-                      dot={false} activeDot={{r:4,fill:C.ok()}}/>
-                    <Line type="monotone" dataKey="ng"    stroke={C.ng()}    strokeWidth={2}
-                      dot={false} strokeDasharray="4 3" activeDot={{r:4,fill:C.ng()}}/>
-                    <Line type="monotone" dataKey="total" stroke={C.steel()}  strokeWidth={1.5}
-                      dot={false} strokeDasharray="2 4"  activeDot={{r:4,fill:C.steel()}}/>
-                  </LineChart>
+                  {chartModeHourly === "line" && (
+                    <LineChart data={report.hourlyProduction} margin={{top:4,right:8,bottom:0,left:-10}}>
+                      <CartesianGrid stroke={C.bdr(0.12)} strokeDasharray="3 4" vertical={false}/>
+                      <XAxis dataKey="hour" tickFormatter={h=>`${String(h).padStart(2,"0")}:00`} tick={{fontSize:11,fill:C.txt("sec"),fontFamily:"'DM Mono',monospace"}} axisLine={false} tickLine={false}/>
+                      <YAxis tick={{fontSize:11,fill:C.txt("sec")}} axisLine={false} tickLine={false}/>
+                      <Tooltip {...TooltipStyle} labelFormatter={h=>`${String(h).padStart(2,"0")}:00`}/>
+                      <Line type="monotone" dataKey="ok" stroke={C.ok()} strokeWidth={2.5} dot={false} activeDot={{r:4,fill:C.ok()}}/>
+                      <Line type="monotone" dataKey="ng" stroke={C.ng()} strokeWidth={2} dot={false} strokeDasharray="4 3" activeDot={{r:4,fill:C.ng()}}/>
+                      <Line type="monotone" dataKey="total" stroke={C.steel()} strokeWidth={1.5} dot={false} strokeDasharray="2 4" activeDot={{r:4,fill:C.steel()}}/>
+                    </LineChart>
+                  )}
+                  {chartModeHourly === "bar" && (
+                    <BarChart data={report.hourlyProduction} margin={{top:4,right:8,bottom:0,left:-10}}>
+                      <CartesianGrid stroke={C.bdr(0.12)} strokeDasharray="3 4" vertical={false}/>
+                      <XAxis dataKey="hour" tickFormatter={h=>`${String(h).padStart(2,"0")}:00`} tick={{fontSize:11,fill:C.txt("sec"),fontFamily:"'DM Mono',monospace"}} axisLine={false} tickLine={false}/>
+                      <YAxis tick={{fontSize:11,fill:C.txt("sec")}} axisLine={false} tickLine={false}/>
+                      <Tooltip {...TooltipStyle} labelFormatter={h=>`${String(h).padStart(2,"0")}:00`}/>
+                      <Bar dataKey="ok" fill={C.ok()} radius={[4,4,0,0]} />
+                      <Bar dataKey="ng" fill={C.ng()} radius={[4,4,0,0]} />
+                      <Bar dataKey="total" fill={C.steel(0.6)} radius={[4,4,0,0]} />
+                    </BarChart>
+                  )}
+                  {chartModeHourly === "area" && (
+                    <AreaChart data={report.hourlyProduction} margin={{top:4,right:8,bottom:0,left:-10}}>
+                      <CartesianGrid stroke={C.bdr(0.12)} strokeDasharray="3 4" vertical={false}/>
+                      <XAxis dataKey="hour" tickFormatter={h=>`${String(h).padStart(2,"0")}:00`} tick={{fontSize:11,fill:C.txt("sec"),fontFamily:"'DM Mono',monospace"}} axisLine={false} tickLine={false}/>
+                      <YAxis tick={{fontSize:11,fill:C.txt("sec")}} axisLine={false} tickLine={false}/>
+                      <Tooltip {...TooltipStyle} labelFormatter={h=>`${String(h).padStart(2,"0")}:00`}/>
+                      <Area type="monotone" dataKey="ok" stroke={C.ok()} fill={C.ok(0.25)} />
+                      <Area type="monotone" dataKey="ng" stroke={C.ng()} fill={C.ng(0.2)} />
+                    </AreaChart>
+                  )}
                 </ResponsiveContainer>
               </div>
               <div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>
@@ -900,19 +982,39 @@ const Dashboard = () => {
 
             <div style={{background:C.bg("card"),border:`1px solid ${C.bdr()}`,
               borderRadius:14,padding:20,boxShadow:SHADOW}}>
-              <SectionHead title="Production by Shift"/>
+              <SectionHead title="Production by Shift" right={<ChartModeToggle mode={chartModeShift} onChange={setChartModeShift} />} />
               <div style={{height:200,width:"100%",minWidth:1,minHeight:1,position:"relative"}}>
                 <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
-                  <BarChart data={shiftData} margin={{top:4,right:8,bottom:0,left:-10}}>
-                    <CartesianGrid stroke={C.bdr(0.12)} strokeDasharray="3 4" vertical={false}/>
-                    <XAxis dataKey="name" tick={{fontSize:11,fill:C.txt("muted")}}
-                      axisLine={false} tickLine={false}/>
-                    <YAxis tick={{fontSize:11,fill:C.txt("muted")}}
-                      axisLine={false} tickLine={false}/>
-                    <Tooltip {...TooltipStyle}/>
-                    <Bar dataKey="OK" fill={C.ok()} radius={[4,4,0,0]} barSize={24}/>
-                    <Bar dataKey="NG" fill={C.ng()} radius={[4,4,0,0]} barSize={24}/>
-                  </BarChart>
+                  {chartModeShift === "bar" && (
+                    <BarChart data={shiftData} margin={{top:4,right:8,bottom:0,left:-10}}>
+                      <CartesianGrid stroke={C.bdr(0.12)} strokeDasharray="3 4" vertical={false}/>
+                      <XAxis dataKey="name" tick={{fontSize:11,fill:C.txt("sec")}} axisLine={false} tickLine={false}/>
+                      <YAxis tick={{fontSize:11,fill:C.txt("sec")}} axisLine={false} tickLine={false}/>
+                      <Tooltip {...TooltipStyle}/>
+                      <Bar dataKey="OK" fill={C.ok()} radius={[4,4,0,0]} barSize={24}/>
+                      <Bar dataKey="NG" fill={C.ng()} radius={[4,4,0,0]} barSize={24}/>
+                    </BarChart>
+                  )}
+                  {chartModeShift === "line" && (
+                    <LineChart data={shiftData} margin={{top:4,right:8,bottom:0,left:-10}}>
+                      <CartesianGrid stroke={C.bdr(0.12)} strokeDasharray="3 4" vertical={false}/>
+                      <XAxis dataKey="name" tick={{fontSize:11,fill:C.txt("sec")}} axisLine={false} tickLine={false}/>
+                      <YAxis tick={{fontSize:11,fill:C.txt("sec")}} axisLine={false} tickLine={false}/>
+                      <Tooltip {...TooltipStyle}/>
+                      <Line type="monotone" dataKey="OK" stroke={C.ok()} strokeWidth={2.4} />
+                      <Line type="monotone" dataKey="NG" stroke={C.ng()} strokeWidth={2.2} />
+                    </LineChart>
+                  )}
+                  {chartModeShift === "area" && (
+                    <AreaChart data={shiftData} margin={{top:4,right:8,bottom:0,left:-10}}>
+                      <CartesianGrid stroke={C.bdr(0.12)} strokeDasharray="3 4" vertical={false}/>
+                      <XAxis dataKey="name" tick={{fontSize:11,fill:C.txt("sec")}} axisLine={false} tickLine={false}/>
+                      <YAxis tick={{fontSize:11,fill:C.txt("sec")}} axisLine={false} tickLine={false}/>
+                      <Tooltip {...TooltipStyle}/>
+                      <Area type="monotone" dataKey="OK" stroke={C.ok()} fill={C.ok(0.25)} />
+                      <Area type="monotone" dataKey="NG" stroke={C.ng()} fill={C.ng(0.2)} />
+                    </AreaChart>
+                  )}
                 </ResponsiveContainer>
               </div>
             </div>
@@ -952,13 +1054,18 @@ const Dashboard = () => {
       )}
 
       {activeTab==="oee" && (
-        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:16}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:16}}>
           {(oeeData.length ? oeeData : [{stationNo:"OP100"},{stationNo:"OP110"},{stationNo:"OP120"}]).map((row, idx)=>{
             const oee = Number(row?.oee ?? row?.OEE ?? 0);
             const availability = Number(row?.availability ?? row?.Availability ?? 0);
             const performance = Number(row?.performance ?? row?.Performance ?? 0);
             const quality = Number(row?.quality ?? row?.Quality ?? 0);
             const stationName = row?.stationNo || row?.station || row?.machineName || `Station ${idx + 1}`;
+            const oeeClamped = Math.max(0, Math.min(100, oee));
+            const makePie = (value) => {
+              const v = Math.max(0, Math.min(100, Number(value || 0)));
+              return [{ name: "Value", value: v }, { name: "Gap", value: 100 - v }];
+            };
             return (
               <div key={`${stationName}-${idx}`} style={{background:C.bg("card"),border:`1px solid ${C.bdr()}`,borderRadius:14,padding:16,boxShadow:SHADOW}}>
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
@@ -966,11 +1073,36 @@ const Dashboard = () => {
                   <Badge variant={oee>=85 ? "ok" : oee>=60 ? "wip" : "ng"} label={`OEE ${Math.round(oee)}%`} />
                 </div>
                 <div style={{display:"flex",justifyContent:"center",marginBottom:12}}>
-                  <OeeGauge value={oee} size={88} stroke={8}/>
+                  <div style={{width:150,height:150,position:"relative"}}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie data={makePie(oeeClamped)} dataKey="value" innerRadius={46} outerRadius={66} startAngle={90} endAngle={-270} strokeWidth={0}>
+                          <Cell fill={oeeClamped>=85 ? C.ok() : oeeClamped>=60 ? C.amber() : C.ng()} />
+                          <Cell fill={C.bdr(0.18)} />
+                        </Pie>
+                        <Tooltip {...TooltipStyle} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                    <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
+                      <span style={{fontSize:22,fontWeight:800,color:C.txt("pri"),fontFamily:"'DM Mono',monospace"}}>{Math.round(oeeClamped)}%</span>
+                      <span style={{fontSize:10,color:C.txt("muted"),textTransform:"uppercase",letterSpacing:"0.06em"}}>Overall OEE</span>
+                    </div>
+                  </div>
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
-                  {[{label:"Availability",value:availability},{label:"Performance",value:performance},{label:"Quality",value:quality}].map((m)=>(
+                  {[{label:"Availability",value:availability,color:C.steel()},{label:"Performance",value:performance,color:C.amber()},{label:"Quality",value:quality,color:C.ok()}].map((m)=>(
                     <div key={m.label} style={{background:C.bg("surf"),border:`1px solid ${C.bdr()}`,borderRadius:9,padding:"8px 6px",textAlign:"center"}}>
+                      <div style={{width:66,height:66,margin:"0 auto 6px"}}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie data={makePie(m.value)} dataKey="value" innerRadius={18} outerRadius={30} startAngle={90} endAngle={-270} strokeWidth={0}>
+                              <Cell fill={m.color} />
+                              <Cell fill={C.bdr(0.16)} />
+                            </Pie>
+                            <Tooltip {...TooltipStyle} />
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </div>
                       <p style={{fontSize:14,fontWeight:800,color:C.txt("pri"),margin:0,fontFamily:"'DM Mono',monospace"}}>{Math.round(m.value)}%</p>
                       <p style={{fontSize:9,fontWeight:700,color:C.txt("muted"),marginTop:4,textTransform:"uppercase",letterSpacing:"0.05em"}}>{m.label}</p>
                     </div>
@@ -982,46 +1114,98 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* —— TAB: History ————————————————————————————————————————————————————————————— */}
-      {activeTab==="history" && (
-        <div style={{background:C.bg("card"),border:`1px solid ${C.bdr()}`,
-          borderRadius:14,boxShadow:SHADOW,overflow:"hidden"}}>
-          <div style={{padding:"16px 18px",borderBottom:`1px solid ${C.bdr(0.4)}`,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-            <SectionHead title="Production History" />
-            
+      {activeTab==="rejection" && (
+        <div style={{display:"grid",gridTemplateColumns:"320px 1fr",gap:16}} className="db-grid-responsive">
+          <style>{`@media(max-width:900px){.db-grid-responsive{grid-template-columns:1fr!important}}`}</style>
+          <div style={{background:C.bg("card"),border:`1px solid ${C.bdr()}`,borderRadius:14,padding:20,boxShadow:SHADOW}}>
+            <SectionHead title="Rejection Type Split"/>
+            <div style={{display:"flex",justifyContent:"center",marginBottom:16}}>
+              <div style={{width:200,height:200,minWidth:1,minHeight:1}}>
+                <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+                  <PieChart>
+                    <Pie data={rejectionPieData} dataKey="value" cx="50%" cy="50%" innerRadius={55} outerRadius={85} paddingAngle={3}
+                      labelLine={false}>
+                      {rejectionPieData.map((entry) => (<Cell key={entry.name} fill={entry.color} />))}
+                    </Pie>
+                    <Tooltip {...TooltipStyle} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {rejectionPieData.map((row) => {
+                const total = rejectionPieData.reduce((s, e) => s + Number(e.value || 0), 0);
+                const pct = total > 0 ? Math.round((Number(row.value || 0) / total) * 100) : 0;
+                return (
+                <div key={row.name} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 10px",borderRadius:9,background:C.bg("surf"),border:`1px solid ${C.bdr()}`}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <span style={{width:8,height:8,borderRadius:"50%",background:row.color}} />
+                    <span style={{fontSize:12,fontWeight:700,color:C.txt("pri")}}>{row.name}</span>
+                  </div>
+                  <span style={{fontSize:12,fontWeight:800,color:C.txt("sec"),fontFamily:"'DM Mono',monospace"}}>{row.value} ({pct}%)</span>
+                </div>
+              )})}
+            </div>
           </div>
-          <div style={{padding:"14px 16px 18px"}}>
-          <div style={{overflowX:"auto",border:`1px solid ${C.bdr(0.5)}`,borderRadius:10}}>
-            <table style={{width:"100%",borderCollapse:"collapse"}}>
-              <thead>
-                <tr style={{background:C.bg("surf"),textAlign:"left"}}>
-                  {["Part Serial","Machine","Result","Reason","Cycle Time","Timestamp"].map(h=>(
-                    <th key={h} style={{padding:"12px 20px",fontSize:10,fontWeight:800,color:C.txt("muted"),
-                      textTransform:"uppercase",letterSpacing:"0.05em",borderBottom:`1px solid ${C.bdr()}`}}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {(report.recentScans||[]).map((row,i)=>(
-                  <tr key={i} style={{borderBottom:`1px solid ${C.bdr(0.5)}`}}>
-                    <td style={{padding:"12px 20px",fontSize:12,fontWeight:700,color:C.txt("pri")}}>{row.partId}</td>
-                    <td style={{padding:"12px 20px",fontSize:12,color:C.txt("sec")}}>{row.machine}</td>
-                    <td style={{padding:"12px 20px"}}>
-                      <Badge variant={row.result==="OK"?"ok":row.result==="NG"?"ng":"wip"} label={row.result}/>
-                    </td>
-                    <td style={{padding:"12px 20px",fontSize:12,color:C.ng()}}>{row.reason||"—"}</td>
-                    <td style={{padding:"12px 20px",fontSize:11,fontFamily:"'DM Mono',monospace"}}>{row.cycleTime?`${row.cycleTime}s`:"—"}</td>
-                    <td style={{padding:"12px 20px",fontSize:11,color:C.txt("muted")}}>{new Date(row.timestamp).toLocaleString()}</td>
-                  </tr>
+
+          <div style={{display:"grid",gridTemplateRows:"220px auto",gap:16}}>
+            <div style={{background:C.bg("card"),border:`1px solid ${C.bdr()}`,borderRadius:14,padding:20,boxShadow:SHADOW}}>
+              <SectionHead title="Rejection Trend (Hourly)" right={<ChartModeToggle mode={chartModeRejectTrend} onChange={setChartModeRejectTrend} />} />
+              <ResponsiveContainer width="100%" height="100%">
+                {chartModeRejectTrend === "area" && (
+                  <AreaChart data={rejectionTrend} margin={{ top: 6, right: 8, left: -12, bottom: 0 }}>
+                    <CartesianGrid stroke={C.bdr(0.12)} strokeDasharray="3 4" vertical={false}/>
+                    <XAxis dataKey="slot" tick={{fontSize:10,fill:C.txt("sec"),fontFamily:"'DM Mono',monospace"}} axisLine={false} tickLine={false}/>
+                    <YAxis tick={{fontSize:10,fill:C.txt("sec")}} axisLine={false} tickLine={false}/>
+                    <Tooltip {...TooltipStyle}/>
+                    <Area type="monotone" dataKey="cr" stackId="1" stroke={C.ng()} fill={C.ng(0.35)} />
+                    <Area type="monotone" dataKey="cram" stackId="1" stroke={C.amber()} fill={C.amber(0.35)} />
+                    <Area type="monotone" dataKey="mr" stackId="1" stroke={C.steel()} fill={C.steel(0.35)} />
+                  </AreaChart>
+                )}
+                {chartModeRejectTrend === "line" && (
+                  <LineChart data={rejectionTrend} margin={{ top: 6, right: 8, left: -12, bottom: 0 }}>
+                    <CartesianGrid stroke={C.bdr(0.12)} strokeDasharray="3 4" vertical={false}/>
+                    <XAxis dataKey="slot" tick={{fontSize:10,fill:C.txt("sec"),fontFamily:"'DM Mono',monospace"}} axisLine={false} tickLine={false}/>
+                    <YAxis tick={{fontSize:10,fill:C.txt("sec")}} axisLine={false} tickLine={false}/>
+                    <Tooltip {...TooltipStyle}/>
+                    <Line type="monotone" dataKey="cr" stroke={C.ng()} strokeWidth={2.2} />
+                    <Line type="monotone" dataKey="cram" stroke={C.amber()} strokeWidth={2.2} />
+                    <Line type="monotone" dataKey="mr" stroke={C.steel()} strokeWidth={2.2} />
+                  </LineChart>
+                )}
+                {chartModeRejectTrend === "bar" && (
+                  <BarChart data={rejectionTrend} margin={{ top: 6, right: 8, left: -12, bottom: 0 }}>
+                    <CartesianGrid stroke={C.bdr(0.12)} strokeDasharray="3 4" vertical={false}/>
+                    <XAxis dataKey="slot" tick={{fontSize:10,fill:C.txt("sec"),fontFamily:"'DM Mono',monospace"}} axisLine={false} tickLine={false}/>
+                    <YAxis tick={{fontSize:10,fill:C.txt("sec")}} axisLine={false} tickLine={false}/>
+                    <Tooltip {...TooltipStyle}/>
+                    <Bar dataKey="cr" fill={C.ng()} radius={[3,3,0,0]} />
+                    <Bar dataKey="cram" fill={C.amber()} radius={[3,3,0,0]} />
+                    <Bar dataKey="mr" fill={C.steel()} radius={[3,3,0,0]} />
+                  </BarChart>
+                )}
+              </ResponsiveContainer>
+            </div>
+
+            <div style={{background:C.bg("card"),border:`1px solid ${C.bdr()}`,borderRadius:14,padding:20,boxShadow:SHADOW}}>
+              <SectionHead title="Top Reject Reasons"/>
+              <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                {rejectionTopReasons.map((row,i)=>(
+                  <div key={i} style={{display:"grid",gridTemplateColumns:"1fr auto",alignItems:"center",padding:"10px 12px",background:C.bg("surf"),borderRadius:10,border:`1px solid ${C.bdr()}`}}>
+                    <span style={{fontSize:12,fontWeight:700,color:C.txt("pri"),whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{row.reason}</span>
+                    <span style={{fontSize:11,fontWeight:800,color:C.txt("sec"),fontFamily:"'DM Mono',monospace"}}>{row.count}</span>
+                  </div>
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </div>
+            </div>
           </div>
         </div>
       )}
+
     </div>
   );
 };
 
 export default Dashboard;
+

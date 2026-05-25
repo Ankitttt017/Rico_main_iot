@@ -547,7 +547,9 @@ const ScannerMonitor = () => {
               </thead>
               <tbody>
                 {rows.map((row, i) => {
+                  const isUsbMode = String(row?.scannerMode || "").toUpperCase() === "USB_SERIAL";
                   const conn = Boolean(row?.connection?.connected) || isRecentWithinGrace(row?.connection?.lastDataAt);
+                  const connLabel = isUsbMode ? (conn ? "USB Active" : "USB Idle") : (conn ? "Online" : "Offline");
                   return (
                     <tr key={row.id} style={{
                       borderBottom: `1px solid ${C.bdr()}`,
@@ -577,7 +579,7 @@ const ScannerMonitor = () => {
                           </div>
                           <Badge
                             variant={conn ? "ok" : "ng"}
-                            label={conn ? "Online" : "Offline"}
+                            label={connLabel}
                             pulse={conn}
                           />
                         </div>
@@ -589,7 +591,7 @@ const ScannerMonitor = () => {
                           {row.scannerName || "Scanner"}
                         </p>
                         <p style={{ fontSize: 10, color: C.txt("muted") }}>
-                          TCP Barcode / QR
+                          {isUsbMode ? "USB Scanner" : "TCP Barcode / QR"}
                         </p>
                       </td>
 

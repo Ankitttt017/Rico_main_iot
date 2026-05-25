@@ -4,6 +4,7 @@ const Machine = require("../models/Machine");
 const { normalizeIp } = require("../utils/networkAddress");
 const scannerService = require("../services/scannerConnectionService");
 const { getScannerHealthSnapshot } = require("../services/scannerHealthService");
+const { markScannerHeartbeat } = require("../services/scannerHealthService");
 const { emitRealtime } = require("../services/realtimeService");
 const { normalizeScannerConfig, readPartIdFromScannerPlc } = require("../services/scannerPlcDataService");
 const CONNECTION_GRACE_MS = Math.max(Number(process.env.SCANNER_CONNECTION_GRACE_MS || 15000), 3000);
@@ -341,6 +342,47 @@ exports.testScannerRead = async (req, res) => {
       message: read.partId
         ? "PLC read success. Part ID decoded."
         : "PLC read success but decoded part ID is empty.",
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+exports.markUsbActivity = async (req, res) => {
+  try {
+    const machineId = Number(req.body?.machineId || 0) || null;
+    const scannerId = Number(req.body?.scannerId || 0) || null;
+
+    let scanner = null;
+    if (scannerId) {
+      scanner = await Scanner.findByPk(scannerId);
+    }
+    if (!scanner && machineId) {
+      scanner = await Scanner.findOne({
+        where: { mapped_machine_id: machineId, is_active: true },
+        order: [["updatedAt", "DESC"]],
+      });
+    }
+    if (!scanner) {
+      return res.status(404).json({ error: "Scanner not found for USB activity heartbeat" });
+    }
+
+    const scannerIp = normalizeIp(scanner.scanner_ip);
+    const snapshot = scannerService.markScannerData({ scannerIp });
+    const heartbeat = markScannerHeartbeat({
+      scannerId: scanner.id,
+      scannerIp,
+      scannerName: scanner.scanner_name,
+      machineId: scanner.mapped_machine_id || machineId || null,
+    });
+    return res.json({
+      success: true,
+      scannerId: scanner.id,
+      scannerIp,
+      scannerMode: scanner.scanner_mode || "USB_SERIAL",
+      connection: snapshot || null,
+      heartbeat: heartbeat || null,
+      message: "USB scanner activity heartbeat recorded",
     });
   } catch (error) {
     return res.status(500).json({ error: error.message });

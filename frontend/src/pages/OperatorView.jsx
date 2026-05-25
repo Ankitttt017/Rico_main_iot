@@ -10,7 +10,7 @@ import {
 import {
   ResponsiveContainer, ComposedChart, CartesianGrid, XAxis, YAxis, Tooltip, Bar, Line,
 } from "recharts";
-import { machineApi, stationSettingsApi, traceabilityApi } from "../api/services";
+import { machineApi, scannerApi, stationSettingsApi, traceabilityApi } from "../api/services";
 import GlobalPopup from "../components/GlobalPopup";
 import ConfirmModal from "../components/ConfirmModal";
 import { getMachineStage } from "../utils/machineFields";
@@ -22,6 +22,9 @@ const QR_EVENT_DEDUPE_MS = 3000;
 const POPUP_EVENT_DEDUPE_MS = 1800;
 const QR_STORAGE_KEY = "operator-last-qr-signal";
 const OPERATOR_STATION_LOCK_KEY = "operator-view-station-lock-v1";
+const USB_FOCUS_INTERVAL_MS = 300;
+const USB_IDLE_FLUSH_MS = 120;
+const USB_SCAN_MAX_GAP_MS = 80;
 
 // ── Design tokens & responsive breakpoints ───────────────────────────────
 const DS = `
@@ -230,6 +233,12 @@ function getOperationLabel(status) {
   if (["INTERLOCKED", "BLOCKED"].includes(s)) return "BLOCKED";
   if (s === "RECOVERING" || s === "RESETTING") return "Resetting";
   return "Idle";
+}
+
+function getPassOperationStatusForStation(stationNo, stationSettings) {
+  const station = String(stationNo || "").trim().toUpperCase();
+  const features = getStationFeatures(station, stationSettings);
+  return features?.manualResult === true ? "WAITING_MACHINE" : "PASSED";
 }
 function fmtTime(v) { if (!v) return "—"; const d = new Date(v); return isNaN(d) ? "—" : d.toLocaleTimeString(); }
 function fmtDT(v) { if (!v) return "—"; const d = new Date(v); return isNaN(d) ? "—" : d.toLocaleString(); }
@@ -465,6 +474,11 @@ const OperatorView = () => {
   const [loadingStats, setLoadingStats] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [popup, setPopup] = useState(null);
+  const [usbDebug, setUsbDebug] = useState("");
+  const usbScannerInputRef = useRef(null);
+  const usbBufferRef = useRef("");
+  const usbFlushTimerRef = useRef(null);
+  const usbLastKeyAtRef = useRef(0);
   const [suppressReadyPopup, setSuppressReadyPopup] = useState(false);
   const [qrSignal, setQrSignal] = useState(null);
   const [qrFeed, setQrFeed] = useState([]);
@@ -495,6 +509,7 @@ const OperatorView = () => {
 
   const selectedMachineIdRef = useRef("");
   const selectedStationRef = useRef("");
+  const machinesRef = useRef([]);
   const liveRefreshTimerRef = useRef(null);
   const lastLiveRefreshRef = useRef(0);
   const lastQrEventRef = useRef({ key: "", at: 0 });
@@ -531,6 +546,7 @@ const OperatorView = () => {
 
   useEffect(() => { selectedMachineIdRef.current = String(selectedMachineId || ""); }, [selectedMachineId]);
   useEffect(() => { selectedStationRef.current = String(selectedStation || "").toUpperCase(); }, [selectedStation]);
+  useEffect(() => { machinesRef.current = Array.isArray(machines) ? machines : []; }, [machines]);
 
   useEffect(() => {
     try {
@@ -593,6 +609,14 @@ const OperatorView = () => {
   const plcConnected = plcHealthKnown ? Boolean(plcHealth?.healthy) : null;
   const scannerConfigured = String(scannerHealth?.status || "").toUpperCase() !== "NOT_CONFIGURED";
   const scannerConnected = Boolean(scannerHealth?.connected);
+  const scannerMode = String(scannerInfo?.scannerMode || scannerInfo?.mode || "").trim().toUpperCase();
+  const isUsbScannerMode = ["USB_SERIAL", "USB", "USB_HID", "HID"].includes(scannerMode);
+  const scannerLastSeenAtRaw = scannerHealth?.lastSeenAt || scannerHealth?.lastDataAt || scannerInfo?.lastSeenAt || scannerInfo?.lastDataAt || null;
+  const scannerLastSeenAtMs = scannerLastSeenAtRaw ? new Date(scannerLastSeenAtRaw).getTime() : 0;
+  const usbActivityGraceMs = 90 * 1000;
+  const usbConnected = Boolean(scannerConfigured && scannerLastSeenAtMs && (Date.now() - scannerLastSeenAtMs) <= usbActivityGraceMs);
+  const effectiveScannerConnected = isUsbScannerMode ? usbConnected : scannerConnected;
+  const scannerStatusLabel = !scannerConfigured ? "Not Set" : isUsbScannerMode ? (usbConnected ? "USB Active" : "USB Idle") : (scannerConnected ? "Online" : "Offline");
 
   const isManualResultStation = useMemo(() => stationFeatureConfig?.manualResult === true || String(selectedStation).toUpperCase() === "OP020", [stationFeatureConfig, selectedStation]);
   const isOperationEnabled = useMemo(() => stationFeatureConfig?.operation !== false, [stationFeatureConfig]);
@@ -650,19 +674,11 @@ const OperatorView = () => {
     if (!selectedMachineId || !selectedStation) return;
     if (suppressReadyPopup) return;
 
-    const scannerMode = String(scannerInfo?.scannerMode || scannerInfo?.mode || "").trim().toUpperCase();
-    const isUsbScannerMode = ["USB_SERIAL", "USB", "USB_HID", "HID"].includes(scannerMode);
-    const shouldOpenUsbOrSimulationPopup = Boolean(scannerInfo?.isSimulation) || isUsbScannerMode;
-
-    if (shouldOpenUsbOrSimulationPopup) {
-      openScannerReadyPopup();
-      return;
-    }
-
-    // Event-driven popup mode for non-USB/non-simulation scanners:
-    // Do not auto-open info popup just because station is selected.
+    // Event-driven popup mode:
+    // Do not auto-open popup on initial load/station selection.
+    // Popup is opened only on explicit refresh action or live scan trigger events.
     setPopup((prev) => (prev?.isSimulationPlaceholder ? null : prev));
-  }, [selectedMachineId, selectedStation, scannerInfo?.isSimulation, scannerInfo?.scannerMode, scannerInfo?.mode, popup, suppressReadyPopup, openScannerReadyPopup]);
+  }, [selectedMachineId, selectedStation, popup, suppressReadyPopup]);
 
   const quickResetPartId = useMemo(
     () => normalizePartId(currentContext?.partId || popup?.partId || popup?.part_id),
@@ -786,10 +802,16 @@ const OperatorView = () => {
     const activeStation = String(selectedStationRef.current || "").trim().toUpperCase();
 
     if (payloadMachineId) {
-      return payloadMachineId === activeMachineId;
+      if (payloadMachineId === activeMachineId) return true;
+      // Keep operator feedback visible when backend emits partial/mismatched tags
+      // but the payload clearly contains a scan result for current workflow.
+      if (hasQrDecision(payload) && normalizePartId(payload.partId || payload.part_id)) return true;
+      return false;
     }
     if (payloadStation) {
-      return payloadStation === activeStation;
+      if (payloadStation === activeStation) return true;
+      if (hasQrDecision(payload) && normalizePartId(payload.partId || payload.part_id)) return true;
+      return false;
     }
     // If backend payload does not include machine/station identity,
     // allow it for active Operator screen instead of dropping messages.
@@ -816,9 +838,17 @@ const OperatorView = () => {
     // even if the event arrived from a path that didn't emit operator_popup.
     const decision = String(sig.decision || "").trim().toUpperCase();
     const isBlockedDecision = ["BLOCK", "FAIL", "NG", "REJECT", "INVALID"].includes(decision);
+    const signalStation = String(sig.stationNo || selectedStationRef.current || "").trim().toUpperCase();
+    const signalFeatures = getStationFeatures(signalStation, stationSettings);
+    const isFinalPackingStation = Boolean(signalFeatures?.finalPacking);
     const fallbackMessage = isBlockedDecision
-      ? formatScanErrorMessage(payload)
-      : `QR Validated at ${sig.stationNo || "Station"}`;
+      ? (isFinalPackingStation
+        ? `${formatScanErrorMessage(payload)} Not eligible for packing.`
+        : formatScanErrorMessage(payload))
+      : (isFinalPackingStation
+        ? `Final station PASS: Eligible for packing (${sig.stationNo || "Station"}).`
+        : `Scan accepted at ${sig.stationNo || "Station"}`);
+    const passOperationStatus = getPassOperationStatusForStation(sig.stationNo, stationSettings);
     setPopup((prev) => ({
       ...prev,
       type: isBlockedDecision ? "ERROR" : "INFO",
@@ -830,7 +860,7 @@ const OperatorView = () => {
       machineId: payload.machineId || payload.machine_id || prev?.machineId || prev?.machine_id || "",
       machineName: payload.machineName || prev?.machineName || "",
       qrStatus: isBlockedDecision ? "FAILED" : "PASSED",
-      operationStatus: isBlockedDecision ? "BLOCKED" : "WAITING_MACHINE",
+      operationStatus: isBlockedDecision ? "BLOCKED" : passOperationStatus,
       timestamp: payload.timestamp || new Date().toISOString(),
       _shownAtMs: Date.now(),
     }));
@@ -838,7 +868,7 @@ const OperatorView = () => {
     const mk = selectedMachineIdRef.current;
     if (mk) { try { const c = JSON.parse(localStorage.getItem(QR_STORAGE_KEY) || "{}"); c[mk] = sig; localStorage.setItem(QR_STORAGE_KEY, JSON.stringify(c)); } catch { } }
     return true;
-  }, [isPayloadForActiveMachine]);
+  }, [isPayloadForActiveMachine, stationSettings]);
 
   useEffect(() => {
     setPopup((prev) => {
@@ -982,7 +1012,7 @@ const OperatorView = () => {
             partId: p.partId || p.part_id,
             stationNo: p.stationNo || p.station_no,
             qrStatus: "PASSED",
-            operationStatus: "WAITING_MACHINE"
+            operationStatus: getPassOperationStatusForStation(p.stationNo || p.station_no, stationSettings)
           });
         }
       }
@@ -1016,7 +1046,7 @@ const OperatorView = () => {
             stationNo: p.stationNo || p.station_no,
             machineId: p.machineId || p.machine_id,
             qrStatus: "PASSED",
-            operationStatus: "WAITING_MACHINE",
+            operationStatus: getPassOperationStatusForStation(p.stationNo || p.station_no, stationSettings),
             timestamp: p.timestamp,
           });
         }
@@ -1057,7 +1087,7 @@ const OperatorView = () => {
             stationNo: p.stationNo || p.station_no,
             machineId: p.machineId || p.machine_id,
             qrStatus: "PASSED",
-            operationStatus: "WAITING_MACHINE",
+            operationStatus: getPassOperationStatusForStation(p.stationNo || p.station_no, stationSettings),
             timestamp: p.timestamp,
           });
         }
@@ -1111,6 +1141,106 @@ const OperatorView = () => {
     openScannerReadyPopup();
   }, [selectedMachineId, loadMachineTelemetry, openScannerReadyPopup]);
 
+  const submitUsbScan = useCallback(async (rawValue) => {
+    const code = String(rawValue || "").trim();
+    if (!code || !selectedMachineIdRef.current) return;
+    setUsbDebug(`Captured: ${code}`);
+    try {
+      const machineRows = machinesRef.current || [];
+      const currentMachine = machineRows.find((m) => String(m.id) === String(selectedMachineIdRef.current));
+      const stationNo = String(getMachineStage(currentMachine) || selectedStationRef.current || "").trim().toUpperCase();
+      if (!stationNo) return;
+
+      const payload = await traceabilityApi.verify({
+        machineId: selectedMachineIdRef.current,
+        qrCode: code,
+        partId: code,
+        stationNo,
+      });
+      await scannerApi.markUsbActivity({ machineId: selectedMachineIdRef.current }).catch(() => null);
+      processQrSignal({ ...payload, partId: code, stationNo, machineId: selectedMachineIdRef.current, sourceEvent: "usb_hidden_input" });
+      setUsbDebug(`Submitted OK: ${code}`);
+      scheduleLiveRefresh();
+    } catch (error) {
+      await scannerApi.markUsbActivity({ machineId: selectedMachineIdRef.current }).catch(() => null);
+      setUsbDebug(`Submit failed: ${error?.response?.data?.error || error?.message || "unknown"}`);
+      setPopup((prev) => ({
+        ...prev,
+        type: "ERROR",
+        title: "Scan Blocked",
+        message: error?.response?.data?.error || "USB scan validation failed",
+        partId: code,
+        stationNo: selectedStationRef.current || "",
+        machineId: selectedMachineIdRef.current || "",
+        qrStatus: "FAILED",
+        operationStatus: "BLOCKED",
+        timestamp: new Date().toISOString(),
+        _shownAtMs: Date.now(),
+      }));
+    }
+  }, [processQrSignal, scheduleLiveRefresh]);
+
+  useEffect(() => {
+    const isUsbMode = ["USB_SERIAL", "USB", "USB_HID", "HID"].includes(String(scannerInfo?.scannerMode || scannerInfo?.mode || "").trim().toUpperCase());
+    if (!isUsbMode) return undefined;
+
+    const shouldSkipFocusSteal = () => {
+      const active = document.activeElement;
+      if (!active) return false;
+      const tag = String(active.tagName || "").toUpperCase();
+      return ["SELECT", "INPUT", "TEXTAREA", "BUTTON"].includes(tag);
+    };
+
+    const keepFocus = () => {
+      const el = usbScannerInputRef.current;
+      if (!el) return;
+      if (shouldSkipFocusSteal()) return;
+      if (document.activeElement !== el) el.focus();
+    };
+
+    keepFocus();
+    const focusInterval = setInterval(keepFocus, USB_FOCUS_INTERVAL_MS);
+    window.addEventListener("click", keepFocus, true);
+    window.addEventListener("touchstart", keepFocus, true);
+
+    const flush = () => {
+      const value = usbBufferRef.current.trim();
+      usbBufferRef.current = "";
+      if (value) submitUsbScan(value);
+    };
+
+    const onKeyDown = (event) => {
+      if (event.ctrlKey || event.altKey || event.metaKey) return;
+      const now = Date.now();
+      if (now - Number(usbLastKeyAtRef.current || 0) > USB_SCAN_MAX_GAP_MS) {
+        usbBufferRef.current = "";
+      }
+      usbLastKeyAtRef.current = now;
+
+      if (event.key === "Enter") {
+        event.preventDefault();
+        if (usbFlushTimerRef.current) clearTimeout(usbFlushTimerRef.current);
+        flush();
+        return;
+      }
+      if (event.key.length === 1) {
+        usbBufferRef.current += event.key;
+        if (usbFlushTimerRef.current) clearTimeout(usbFlushTimerRef.current);
+        usbFlushTimerRef.current = setTimeout(flush, USB_IDLE_FLUSH_MS);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      clearInterval(focusInterval);
+      window.removeEventListener("click", keepFocus, true);
+      window.removeEventListener("touchstart", keepFocus, true);
+      window.removeEventListener("keydown", onKeyDown, true);
+      if (usbFlushTimerRef.current) clearTimeout(usbFlushTimerRef.current);
+      usbBufferRef.current = "";
+    };
+  }, [scannerInfo?.scannerMode, scannerInfo?.mode, submitUsbScan]);
+
   useEffect(() => {
     const mk = String(selectedMachineId || "");
     if (!mk) { setQrSignal(null); setQrFeed([]); return; }
@@ -1141,11 +1271,34 @@ const OperatorView = () => {
   // ─────────────────────────────────────────────────────────────────────
   return (
     <div style={{
-      display: "flex", flexDirection: "column", gap: isCompact ? 12 : 20,
-      paddingBottom: isCompact ? 24 : 32,
+      display: "flex", flexDirection: "column", gap: isTablet ? 10 : (isCompact ? 12 : 20),
+      paddingBottom: isTablet ? 16 : (isCompact ? 24 : 32),
       animation: "ovFadeIn .3s ease",
       maxWidth: "100%", overflowX: "hidden",
     }}>
+      <input
+        ref={usbScannerInputRef}
+        autoFocus
+        type="text"
+        inputMode="none"
+        autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="off"
+        spellCheck={false}
+        className="fixed opacity-0 pointer-events-none"
+        style={{ left: -10000, top: 0, width: 1, height: 1 }}
+        onFocus={(e) => {
+          e.target.setAttribute("readonly", "true");
+          setTimeout(() => e.target.removeAttribute("readonly"), 100);
+        }}
+        onChange={() => {}}
+        onInput={(e) => {
+          const v = String(e.currentTarget.value || "").trim();
+          if (!v) return;
+          submitUsbScan(v);
+          e.currentTarget.value = "";
+        }}
+      />
       <GlobalPopup popup={popup} onClose={handleClosePopup}
         onResetOperation={handleResetOperation}
         autoCloseMs={12000} criticalAutoCloseMs={18000} showAcknowledge={false}
@@ -1271,7 +1424,7 @@ const OperatorView = () => {
       {/* ── Page Header ───────────────────────────────────────────── */}
       <div style={{
         background: C.bg("card"), border: `1px solid ${C.bdr()}`,
-        borderRadius: isCompact ? 12 : 16, padding: isCompact ? "12px 16px" : "16px 20px",
+        borderRadius: isCompact ? 12 : 16, padding: isTablet ? "10px 12px" : (isCompact ? "12px 16px" : "16px 20px"),
         boxShadow: SH, overflow: "hidden"
       }}>
         <div style={{
@@ -1346,43 +1499,24 @@ const OperatorView = () => {
 
           {/* Controls */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", width: isMobile ? "100%" : "auto" }}>
-            {/* Mobile menu toggle for machine selector (simplified on mobile) */}
-            {isMobile && (
-              <button
-                onClick={() => { if (!machineSelectionLocked) setMobileMenuOpen(!mobileMenuOpen); }}
-                style={{
-                  display: "flex", alignItems: "center", gap: 6,
-                  height: 36, padding: "0 12px", borderRadius: 9,
-                  background: C.bg("surf"), border: `1px solid ${C.bdr()}`,
-                  color: C.txt("sec"), fontSize: 12,
-                  opacity: machineSelectionLocked ? 0.7 : 1,
-                }}
-              >
-                <Menu size={14} />
-                {selectedMachine?.machineName?.slice(0, 20) || "Select Machine"}
-              </button>
-            )}
-
-            {/* Machine selector - hidden on mobile when menu closed */}
+            {/* Machine selector - always visible for stable behavior on all screens */}
             <div style={{
-              minWidth: isMobile ? "100%" : 220,
-              display: isMobile && !mobileMenuOpen ? "none" : "block",
+              minWidth: isMobile ? "100%" : (isTablet ? 200 : 220),
+              maxWidth: isMobile ? "100%" : (isTablet ? 280 : 360),
+              display: "block",
             }}>
               <select value={selectedMachineId}
                 onChange={e => {
                   const nextId = String(e.target.value || "");
                   if (enforceStationLockMode) {
                     if (!nextId || nextId === String(selectedMachineId || "")) {
-                      setMobileMenuOpen(false);
                       return;
                     }
                     setPendingMachineId(nextId);
                     setShowStationSelectModal(true);
-                    setMobileMenuOpen(false);
                     return;
                   }
                   setSelectedMachineId(nextId);
-                  setMobileMenuOpen(false);
                 }}
                 disabled={loadingMachines}
                 style={{
@@ -1390,6 +1524,7 @@ const OperatorView = () => {
                   background: C.bg("input"), border: `1px solid ${C.bdr()}`,
                   borderRadius: 9, fontSize: isMobile ? 12 : 13, color: C.txt("pri"),
                   outline: "none", fontFamily: "'DM Sans',sans-serif",
+                  minWidth: 0,
                 }}>
                 {machines.map(m => (
                   <option key={m.id} value={m.id}>
@@ -1445,7 +1580,7 @@ const OperatorView = () => {
           <div style={{
             display: "grid",
             gridTemplateColumns: isMobile ? "1fr" : (isTablet ? "repeat(2, 1fr)" : "280px 1fr 260px"),
-            gap: isCompact ? 12 : 16,
+            gap: isTablet ? 10 : (isCompact ? 12 : 16),
             alignItems: "start",
           }}>
             {/* ── Left: Station Status (Connections + QR + Operation) ── */}
@@ -1463,7 +1598,7 @@ const OperatorView = () => {
                       <ConnDot connected={Boolean(plcConnected)} />
                       <div style={{ minWidth: 0 }}>
                         <p style={{ fontSize: isCompact ? 11 : 12, fontWeight: 700, color: C.txt("pri") }}>PLC Controller</p>
-                        <p style={{ fontSize: 9, color: C.txt("muted"), fontFamily: "'DM Mono',monospace", overflow: "hidden", textOverflow: "ellipsis" }}>
+                          <p style={{ fontSize: 9, color: C.txt("muted"), fontFamily: "'DM Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                           {plcHealth?.plcIp || selectedMachine?.plcIp || liveState?.machine?.plcIp || "—"}
                         </p>
                       </div>
@@ -1480,24 +1615,24 @@ const OperatorView = () => {
                   <div style={{
                     display: "flex", alignItems: "center", justifyContent: "space-between",
                     padding: "8px 10px", borderRadius: 9,
-                    background: !scannerConfigured ? C.idle(0.07) : scannerConnected ? C.ok(0.07) : C.ng(0.07),
-                    border: `1px solid ${!scannerConfigured ? C.bdr() : scannerConnected ? C.ok(0.22) : C.ng(0.22)}`,
+                    background: !scannerConfigured ? C.idle(0.07) : effectiveScannerConnected ? C.ok(0.07) : C.ng(0.07),
+                    border: `1px solid ${!scannerConfigured ? C.bdr() : effectiveScannerConnected ? C.ok(0.22) : C.ng(0.22)}`,
                   }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-                      <ConnDot connected={scannerConnected} />
+                      <ConnDot connected={effectiveScannerConnected} />
                       <div style={{ minWidth: 0 }}>
                         <p style={{ fontSize: isCompact ? 11 : 12, fontWeight: 700, color: C.txt("pri") }}>
                           {scannerInfo?.scannerName || "Scanner"}
                         </p>
-                        <p style={{ fontSize: 9, color: C.txt("muted"), fontFamily: "'DM Mono',monospace", overflow: "hidden", textOverflow: "ellipsis" }}>
+                          <p style={{ fontSize: 9, color: C.txt("muted"), fontFamily: "'DM Mono',monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                           {scannerInfo?.scannerIp || scannerHealth?.scannerIp || "—"}
                         </p>
                       </div>
                     </div>
                     <Badge
-                      variant={!scannerConfigured ? "idle" : scannerConnected ? "ok" : "ng"}
-                      label={!scannerConfigured ? "Not Set" : scannerConnected ? "Online" : "Offline"}
-                      pulse={scannerConnected}
+                      variant={!scannerConfigured ? "idle" : effectiveScannerConnected ? "ok" : "ng"}
+                      label={scannerStatusLabel}
+                      pulse={effectiveScannerConnected}
                       size={isCompact ? "sm" : "sm"}
                     />
                   </div>
@@ -1678,8 +1813,8 @@ const OperatorView = () => {
                 <p style={{ fontSize: 11, color: C.txt("muted") }}>No trend data for this station.</p>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  <div style={{ minHeight: isCompact ? 220 : 250 }}>
-                    <ResponsiveContainer width="100%" height={isCompact ? 220 : 250} minWidth={1} minHeight={1}>
+                  <div style={{ minHeight: isTablet ? 190 : (isCompact ? 220 : 250) }}>
+                    <ResponsiveContainer width="100%" height={isTablet ? 190 : (isCompact ? 220 : 250)} minWidth={1} minHeight={1}>
                       <ComposedChart data={trendChartData} margin={{ top: 6, right: 8, left: -14, bottom: 0 }}>
                         <CartesianGrid stroke={C.bdr(0.18)} strokeDasharray="3 4" vertical={false} />
                         <XAxis dataKey="hour" tick={{ fontSize: 10, fill: C.txt("muted"), fontFamily: "'DM Mono',monospace" }} axisLine={false} tickLine={false} />
@@ -1717,7 +1852,7 @@ const OperatorView = () => {
               ) : (
                 <div style={{
                   display: "flex", flexDirection: "column", gap: 6,
-                  maxHeight: isCompact ? 280 : 320, overflowY: "auto",
+                  maxHeight: isTablet ? 220 : (isCompact ? 280 : 320), overflowY: "auto",
                 }}>
                   {(stationStats?.recentParts || []).slice(0, isMobile ? 4 : 8).map((row, i) => {
                     const res = String(row.result || "").toUpperCase();

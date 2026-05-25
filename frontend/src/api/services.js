@@ -130,6 +130,10 @@ export const scannerApi = {
     const { data } = await apiClient.post(ENDPOINTS.scannerTestConnection(id));
     return data;
   },
+  markUsbActivity: async (payload) => {
+    const { data } = await apiClient.post(ENDPOINTS.scannerUsbActivity, payload);
+    return data;
+  },
   create: async (payload) => {
     const { data } = await apiClient.post(ENDPOINTS.scanners, payload);
     return data;
