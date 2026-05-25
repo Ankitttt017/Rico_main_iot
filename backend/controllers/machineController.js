@@ -161,10 +161,14 @@ function normalizePlcSignalMap(value) {
 
 function normalizeSpcConfig(value) {
   const source = value && typeof value === "object" ? value : {};
-  const resolvedMode = String(source.mode || "IP_PUSH").trim().toUpperCase();
+  const resolvedMode = String(source.activeProtocol || source.mode || "TCP_CLIENT").trim().toUpperCase();
+  const protocolConfig = source.protocolConfig && typeof source.protocolConfig === "object" ? source.protocolConfig : {};
+  const parser = source.parser && typeof source.parser === "object" ? source.parser : {};
+  const reliability = source.reliability && typeof source.reliability === "object" ? source.reliability : {};
   return {
     enabled: source.enabled === true,
     mode: resolvedMode,
+    activeProtocol: resolvedMode,
     activeProtocols: [resolvedMode],
     priority: [resolvedMode],
     
@@ -172,11 +176,35 @@ function normalizeSpcConfig(value) {
     sourceIp: toText(source.sourceIp) || null,
     sourcePort: toInt(source.sourcePort),
     payloadResultKey: toText(source.payloadResultKey || "RESULT") || "RESULT",
+    protocolConfig: {
+      sourceIp: toText(protocolConfig.sourceIp || source.sourceIp) || null,
+      sourcePort: toInt(protocolConfig.sourcePort ?? source.sourcePort),
+      listenerIp: toText(protocolConfig.listenerIp) || null,
+      listenerPort: toInt(protocolConfig.listenerPort),
+      allowedSourceIp: toText(protocolConfig.allowedSourceIp) || null,
+      comPort: toText(protocolConfig.comPort || source.sourceIp) || null,
+      folderPath: toText(protocolConfig.folderPath || source.folderConfig?.path) || null,
+      delimiter: toText(protocolConfig.delimiter) || null,
+      encoding: toText(protocolConfig.encoding || "utf8") || "utf8",
+    },
+    parser: {
+      mode: toText(parser.mode || "JSON").toUpperCase() || "JSON",
+      regex: toText(parser.regex),
+      delimiter: toText(parser.delimiter || ","),
+      fixedLength: toText(parser.fixedLength),
+    },
     
     // Reliability Engine (Requirement 5)
-    retryCount: toInt(source.retryCount) ?? 4,
-    retryDelayMs: toInt(source.retryDelayMs) ?? 1500,
-    timeoutMs: toInt(source.timeoutMs) ?? 12000,
+    retryCount: toInt(reliability.retryCount ?? source.retryCount) ?? 4,
+    retryDelayMs: toInt(reliability.retryDelayMs ?? source.retryDelayMs) ?? 1500,
+    timeoutMs: toInt(reliability.timeoutMs ?? source.timeoutMs) ?? 12000,
+    reliability: {
+      timeoutMs: toInt(reliability.timeoutMs ?? source.timeoutMs) ?? 12000,
+      retryCount: toInt(reliability.retryCount ?? source.retryCount) ?? 4,
+      retryDelayMs: toInt(reliability.retryDelayMs ?? source.retryDelayMs) ?? 1500,
+      autoReconnect: reliability.autoReconnect !== false,
+      heartbeat: toText(reliability.heartbeat || ""),
+    },
 
     // Dynamic Register Mapping (Requirement 21)
     dynamicRegisters: Array.isArray(source.dynamicRegisters) ? source.dynamicRegisters.map(r => ({
@@ -187,6 +215,7 @@ function normalizeSpcConfig(value) {
       scale: parseFloat(r.scale) || 1.0,
       unit: toText(r.unit) || ""
     })) : [],
+    fieldMappings: Array.isArray(source.fieldMappings) ? source.fieldMappings : [],
 
     // Folder Watcher Config (Requirement 1)
     folderConfig: {
@@ -1136,18 +1165,56 @@ exports.testConnection = async (req, res) => {
       });
     }
 
-    if (["PLC_REGISTER", "TCP_CLIENT"].includes(protocolMode)) {
-      if (!sourceIp || !sourcePort) return res.status(400).json({ error: "IP and Port required for PLC connection test" });
+    if (protocolMode === "TCP_CLIENT") {
+      if (!sourceIp) return res.status(400).json({ error: "Source IP is required for TCP Client test" });
+      // Port is optional for deployments where scanner bridge abstracts socket details.
+      // If port is provided, run socket reachability; otherwise run host reachability only.
+      if (!sourcePort) {
+        const { spawn } = require("child_process");
+        return new Promise((resolve) => {
+          const ping = spawn("ping", ["-n", "1", "-w", String(testTimeoutMs), String(sourceIp)]);
+          let stdout = "";
+          let stderr = "";
+          ping.stdout.on("data", (chunk) => { stdout += String(chunk || ""); });
+          ping.stderr.on("data", (chunk) => { stderr += String(chunk || ""); });
+          ping.on("close", (code) => {
+            const output = `${stdout}\n${stderr}`.toLowerCase();
+            if (code !== 0 || output.includes("unreachable") || output.includes("timed out")) {
+              resolve(res.status(502).json({ error: "TCP source host unreachable", details: "Ping failed or timed out" }));
+            } else {
+              resolve(res.json({
+                success: true,
+                message: "TCP Client source host reachable (port not provided; socket check skipped)",
+                testType: "tcpClient",
+              }));
+            }
+          });
+        });
+      }
       try {
         await testTcpReachability(sourceIp, sourcePort);
       } catch (err) {
         return res.status(502).json({ error: "Endpoint Unreachable", details: err.message });
       }
+      return res.json({
+        success: true,
+        message: "TCP Client source reachable",
+        testType: "tcpClient",
+      });
+    }
+
+    if (["PLC_REGISTER", "PLC_SLMP", "MODBUS_TCP"].includes(protocolMode)) {
+      if (!sourceIp || !sourcePort) return res.status(400).json({ error: "PLC IP and PLC Port are required for PLC protocol test" });
+      try {
+        await testTcpReachability(sourceIp, sourcePort);
+      } catch (err) {
+        return res.status(502).json({ error: "PLC endpoint unreachable", details: err.message });
+      }
 
       // Optional real register read validation when register is provided and protocol is PLC-like.
       const registerCandidate = toInt(registerNo ?? plcRegister ?? payloadResultKey);
       const normalizedPlcProtocol = normalizeProtocol(plcProtocol, "MODBUS_TCP");
-      if (registerCandidate !== null && ["PLC_REGISTER"].includes(protocolMode)) {
+      if (registerCandidate !== null) {
         try {
           if (normalizedPlcProtocol === "MODBUS_TCP") {
             const read = await readModbusRegisters({
@@ -1198,10 +1265,7 @@ exports.testConnection = async (req, res) => {
         }
       }
 
-      return res.json({
-        success: true,
-        message: protocolMode === "TCP_CLIENT" ? "TCP source reachable" : "PLC Reachable",
-      });
+      return res.json({ success: true, message: "PLC reachable", testType: "plc" });
     }
 
     if (protocolMode === "TCP_SERVER") {

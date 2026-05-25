@@ -909,13 +909,22 @@ const GlobalPopup = ({
       (Boolean(scannerInfo?.isSimulation) || mode === "USB_SERIAL" || manualScanMode === true || popup?.manualScanMode === true);
     if (!shouldAutoFocus) return;
     if (isUsbMode) {
-      // Do not keep blurring all inputs in USB mode; it blocks typing
-      // in manual verification fields (reason dropdown/search).
-      const active = document?.activeElement;
-      if (scanInputRef.current && active === scanInputRef.current && typeof active?.blur === "function") {
-        active.blur();
-      }
-      return undefined;
+      const timer = setTimeout(() => {
+        if (scanInputRef.current && typeof scanInputRef.current.focus === "function") {
+          scanInputRef.current.focus({ preventScroll: true });
+        }
+      }, 80);
+      const keepFocusTimer = setInterval(() => {
+        if (!popup) return;
+        const active = document?.activeElement;
+        if (scanInputRef.current && active !== scanInputRef.current && typeof scanInputRef.current.focus === "function") {
+          scanInputRef.current.focus({ preventScroll: true });
+        }
+      }, 1200);
+      return () => {
+        clearTimeout(timer);
+        clearInterval(keepFocusTimer);
+      };
     }
     const timer = setTimeout(() => {
       if (scanInputRef.current && typeof scanInputRef.current.focus === "function") {
@@ -1509,12 +1518,7 @@ const GlobalPopup = ({
                   className="flex-1 bg-slate-950 border border-slate-600 rounded-lg px-4 py-2 font-bold text-sm text-slate-100 placeholder:text-slate-400 outline-none focus:border-amber-500 transition-colors font-mono"
                   style={{ caretColor: isUsbScannerMode ? "transparent" : undefined }}
                   tabIndex={isUsbScannerMode ? -1 : 0}
-                  onFocus={(e) => {
-                    if (isUsbScannerMode) {
-                      e.preventDefault();
-                      e.target.blur();
-                    }
-                  }}
+                  onFocus={() => {}}
                   onPointerDown={(e) => {
                     if (isUsbScannerMode) {
                       e.preventDefault();
@@ -1522,7 +1526,7 @@ const GlobalPopup = ({
                   }}
                   onTouchStart={(e) => {
                     if (isUsbScannerMode) {
-                      e.target.blur();
+                      e.preventDefault();
                     }
                   }}
                   onKeyDown={(e) => {

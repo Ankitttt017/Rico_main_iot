@@ -6,6 +6,7 @@ const scannerService = require("../services/scannerConnectionService");
 const { getScannerHealthSnapshot } = require("../services/scannerHealthService");
 const { emitRealtime } = require("../services/realtimeService");
 const { normalizeScannerConfig, readPartIdFromScannerPlc } = require("../services/scannerPlcDataService");
+const CONNECTION_GRACE_MS = Math.max(Number(process.env.SCANNER_CONNECTION_GRACE_MS || 15000), 3000);
 
 function toInt(value) {
   if (value === undefined || value === null || value === "") {
@@ -133,7 +134,11 @@ function toConnectionResponse(connection) {
 function mergeConnectionWithHealth(connection, health) {
   const base = toConnectionResponse(connection);
   const heartbeatConnected = Boolean(health?.connected);
-  const connected = Boolean(base.connected || heartbeatConnected);
+  const lastDataMs = base.lastDataAt ? new Date(base.lastDataAt).getTime() : 0;
+  const recentDataConnected = Number.isFinite(lastDataMs) && lastDataMs > 0
+    ? (Date.now() - lastDataMs) <= CONNECTION_GRACE_MS
+    : false;
+  const connected = Boolean(base.connected || heartbeatConnected || recentDataConnected);
   const status = connected ? "CONNECTED" : "DISCONNECTED";
   return {
     ...base,
@@ -183,13 +188,27 @@ exports.listScannerConnections = async (_req, res) => {
 
     const configuredRows = await Promise.all(
       scanners.map(async (scanner) => {
-        const base = await toResponse(scanner);
-        const connection = connectionMap.get(normalizeIp(scanner.scanner_ip)) || null;
-        const health = getScannerHealthSnapshot({ scannerIp: scanner.scanner_ip }) || null;
-        return {
-          ...base,
-          connection: mergeConnectionWithHealth(connection, health),
-        };
+        try {
+          const base = await toResponse(scanner);
+          const connection = connectionMap.get(normalizeIp(scanner.scanner_ip)) || null;
+          const health = getScannerHealthSnapshot({ scannerIp: scanner.scanner_ip }) || null;
+          return {
+            ...base,
+            connection: mergeConnectionWithHealth(connection, health),
+          };
+        } catch (_error) {
+          return {
+            id: scanner.id,
+            scannerName: scanner.scanner_name || "SCANNER",
+            scannerIp: scanner.scanner_ip || null,
+            scannerPort: scanner.scanner_port || null,
+            scannerMode: scanner.scanner_mode || "TCP_CLIENT",
+            mappedMachineId: scanner.mapped_machine_id || null,
+            isActive: Boolean(scanner.is_active),
+            mappedMachine: null,
+            connection: toConnectionResponse(null),
+          };
+        }
       })
     );
 
@@ -248,6 +267,26 @@ exports.testScannerConnection = async (req, res) => {
         status: "REACHABLE",
         checkedAt: new Date().toISOString(),
         message: `USB/Serial mode configured. Runtime COM adapter should be verified on station system.`,
+      });
+    }
+
+    if (mode === "TCP_CLIENT") {
+      const connection = await scannerService.getScannerConnectionSnapshot(scanner.scanner_ip);
+      const health = getScannerHealthSnapshot({ scannerIp: scanner.scanner_ip }) || null;
+      const merged = mergeConnectionWithHealth(connection, health);
+      const waitingForPush = !merged.lastDataAt;
+      return res.json({
+        scannerId: scanner.id,
+        scannerMode: mode,
+        scannerIp: scanner.scanner_ip,
+        backendListenerPort: Number(process.env.TCP_SERVER_PORT || 0) || null,
+        reachable: true,
+        status: merged.connected ? "LISTENER_ACTIVE_RECEIVING" : "WAITING_FOR_PUSH_DATA",
+        checkedAt: new Date().toISOString(),
+        connection: merged,
+        message: waitingForPush
+          ? "Scanner is push-mode (TCP client). Backend listener is active; waiting for scanner payload."
+          : `Scanner push data received. Last packet at ${merged.lastDataAt}.`,
       });
     }
 

@@ -468,8 +468,14 @@ export const packingApi = {
 
 export const alarmApi = {
   list: async () => {
-    const { data } = await apiClient.get(ENDPOINTS.alarms.base);
-    return data;
+    try {
+      const { data } = await apiClient.get(ENDPOINTS.alarms.base, { timeout: 5000 });
+      if (Array.isArray(data)) return data;
+      if (Array.isArray(data?.data)) return data.data;
+      return [];
+    } catch (_error) {
+      return [];
+    }
   },
   resolve: async (id) => {
     const { data } = await apiClient.patch(ENDPOINTS.alarms.resolve(id));

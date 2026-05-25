@@ -93,9 +93,9 @@ const SPC_MODE_FIELDS = {
     placeholder2: "5000",
     type2: "number",
     label3: "Result key in payload",
-    placeholder3: "RESULT",
-    label4: "NG values",
-    placeholder4: "NG, FAIL, 0",
+    placeholder3: "",
+    label4: "values",
+    placeholder4: "",
     hint3: "JSON key in the payload that contains the result",
     hint4: "Comma-separated values that mean NG/fail",
   },
@@ -107,7 +107,7 @@ const SPC_MODE_FIELDS = {
     type2: "number",
     label3: "Quality Register",
     placeholder3: "2065",
-    label4: "NG Register Value",
+    label4: " Value",
     placeholder4: "2",
     hint3: "PLC register address where quality result is stored",
     hint4: "Register value that signifies NG (e.g. 2)",
@@ -120,7 +120,7 @@ const SPC_MODE_FIELDS = {
     type2: "number",
     label3: "JSON Result Key",
     placeholder3: "RESULT",
-    label4: "NG Values",
+    label4: "Values",
     placeholder4: "NG, FAIL, 0",
     hint3: "Key name in JSON response containing result",
     hint4: "Values representing NG/failure",
@@ -133,20 +133,20 @@ const SPC_MODE_FIELDS = {
     type2: "text",
     label3: "Result key / pattern",
     placeholder3: "RESULT",
-    label4: "NG Values",
+    label4: "Values",
     placeholder4: "NG, FAIL, 0",
     hint3: "Result key inside the written files",
     hint4: "Values representing NG/failure",
   },
   TCP_CLIENT: {
-    label1: "Machine Source IP",
+    label1: " IP",
     placeholder1: "192.168.1.120",
-    label2: "Machine Source Port",
+    label2: "Port",
     placeholder2: "9001",
     type2: "number",
     label3: "Result key / parser key",
     placeholder3: "RESULT",
-    label4: "NG Values",
+    label4: "Values",
     placeholder4: "NG, FAIL, 0",
     hint3: "Key to evaluate quality from incoming TCP payload",
     hint4: "Values representing NG/failure",
@@ -159,8 +159,8 @@ const SPC_MODE_FIELDS = {
     type2: "number",
     label3: "Result key / parser key",
     placeholder3: "RESULT",
-    label4: "NG Values",
-    placeholder4: "NG, FAIL, 0",
+    label4: "Values",
+    placeholder4: "",
     hint3: "Key to evaluate quality from incoming payload",
     hint4: "Values representing NG/failure",
   },
@@ -172,20 +172,20 @@ const SPC_MODE_FIELDS = {
     type2: "number",
     label3: "Result key / parser key",
     placeholder3: "RESULT",
-    label4: "NG Values",
-    placeholder4: "NG, FAIL, 0",
+    label4: "Values",
+    placeholder4: "",
     hint3: "Key used to parse quality result from serial payload",
     hint4: "Values representing NG/failure",
   },
 };
 
 const ACQUISITION_PROTOCOLS = [
-  { id: "IP_PUSH", label: "IP Push", hint: "Machine software pushes payload to bridge listener" },
-  { id: "PLC_REGISTER", label: "PLC Register", hint: "Read part/result directly from PLC registers" },
-  { id: "HTTP_API", label: "HTTP API", hint: "Poll/fetch payload from machine-side API endpoint" },
-  { id: "FOLDER", label: "File / Folder", hint: "Watch TXT/CSV/LOG/JSON output generated on system" },
-  { id: "TCP_CLIENT", label: "TCP Client", hint: "Bridge connects to machine IP:Port and reads packets" },
-  { id: "TCP_SERVER", label: "TCP Server", hint: "Bridge opens listener and machine sends packets" },
+  { id: "IP_PUSH", label: "IP Push"  },
+  { id: "PLC_REGISTER", label: "PLC Register" },
+  { id: "HTTP_API", label: "HTTP API" },
+  { id: "FOLDER", label: "File / Folder" },
+  { id: "TCP_CLIENT", label: "TCP Client" },
+  { id: "TCP_SERVER", label: "TCP Server" },
   { id: "SERIAL", label: "Serial / USB", hint: "COM scanner input via serial adapter provision" },
 ];
 
@@ -654,6 +654,12 @@ function buildPayload(f) {
       type: (r.type || "INT16").toUpperCase(),
       scale: parseFloat(r.scale) || 1,
       unit: r.unit || "",
+      saveAs: r.saveAs || "",
+      required: Boolean(r.required),
+      okValues: String(r.okValues || "").split(/[,;|]/).map((v) => v.trim()).filter(Boolean),
+      ngValues: String(r.ngValues || "").split(/[,;|]/).map((v) => v.trim()).filter(Boolean),
+      pendingValues: String(r.pendingValues || "").split(/[,;|]/).map((v) => v.trim()).filter(Boolean),
+      validationRule: r.validationRule || "",
     })).filter((r) => r.register !== null),
     sourceConfigNotes: (f.sourceConfigNotes || "").trim() || null,
   };
@@ -1143,13 +1149,33 @@ export default function MachinePage() {
     setTesting(true);
     setTestResult(null);
     try {
-      const mode = String(form.spcMode || "IP_PUSH").toUpperCase();
-      const endpoint =
-        mode === "HTTP_API"
-          ? form.spcSourceIp
-          : mode === "FOLDER"
-            ? null
-            : undefined;
+      const uiMode = String(form.spcMode || "TCP_CLIENT").toUpperCase();
+      const modeMap = {
+        TCP_CLIENT: "TCP_CLIENT",
+        TCP_SERVER: "TCP_SERVER",
+        USB_SCANNER: "USB_SCANNER",
+        SERIAL: "SERIAL",
+        PLC_SLMP: "PLC_REGISTER",
+        MODBUS_TCP: "PLC_REGISTER",
+        FILE_WATCHER: "FILE_WATCH",
+        HTTP_PUSH: "HTTP_API",
+        SIMULATION: "SIMULATION",
+      };
+      const mode = modeMap[uiMode] || "TCP_CLIENT";
+      const endpoint = mode === "HTTP_API" ? form.spcSourceIp : mode === "FILE_WATCH" ? null : undefined;
+      const sourceIp = mode === "SERIAL" ? (form.spcSourceIp || "") : (form.spcSourceIp || form.plcIp || "");
+      const sourcePort = mode === "USB_SCANNER" ? null : toNum(form.spcSourcePort || form.plcPort);
+
+      if (mode === "TCP_CLIENT" && !sourceIp) {
+        throw new Error("Source IP is required for TCP Client test");
+      }
+      if (mode === "TCP_SERVER" && !sourcePort) {
+        throw new Error("Listener Port is required for TCP Server test");
+      }
+      if (mode === "PLC_REGISTER" && (!sourceIp || !sourcePort)) {
+        throw new Error("PLC IP and PLC Port are required for PLC protocol test");
+      }
+
       const folderConfig = {
         path: form.spcFolderPath || form.spcSourceIp,
         pattern: form.spcFolderPattern || form.spcPayloadKey || "*.*",
@@ -1159,8 +1185,8 @@ export default function MachinePage() {
 
       const connection = await machineApi.testConnection({
         mode,
-        sourceIp: form.spcSourceIp || form.plcIp,
-        sourcePort: toNum(form.spcSourcePort || form.plcPort),
+        sourceIp,
+        sourcePort,
         endpoint,
         folderConfig,
         plcProtocol: form.plcProtocol,
@@ -1171,7 +1197,7 @@ export default function MachinePage() {
       });
 
       const payload = {
-        mode,
+        mode: uiMode,
         connectivity: connection,
       };
 
@@ -1259,7 +1285,7 @@ export default function MachinePage() {
       ...p,
       spcDynamicRegisters: [
         ...(Array.isArray(p.spcDynamicRegisters) ? p.spcDynamicRegisters : []),
-        { id: uid(), name: "", register: "", device: p.plcDevice || "D", type: "INT16", scale: "1", unit: "" },
+        { id: uid(), name: "", register: "", device: p.plcDevice || "D", type: "INT16", scale: "1", unit: "", saveAs: "", required: false, okValues: "", ngValues: "", validationRule: "" },
       ],
     }));
   };
@@ -1783,18 +1809,7 @@ export default function MachinePage() {
               {activeTab === "signals" && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 
-                  {/* Explanation */}
-                  <div style={{ padding: "10px 12px", background: C.blueLt + "55", border: `1px solid ${C.blueBd}`, borderRadius: 7 }}>
-                    <p style={{ margin: 0, fontSize: 11, color: C.sec, lineHeight: 1.6 }}>
-                      <strong>Signals define the PLC handshake sequence.</strong> The backend executes them in order (seq ↑).
-                      Use <strong>WRITE</strong> to send a value to the PLC, <strong>READ</strong> to read a value from the PLC,
-                      <strong>BOTH</strong> for bidirectional registers.
-                      Device: <code style={{ fontFamily: "ui-monospace,monospace" }}>D</code>=data,
-                      <code style={{ fontFamily: "ui-monospace,monospace" }}>M</code>=bit,
-                      <code style={{ fontFamily: "ui-monospace,monospace" }}>R</code>=file,
-                      <code style={{ fontFamily: "ui-monospace,monospace" }}>W</code>=link.
-                    </p>
-                  </div>
+                  
 
                   {/* Column headers */}
                   {form.handshakeSignals.length > 0 && (
@@ -1861,14 +1876,7 @@ export default function MachinePage() {
               {activeTab === "data" && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                
-                  {/* Explanation */}
-                  <div style={{ padding: "10px 12px", background: C.tealLt + "55", border: `1px solid ${C.tealBd}`, borderRadius: 7 }}>
-                    <p style={{ margin: 0, fontSize: 11, color: C.sec, lineHeight: 1.6 }}>
-                      <strong>Data register ranges</strong> let you read blocks of consecutive registers (e.g. D2060 to D2064 = 5 registers).
-                      These are polled by the backend after each cycle and shown in the live data panel and GlobalPopup measurements view.
-                      Set tolerance min/max for automatic OK/NG quality checks.
-                    </p>
-                  </div>
+                  
 
                   {form.dataRegisterRanges.length === 0 ? (
                     <div style={{ padding: "40px 20px", textAlign: "center", border: `2px dashed ${C.border}`, borderRadius: 8, color: C.hint }}>
@@ -1970,20 +1978,12 @@ export default function MachinePage() {
                     <Toggle checked={form.spcEnabled} onChange={(v) => setF("spcEnabled", v)} color={C.green} />
                   </div>
 
-                  <div style={{ padding: "10px 12px", background: C.card, border: `1px solid ${C.border}`, borderRadius: 7 }}>
-                    <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: C.text }}>Bridge Connectivity Guide</p>
-                    <ol style={{ margin: "6px 0 0 16px", padding: 0, fontSize: 11, color: C.sec, lineHeight: 1.5 }}>
-                      <li>Bridge runs on station system and reads source data (PLC/file/TCP/serial).</li>
-                      <li>Bridge sends JSON to MES backend using MES server IP and port.</li>
-                      <li>System IP is needed only when source is remote (remote PLC/TCP/folder share).</li>
-                      <li>If bridge is already reading and forwarding directly, no extra file-read setup is required here.</li>
-                    </ol>
-                  </div>
+                  
 
                   {form.spcEnabled && (
                     <>
                       <div>
-                        <Label>Data source mode</Label>
+                    
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, alignItems: "end" }}>
                           <div>
                             <Label>Protocol</Label>
@@ -2002,50 +2002,20 @@ export default function MachinePage() {
                             </FSelect>
                           </div>
                           <div style={{ paddingBottom: 6 }}>
-                            <p style={{ margin: 0, fontSize: 10, color: C.hint }}>
-                              {(ACQUISITION_PROTOCOLS.find((m) => m.id === form.spcMode) || {}).hint || "Select source protocol."}
-                            </p>
-                            <button
-                              type="button"
-                              onClick={() => setShowSourceFieldGuide((s) => !s)}
-                              style={{
-                                marginTop: 6,
-                                padding: "4px 8px",
-                                borderRadius: 6,
-                                border: `1px solid ${C.border}`,
-                                background: C.card,
-                                color: C.sec,
-                                fontSize: 10,
-                                fontWeight: 700,
-                                cursor: "pointer",
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: 4,
-                              }}
-                              title="Show protocol-wise field guide"
-                            >
-                              <Info size={10} /> {showSourceFieldGuide ? "Hide Field Guide" : "Show Field Guide"}
-                            </button>
+                            
+                            
                           </div>
                         </div>
-                        {showSourceFieldGuide && (
-                          <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.card }}>
-                            <p style={{ margin: 0, fontSize: 10, color: C.sec }}>
-                              `PLC_REGISTER` uses Network/PLC endpoint and register-based quality read.
-                              `FOLDER` uses folder settings below.
-                              Other modes use source endpoint + payload key + NG values.
-                            </p>
-                          </div>
-                        )}
+                        
                       </div>
 
                       {(() => {
-                        const mode = String(form.spcMode || "IP_PUSH").toUpperCase();
-                        const cfg = SPC_MODE_FIELDS[form.spcMode || "IP_PUSH"] || SPC_MODE_FIELDS.IP_PUSH;
-                        const showEndpointFields = !["PLC_REGISTER", "FOLDER"].includes(mode);
+                        const mode = String(form.spcMode || "TCP_CLIENT").toUpperCase();
+                        const cfg = SPC_MODE_FIELDS[form.spcMode || "TCP_CLIENT"] || SPC_MODE_FIELDS.TCP_CLIENT;
+                        const showEndpointFields = !["USB_SCANNER", "FILE_WATCHER", "SIMULATION"].includes(mode);
                         return (
                           <>
-                            {mode === "PLC_REGISTER" ? (
+                            {["PLC_SLMP", "MODBUS_TCP"].includes(mode) ? (
                               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                                 <div style={{ gridColumn: "1 / -1", padding: "8px 10px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.card }}>
                                   <p style={{ margin: 0, fontSize: 10, color: C.hint }}>
@@ -2057,7 +2027,7 @@ export default function MachinePage() {
                                   <FInput type="number" value={form.spcPayloadKey} onChange={(e) => setF("spcPayloadKey", e.target.value)} placeholder={cfg.placeholder3} mono />
                                 </div>
                                 <div>
-                                  <Label hint={cfg.hint4}>{cfg.label4}</Label>
+                                  <Label hint="Optional default NG list. Prefer per-field mapping below.">{cfg.label4}</Label>
                                   <FInput value={form.spcNgValues} onChange={(e) => setF("spcNgValues", e.target.value)} placeholder={cfg.placeholder4} mono />
                                 </div>
                               </div>
@@ -2086,7 +2056,7 @@ export default function MachinePage() {
                                   <FInput value={form.spcPayloadKey} onChange={(e) => setF("spcPayloadKey", e.target.value)} placeholder={cfg.placeholder3} mono />
                                 </div>
                                 <div>
-                                  <Label hint={cfg.hint4}>{cfg.label4}</Label>
+                                  <Label hint="Optional default NG list. Prefer per-field mapping below.">{cfg.label4}</Label>
                                   <FInput value={form.spcNgValues} onChange={(e) => setF("spcNgValues", e.target.value)} placeholder={cfg.placeholder4} />
                                 </div>
                               </div>
@@ -2112,14 +2082,7 @@ export default function MachinePage() {
                         );
                       })()}
 
-                      <div style={{ padding: "10px 12px", background: C.muted, border: `1px solid ${C.border}`, borderRadius: 7 }}>
-                        <p style={{ margin: 0, fontSize: 11, color: C.sec }}>
-                          <Info size={11} style={{ verticalAlign: "middle", marginRight: 4 }} />
-                          Quality result acknowledgement is handled via the Confirmation signal defined in the Signals tab.
-                          Data register ranges defined in the Data Registers tab are also read on cycle end and attached to the quality record.
-                          For machine onboarding standards, use this tab to maintain a single stable protocol profile and dynamic register mapping.
-                        </p>
-                      </div>
+                      
 
                       {String(form.spcMode || "").toUpperCase() === "FOLDER" && (
                         <SectionCard title="Folder Source Settings" subtitle="TXT/CSV/LOG/JSON from machine software" icon={Database}>
@@ -2150,86 +2113,13 @@ export default function MachinePage() {
                         </SectionCard>
                       )}
 
-                      <SectionCard title="Dynamic PLC Registers" subtitle="Read additional fields like partId/customerQR/measurements" icon={TableProperties}>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                          {(form.spcDynamicRegisters || []).map((row, i) => (
-                            <div key={row.id || i}
-                              style={{
-                                display: "grid",
-                                gridTemplateColumns: "1fr 90px 70px 90px 80px 70px 28px",
-                                gap: 6,
-                                alignItems: "end",
-                                padding: "8px 10px",
-                                border: `1px solid ${C.border}`,
-                                borderRadius: 7,
-                                background: C.card,
-                              }}>
-                              <div>
-                                <Label>Name</Label>
-                                <FInput value={row.name} onChange={(e) => updateDynamicRegister(i, "name", e.target.value)} placeholder="customerQr / partId / torque" />
-                              </div>
-                              <div>
-                                <Label>Register</Label>
-                                <FInput value={row.register} onChange={(e) => updateDynamicRegister(i, "register", e.target.value)} placeholder="2065" mono type="number" />
-                              </div>
-                              <div>
-                                <Label>Device</Label>
-                                <FSelect value={row.device || "D"} onChange={(e) => updateDynamicRegister(i, "device", e.target.value)} mono>
-                                  {DEVICES.map((d) => <option key={d} value={d}>{d}</option>)}
-                                </FSelect>
-                              </div>
-                              <div>
-                                <Label>Type</Label>
-                                <FSelect value={row.type || "INT16"} onChange={(e) => updateDynamicRegister(i, "type", e.target.value)}>
-                                  {DATA_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-                                </FSelect>
-                              </div>
-                              <div>
-                                <Label>Scale</Label>
-                                <FInput value={row.scale} onChange={(e) => updateDynamicRegister(i, "scale", e.target.value)} placeholder="1" mono />
-                              </div>
-                              <div>
-                                <Label>Unit</Label>
-                                <FInput value={row.unit} onChange={(e) => updateDynamicRegister(i, "unit", e.target.value)} placeholder="mm" />
-                              </div>
-                              <div style={{ paddingBottom: 2 }}>
-                                <IconBtn icon={Trash2} title="Remove" onClick={() => removeDynamicRegister(i)} color={C.red} hoverColor={C.red} hoverBg={C.redLt} />
-                              </div>
-                            </div>
-                          ))}
-                          <button type="button" onClick={addDynamicRegister}
-                            style={{ alignSelf: "flex-start", display: "inline-flex", alignItems: "center", gap: 5, padding: "7px 12px", borderRadius: 7, border: `1px solid ${C.border}`, background: C.card, color: C.sec, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-                            <Plus size={12} /> Add Dynamic Register
-                          </button>
-                        </div>
-                      </SectionCard>
+               
 
-                      <SectionCard title="Reliability Controls" subtitle="Timeout and retry for source read operations" icon={Activity}>
-                        <div style={{ display: "grid", gridTemplateColumns: "140px 140px 160px", gap: 10 }}>
-                          <div>
-                            <Label>Retry Count</Label>
-                            <FInput type="number" value={form.spcRetryCount} onChange={(e) => setF("spcRetryCount", e.target.value)} placeholder="4" mono />
-                          </div>
-                          <div>
-                            <Label>Retry Delay ms</Label>
-                            <FInput type="number" value={form.spcRetryDelayMs} onChange={(e) => setF("spcRetryDelayMs", e.target.value)} placeholder="1500" mono />
-                          </div>
-                          <div>
-                            <Label>Timeout ms</Label>
-                            <FInput type="number" value={form.spcTimeoutMs} onChange={(e) => setF("spcTimeoutMs", e.target.value)} placeholder="12000" mono />
-                          </div>
-                        </div>
-                      </SectionCard>
+                    
 
-                      <div>
-                        <Label>Source Notes / SOP</Label>
-                        <textarea
-                          value={form.sourceConfigNotes}
-                          onChange={(e) => setF("sourceConfigNotes", e.target.value)}
-                          placeholder="Document per-machine data pickup strategy (file path, PLC register plan, scanner source, fallback)."
-                          style={{ ...inp, height: 70, padding: 10, resize: "vertical", fontFamily: "inherit" }}
-                        />
-                      </div>
+                  
+
+                   
                     </>
                   )}
                 </div>

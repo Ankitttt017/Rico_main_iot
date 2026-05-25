@@ -14,6 +14,7 @@ import { scannerApi } from "../api/services";
 import { formatMachineLabel } from "../utils/machineFields";
 
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:4000";
+const CONNECTION_GRACE_MS = Number(import.meta.env.VITE_SCANNER_CONNECTION_GRACE_MS || 20000);
 
 // ── Design tokens ──────────────────────────────────────────────────────────
 const DS = `
@@ -83,6 +84,13 @@ function fmtTime(v) {
   return isNaN(d) ? "—" : d.toLocaleTimeString();
 }
 
+function isRecentWithinGrace(isoValue, graceMs = CONNECTION_GRACE_MS) {
+  if (!isoValue) return false;
+  const ms = new Date(isoValue).getTime();
+  if (!Number.isFinite(ms)) return false;
+  return (Date.now() - ms) <= graceMs;
+}
+
 // ── Atoms ──────────────────────────────────────────────────────────────────
 const Badge = ({ variant = "idle", label, pulse }) => {
   const map = {
@@ -149,11 +157,12 @@ const PingModal = ({ scanner, onClose }) => {
     const t0 = Date.now();
     try {
       const res = await scannerApi.testConnection(scanner.id);
+      const ok = Boolean(res?.reachable);
+      const mode = String(res?.scannerMode || scanner?.scannerMode || "TCP_CLIENT").toUpperCase();
       setResult({
-        success:  Boolean(res?.reachable),
-        message:  res?.reachable
-          ? `Scanner responded successfully. TCP connection on port ${scanner.scannerPort || "unspecified"} is active.`
-          : `No response from ${scanner.scannerIp}. Check IP address and cable connection.`,
+        success: ok,
+        mode,
+        message: res?.message || (ok ? "Scanner test completed." : "Scanner test failed."),
         latency: Date.now() - t0,
       });
     } catch (e) {
@@ -197,7 +206,7 @@ const PingModal = ({ scanner, onClose }) => {
             <div>
               <p style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase",
                 letterSpacing: "0.1em", color: C.txt("muted"), marginBottom: 1 }}>
-                Ping Test
+                Scanner Test
               </p>
               <p style={{ fontSize: 13, fontWeight: 700, color: C.txt("pri") }}>
                 {scanner.scannerName || "Scanner"}
@@ -247,11 +256,11 @@ const PingModal = ({ scanner, onClose }) => {
           </div>
 
           <p style={{ fontSize: 12, color: C.txt("muted"), lineHeight: 1.6, marginBottom: 18 }}>
-            This will send a TCP ping to the scanner at{" "}
+            This runs a mode-aware scanner test for{" "}
             <span style={{ fontFamily: "'DM Mono',monospace", color: C.steel(), fontWeight: 700 }}>
               {scanner.scannerIp}{scanner.scannerPort ? `:${scanner.scannerPort}` : ""}
             </span>{" "}
-            to check if it is reachable on the network.
+            and validates backend listener/data flow for push-mode scanners.
           </p>
 
           {/* Result */}
@@ -269,7 +278,7 @@ const PingModal = ({ scanner, onClose }) => {
               <div>
                 <p style={{ fontSize: 12, fontWeight: 700, marginBottom: 4,
                   color: result.success ? C.ok() : C.ng() }}>
-                  {result.success ? "Scanner Reachable" : "Scanner Unreachable"}
+                  {result.success ? "Test Passed" : "Test Failed"}
                 </p>
                 <p style={{ fontSize: 11, lineHeight: 1.5,
                   color: result.success ? C.ok(0.85) : C.ng(0.85) }}>
@@ -291,7 +300,7 @@ const PingModal = ({ scanner, onClose }) => {
             <Btn onClick={runPing} loading={testing} variant="amber"
               style={{ flex: 2, justifyContent: "center" }}>
               {!testing && <Play size={13}/>}
-              {testing ? "Pinging…" : result ? "Ping Again" : "Start Ping Test"}
+              {testing ? "Testing…" : result ? "Test Again" : "Start Test"}
             </Btn>
           </div>
         </div>
@@ -538,7 +547,7 @@ const ScannerMonitor = () => {
               </thead>
               <tbody>
                 {rows.map((row, i) => {
-                  const conn = Boolean(row?.connection?.connected);
+                  const conn = Boolean(row?.connection?.connected) || isRecentWithinGrace(row?.connection?.lastDataAt);
                   return (
                     <tr key={row.id} style={{
                       borderBottom: `1px solid ${C.bdr()}`,

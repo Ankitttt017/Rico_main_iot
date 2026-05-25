@@ -11,6 +11,7 @@ class PlcPollingService {
     this.pollers = new Map(); // machineId -> intervalRef
     this.signalHistory = new Map(); // machineId -> { signalName -> [values] }
     this.DEFAULT_POLLING_INTERVAL_MS = 300;
+    this.QUIET_PLC_POLL_LOGS = String(process.env.QUIET_PLC_POLL_LOGS || "true").trim().toLowerCase() !== "false";
   }
 
   async start() {
@@ -276,7 +277,9 @@ class PlcPollingService {
       if (error.code === "EADDRNOTAVAIL" || error.message?.includes("0.0.0.0")) {
         return null;
       }
-      console.error(`[PollingService] Live read failed for machine ${machine.id}:`, error.message);
+      if (!this.QUIET_PLC_POLL_LOGS) {
+        console.error(`[PollingService] Live read failed for machine ${machine.id}:`, error.message);
+      }
       return null;
 
     }

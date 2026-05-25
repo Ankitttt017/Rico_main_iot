@@ -1,3 +1,9 @@
+const QUIET_INDUSTRIAL_LOGS = String(process.env.QUIET_INDUSTRIAL_LOGS || "true").trim().toLowerCase() !== "false";
+const SUPPRESSED_WARN_EVENTS = new Set([
+  "WATCHDOG_PLC_UNHEALTHY",
+  "WATCHDOG_BACKEND_HEARTBEAT",
+]);
+
 function toLogLine(event, payload = {}) {
   const safe = Object.entries(payload)
     .filter(([, v]) => v !== undefined)
@@ -11,6 +17,9 @@ function logInfo(event, payload) {
 }
 
 function logWarn(event, payload) {
+  if (QUIET_INDUSTRIAL_LOGS && SUPPRESSED_WARN_EVENTS.has(String(event || "").trim().toUpperCase())) {
+    return;
+  }
   console.warn(toLogLine(event, payload));
 }
 
