@@ -1,67 +1,23 @@
 name: Rico IoT - Auto Deploy
-
 on:
   push:
     branches:
       - master
-
 jobs:
   deploy:
     name: Build and Deploy
     runs-on: self-hosted
-    env:
-      DEPLOY_ROOT: "C:\\Users\\IOT1\\Desktop\\Rico_Main_Iot\\Rico_main_iot"
-
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
-
       - name: Install Frontend Dependencies
-        working-directory: ./Rico_main_iot/frontend
+        working-directory: C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\frontend
         run: npm install
-
-      - name: Build Frontend (Vite)
-        working-directory: ./Rico_main_iot/frontend
+      - name: Build Frontend
+        working-directory: C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\frontend
         run: npm run build
-
-      - name: Deploy Frontend Build
-        shell: powershell
-        run: |
-          $distSource = Join-Path $PWD "frontend\dist"
-          $distTarget = Join-Path $env:DEPLOY_ROOT "frontend\dist"
-          if (!(Test-Path $distSource)) {
-            throw "Frontend build output not found: $distSource"
-          }
-          New-Item -ItemType Directory -Force -Path $distTarget | Out-Null
-          robocopy $distSource $distTarget /MIR
-          if ($LASTEXITCODE -gt 7) {
-            exit $LASTEXITCODE
-          }
-          $global:LASTEXITCODE = 0
-
-      - name: Deploy Backend Source
-        shell: powershell
-        run: |
-          $backendSource = Join-Path $PWD "backend\rico-iot"
-          $backendTarget = Join-Path $env:DEPLOY_ROOT "backend\rico-iot"
-          if (!(Test-Path $backendSource)) {
-            throw "Backend source not found: $backendSource"
-          }
-          New-Item -ItemType Directory -Force -Path $backendTarget | Out-Null
-          robocopy $backendSource $backendTarget /MIR /XD node_modules uploads /XF .env backend.log backend.err.log
-          if ($LASTEXITCODE -gt 7) {
-            exit $LASTEXITCODE
-          }
-          $global:LASTEXITCODE = 0
-
       - name: Install Backend Dependencies
         working-directory: C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\backend\rico-iot
         run: npm install
-
-      - name: Restart Backend with PM2
+      - name: Restart Backend
         run: pm2 restart rico-iot-backend
-
       - name: Reload Nginx
-        run: |
-          cd C:\nginx
-          .\nginx.exe -s reload
+        run: cd C:\nginx && .\nginx.exe -s reload
