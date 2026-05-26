@@ -1,5 +1,5 @@
 // UPGRADE COMPLETE - GlobalPopup (v4.1 - Enhanced Visibility & Timer)
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle,
@@ -180,7 +180,7 @@ function resolveOperationState(popup = {}) {
   return "IDLE";
 }
 
-function resolveRejectionState(popup = {}, operationState) {
+function resolveRejectionState(popup = {}) {
   const explicit = String(
     popup.rejectionStatus || popup.rejectionDecision || ""
   )
@@ -485,6 +485,7 @@ const GlobalPopup = ({
   const [localScanDecision, setLocalScanDecision] = useState("");
   const [awaitingNextScan, setAwaitingNextScan] = useState(false);
   const [submittedPartId, setSubmittedPartId] = useState("");
+  const manualSubmitTimerRef = useRef(null);
   const submittedPartIdRef = useRef("");
   // Use ref so handleValidateQr sets value synchronously before socket/useEffect can read stale state
   const [localQrValidated, setLocalQrValidated] = useState(false);
@@ -701,7 +702,8 @@ const GlobalPopup = ({
         reason: manualSelection === "NG" ? normalizedReason : undefined,
       });
       setManualSuccessMsg(res?.message || `Part ${manualSelection === "OK" ? "accepted" : "rejected"} - ready for next scan.`);
-      setTimeout(() => {
+      if (manualSubmitTimerRef.current) clearTimeout(manualSubmitTimerRef.current);
+      manualSubmitTimerRef.current = setTimeout(() => {
         // return popup to initial state after successful submit
         setLocalQrValidated(false);
         localValidatedPartIdRef.current = "";
@@ -732,6 +734,9 @@ const GlobalPopup = ({
       setSubmittingManual(false);
     }
   };
+  useEffect(() => () => {
+    if (manualSubmitTimerRef.current) clearTimeout(manualSubmitTimerRef.current);
+  }, []);
 
   // Auto-close timer with linear decreasing interval logic
   useEffect(() => {

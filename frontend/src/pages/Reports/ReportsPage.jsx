@@ -121,8 +121,8 @@ const ReportsPage = () => {
     machineApi.list().then(setMachines).catch(console.error);
     shiftApi.list().then(setAvailableShifts).catch(() => []);
     fetchData();
-    try { setReportConfig(loadReportConfig()); } catch {}
-  }, []);
+    try { setReportConfig(loadReportConfig()); } catch (err) { void err; }
+  }, [fetchData]);
 
   const handleExport = async (type = "full") => {
     setExportLoading(true);
@@ -312,10 +312,6 @@ const ReportsPage = () => {
 
     return { columns: dynamicColumns, rows: dynamicRows };
   }, [data.rows, filters.machineId, machines]);
-  const selectedFilterCount = useMemo(() => {
-    const keys = ["machineId", "lineName", "shiftCode", "status", "barcode", "dateFrom", "dateTo"];
-    return keys.reduce((acc, k) => acc + (filters[k] ? 1 : 0), 0);
-  }, [filters]);
   const availableLines = useMemo(
     () => [...new Set((machines || []).map((m) => String(m.line_name || m.lineName || "").trim()).filter(Boolean))],
     [machines]

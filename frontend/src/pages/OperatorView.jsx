@@ -10,6 +10,7 @@ import {
 import {
   ResponsiveContainer, ComposedChart, CartesianGrid, XAxis, YAxis, Tooltip, Bar, Line,
 } from "recharts";
+import SafeChart from "../components/charts/SafeChart";
 import { machineApi, scannerApi, stationSettingsApi, traceabilityApi } from "../api/services";
 import GlobalPopup from "../components/GlobalPopup";
 import ConfirmModal from "../components/ConfirmModal";
@@ -201,10 +202,6 @@ function normalizeDecisionState(value) {
   if (["BLOCK", "FAIL", "NG", "REJECT", "INVALID"].includes(n)) return "FAIL";
   if (n === "WAIT") return "WAIT";
   return "";
-}
-function mapBlockReasonToPlcStatus(payload = {}) {
-  const explicit = String(payload.plcStatus || payload.operationStatus || payload.status || "").trim().toUpperCase();
-  return explicit || "WAIT";
 }
 function isResetLikePayload(payload = {}) {
   const status = String(payload.status || payload.plcStatus || payload.plc_status || "").trim().toUpperCase();
@@ -474,7 +471,6 @@ const OperatorView = () => {
   const [loadingStats, setLoadingStats] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [popup, setPopup] = useState(null);
-  const [usbDebug, setUsbDebug] = useState("");
   const usbScannerInputRef = useRef(null);
   const usbBufferRef = useRef("");
   const usbFlushTimerRef = useRef(null);
@@ -484,7 +480,6 @@ const OperatorView = () => {
   const [qrFeed, setQrFeed] = useState([]);
   const [resetConfirm, setResetConfirm] = useState(null);
   const [clockTick, setClockTick] = useState(Date.now());
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [stationLock, setStationLock] = useState(() => {
     try {
       const raw = localStorage.getItem(OPERATOR_STATION_LOCK_KEY);
@@ -495,6 +490,7 @@ const OperatorView = () => {
   });
   const [showStationSelectModal, setShowStationSelectModal] = useState(false);
   const [pendingMachineId, setPendingMachineId] = useState("");
+  const [, setUsbDebug] = useState("");
 
   // Responsive breakpoints
   const [breakpoint, setBreakpoint] = useState(() => {
@@ -514,7 +510,6 @@ const OperatorView = () => {
   const lastLiveRefreshRef = useRef(0);
   const lastQrEventRef = useRef({ key: "", at: 0 });
   const lastPopupEventRef = useRef({ key: "", at: 0 });
-  const lastSimulationActiveRef = useRef(false);
 
   const isMobile = breakpoint === "sm" || breakpoint === "md";
   const isTablet = breakpoint === "lg";
@@ -524,7 +519,6 @@ const OperatorView = () => {
   const isStandaloneAppMode = Boolean(isAppDisplayMode || isIosStandalone);
   const enforceStationLockMode = isCompact || isStandaloneAppMode;
   const hasLockedSelection = Boolean(stationLock?.machineId);
-  const machineSelectionLocked = enforceStationLockMode && hasLockedSelection;
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -629,7 +623,6 @@ const OperatorView = () => {
   }, [isOperationEnabled, isManualResultStation, liveState?.machineState?.state, currentContext?.plcStatus]);
 
   const opVariant = useMemo(() => getOperationVariant(opStatusSource), [opStatusSource]);
-  const opLabel = useMemo(() => getOperationLabel(opStatusSource), [opStatusSource]);
 
   const openScannerReadyPopup = useCallback(() => {
     if (!selectedMachineId || !selectedStation) return;
@@ -780,9 +773,8 @@ const OperatorView = () => {
   }, [loadMachineTelemetry]);
 
   const isDuplicatePopupEvent = useCallback((payload = {}) => {
-    const type = String(payload.type || "").trim().toUpperCase();
-    // Never suppress hard error popups; operators need immediate feedback on each bad scan.
-    if (type === "ERROR") return false;
+    // Allow first error immediately, but dedupe identical error bursts in short window
+    // to avoid visual blinking/flooding from repeated backend emits.
     const key = [String(payload.type || "").trim().toUpperCase(), normalizePartId(payload.partId || payload.part_id),
     String(payload.stationNo || payload.station_no || "").trim().toUpperCase(),
     normalizeDecisionState(payload.qrResult || payload.qr_result),
@@ -849,24 +841,38 @@ const OperatorView = () => {
         ? `Final station PASS: Eligible for packing (${sig.stationNo || "Station"}).`
         : `Scan accepted at ${sig.stationNo || "Station"}`);
     const passOperationStatus = getPassOperationStatusForStation(sig.stationNo, stationSettings);
-    setPopup((prev) => ({
+    setPopup((prev) => {
+      const nextPartId = sig.partId || prev?.partId || prev?.part_id || "";
+      const nextStationNo = sig.stationNo || prev?.stationNo || prev?.station_no || "";
+      const nextType = isBlockedDecision ? "ERROR" : "INFO";
+      const prevPartId = prev?.partId || prev?.part_id || "";
+      const prevStationNo = prev?.stationNo || prev?.station_no || "";
+      const prevType = prev?.type || "";
+      const isIdentityChanged = String(nextPartId) !== String(prevPartId) || String(nextStationNo) !== String(prevStationNo) || String(nextType) !== String(prevType);
+      return ({
       ...prev,
-      type: isBlockedDecision ? "ERROR" : "INFO",
+      type: nextType,
       title: isBlockedDecision ? "Scan Blocked" : "Scan Passed",
       message: fallbackMessage,
       reason: String(payload.reason || payload.qrReason || "").trim(),
-      partId: sig.partId || prev?.partId || prev?.part_id || "",
-      stationNo: sig.stationNo || prev?.stationNo || prev?.station_no || "",
+      partId: nextPartId,
+      stationNo: nextStationNo,
       machineId: payload.machineId || payload.machine_id || prev?.machineId || prev?.machine_id || "",
       machineName: payload.machineName || prev?.machineName || "",
       qrStatus: isBlockedDecision ? "FAILED" : "PASSED",
       operationStatus: isBlockedDecision ? "BLOCKED" : passOperationStatus,
       timestamp: payload.timestamp || new Date().toISOString(),
-      _shownAtMs: Date.now(),
-    }));
+      _shownAtMs: isIdentityChanged ? Date.now() : (prev?._shownAtMs || Date.now()),
+    })});
     setSuppressReadyPopup(false);
     const mk = selectedMachineIdRef.current;
-    if (mk) { try { const c = JSON.parse(localStorage.getItem(QR_STORAGE_KEY) || "{}"); c[mk] = sig; localStorage.setItem(QR_STORAGE_KEY, JSON.stringify(c)); } catch { } }
+    if (mk) {
+      try {
+        const c = JSON.parse(localStorage.getItem(QR_STORAGE_KEY) || "{}");
+        c[mk] = sig;
+        localStorage.setItem(QR_STORAGE_KEY, JSON.stringify(c));
+      } catch (err) { void err; }
+    }
     return true;
   }, [isPayloadForActiveMachine, stationSettings]);
 
@@ -910,19 +916,25 @@ const OperatorView = () => {
     });
   }, []);
 
-  const handleResetOperation = useCallback(async (partId, stationNo, options = {}) => {
+  const handleResetOperation = useCallback(async (partId, stationNo) => {
     const pid = normalizePartId(partId), sno = String(stationNo || "").trim().toUpperCase();
     if (!pid || !sno) return false;
     // PLC-only reset: clears machine FSM without touching part journey records
     const mId = String(selectedMachineIdRef.current || "");
     await traceabilityApi.resetPlcOnly({ partId: pid, stationNo: sno, machineId: mId || undefined });
     const mk = selectedMachineIdRef.current;
-    if (mk) { try { const c = JSON.parse(localStorage.getItem(QR_STORAGE_KEY) || "{}"); delete c[mk]; localStorage.setItem(QR_STORAGE_KEY, JSON.stringify(c)); } catch { } }
+    if (mk) {
+      try {
+        const c = JSON.parse(localStorage.getItem(QR_STORAGE_KEY) || "{}");
+        delete c[mk];
+        localStorage.setItem(QR_STORAGE_KEY, JSON.stringify(c));
+      } catch (err) { void err; }
+    }
     setQrSignal(null); setQrFeed([]);
     setPopup(null);
     setLiveState(prev => prev ? { ...prev, machineState: { ...prev.machineState, state: "IDLE" }, current: null } : null);
     scheduleLiveRefresh(); return true;
-  }, [mergePopupPayload, scheduleLiveRefresh]);
+  }, [scheduleLiveRefresh]);
 
   const openResetConfirm = useCallback((partId, stationNo) => {
     const pid = normalizePartId(partId);
@@ -973,7 +985,7 @@ const OperatorView = () => {
 
   useEffect(() => {
     const sync = async () => {
-      try { const r = await stationSettingsApi.list(); if (r && Object.keys(r).length > 0) { setStationSettings(r); saveStationFeatureSettings(r); return; } } catch { }
+      try { const r = await stationSettingsApi.list(); if (r && Object.keys(r).length > 0) { setStationSettings(r); saveStationFeatureSettings(r); return; } } catch (err) { void err; }
       setStationSettings(getStationFeatureSettings());
     };
     sync();
@@ -1060,10 +1072,10 @@ const OperatorView = () => {
       }
       if (rel || d) scheduleLiveRefresh();
     });
-    socket.on("PLC_RUNNING", (p = {}) => { scheduleLiveRefresh(); });
-    socket.on("PLC_COMPLETED_OK", (p = {}) => { scheduleLiveRefresh(); });
-    socket.on("PLC_COMPLETED_NG", (p = {}) => { scheduleLiveRefresh(); });
-    socket.on("RESET_COMPLETED", (p = {}) => { setQrSignal(null); setQrFeed([]); scheduleLiveRefresh(); });
+    socket.on("PLC_RUNNING", () => { scheduleLiveRefresh(); });
+    socket.on("PLC_COMPLETED_OK", () => { scheduleLiveRefresh(); });
+    socket.on("PLC_COMPLETED_NG", () => { scheduleLiveRefresh(); });
+    socket.on("RESET_COMPLETED", () => { setQrSignal(null); setQrFeed([]); scheduleLiveRefresh(); });
     
     socket.on("journey_update", (p = {}) => {
       if (String(p.sourceEvent || "").toLowerCase() === "scan_event") return;
@@ -1820,8 +1832,8 @@ const OperatorView = () => {
                 <p style={{ fontSize: 11, color: C.txt("muted") }}>No trend data for this station.</p>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  <div style={{ minHeight: isTablet ? 190 : (isCompact ? 220 : 250) }}>
-                    <ResponsiveContainer width="100%" height={isTablet ? 190 : (isCompact ? 220 : 250)} minWidth={1} minHeight={1}>
+                  <SafeChart height={isTablet ? 190 : (isCompact ? 220 : 250)}>
+                    <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} aspect={undefined}>
                       <ComposedChart data={trendChartData} margin={{ top: 6, right: 8, left: -14, bottom: 0 }}>
                         <CartesianGrid stroke={C.bdr(0.18)} strokeDasharray="3 4" vertical={false} />
                         <XAxis dataKey="hour" tick={{ fontSize: 10, fill: C.txt("muted"), fontFamily: "'DM Mono',monospace" }} axisLine={false} tickLine={false} />
@@ -1842,7 +1854,7 @@ const OperatorView = () => {
                         <Line yAxisId="util" type="monotone" dataKey="utilization" name="Utilization" stroke={C.amber()} strokeWidth={2} dot={false} />
                       </ComposedChart>
                     </ResponsiveContainer>
-                  </div>
+                  </SafeChart>
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                     <Badge variant="ok" label="Pass Output" />
                     <Badge variant="ng" label="Fail Output" />

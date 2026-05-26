@@ -97,51 +97,9 @@ function NodeCard({ node, index, isFirst, isLast, totalNodes }) {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      {/* Progress bar */}
-      <div
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          right: 0,
-          height: 3,
-          background: "var(--app-border)",
-          borderRadius: "16px 16px 0 0",
-          overflow: "hidden",
-        }}
-      >
-        <div
-          style={{
-            width: `${progressPercent}%`,
-            height: "100%",
-            background: `linear-gradient(90deg, ${status.fg}, ${status.fg}80)`,
-            transition: "width 0.5s ease",
-          }}
-        />
-      </div>
+     
 
-      {/* Step indicator with enhanced design */}
-      <div
-        style={{
-          position: "absolute",
-          top: -12,
-          left: 16,
-          background: "var(--app-bg-card)",
-          border: `1.5px solid ${status.bd}`,
-          borderRadius: 20,
-          padding: "2px 12px",
-          fontSize: 9,
-          fontWeight: 800,
-          color: status.fg,
-          display: "flex",
-          alignItems: "center",
-          gap: 4,
-          boxShadow: "0 2px 4px rgba(0,0,0,0.05)",
-        }}
-      >
-        {isFirst ? <Flag size={10} /> : isLast ? <CheckCircle size={10} /> : <Circle size={8} fill={status.fg} />}
-        STEP {String(index + 1).padStart(2, "0")}
-      </div>
+     
 
       {/* Icon and name */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, marginTop: 6 }}>
@@ -368,7 +326,7 @@ function LineHeader({ lineName, stats }) {
         backdropFilter: "blur(8px)",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <div
           style={{
             width: 44,
@@ -384,16 +342,16 @@ function LineHeader({ lineName, stats }) {
           <Route size={22} color="#fff" />
         </div>
         <div>
-          <div style={{ fontSize: 16, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", background: "linear-gradient(135deg, #3b82f6, #60a5fa)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+          <div style={{ fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", background: "linear-gradient(135deg, #3b82f6, #60a5fa)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
             {lineName}
           </div>
-          <div style={{ fontSize: 11, opacity: 0.7, marginTop: 2 }}>Production Workflow • Real-time Status</div>
+          <div style={{ fontSize: 10, opacity: 0.7, marginTop: 2 }}>Production Workflow • Real-time Status</div>
         </div>
       </div>
 
       {stats && (
         <div style={{ display: "flex", gap: 20 }}>
-          <div style={{ textAlign: "center", padding: "4px 8px", borderRadius: 8, background: "rgba(59,130,246,0.1)" }}>
+          <div style={{ textAlign: "center", padding: "2px 6px", borderRadius: 8, background: "rgba(59,130,246,0.1)" }}>
             <div style={{ fontSize: 10, opacity: 0.7 }}>Machines</div>
             <div style={{ fontSize: 20, fontWeight: 800, color: "#3b82f6" }}>{stats.totalMachines}</div>
           </div>

@@ -5,7 +5,7 @@
 //  ✓ Excel exports: Full / Parts / Audit
 //  ✓ Navy/Steel/Amber/Linen theme
 // ============================================================
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   TrendingUp, Download, RefreshCw, BarChart3,
   LineChart as LineChartIcon, AlertCircle, Clock,
@@ -22,6 +22,7 @@ import {
 } from "recharts";
 import { dashboardApi, machineApi } from "../api/services";
 import { CHART_COLORS, STATUS_COLORS } from "../constants/chartTheme";
+import SafeChart from "../components/charts/SafeChart";
 
 // ── Design tokens ──────────────────────────────────────────────────────────
 const DS = `
@@ -262,31 +263,6 @@ const Bdg=({v="idle",l})=>{
   return<span style={{display:"inline-flex",alignItems:"center",gap:4,padding:"2px 9px",
     borderRadius:99,fontSize:11,fontWeight:700,color:s.fg,background:s.bg,border:`1px solid ${s.bd}`}}>
     <span style={{width:5,height:5,borderRadius:"50%",background:s.fg}}/>{l}</span>;
-};
-
-const SafeChart = ({ height = 300, children }) => {
-  const hostRef = useRef(null);
-  const [ready, setReady] = useState(false);
-
-  useEffect(() => {
-    if (!hostRef.current) return;
-    const el = hostRef.current;
-    const check = () => {
-      const w = Math.floor(el.clientWidth || 0);
-      const h = Math.floor(el.clientHeight || 0);
-      setReady(w > 1 && h > 1);
-    };
-    check();
-    const ro = new ResizeObserver(check);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  return (
-    <div ref={hostRef} style={{ height, minHeight: 1, width: "100%", minWidth: 1 }}>
-      {ready ? children : null}
-    </div>
-  );
 };
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -1254,7 +1230,6 @@ const ProductionCharts=()=>{
                   <tbody>
                     {pagedParts.map((p,i)=>{
                       const res=String(p.result||p.status||"").toUpperCase();
-                      const isOk=["OK","PASS","COMPLETED","ENDED_OK"].includes(res);
                       const isNg=["NG","FAIL","FAILED","ENDED_NG","INTERLOCKED"].includes(res);
                       const statusMap = getPartStationStatusMap(p);
                       const finalStatus = getFinalPartStatus(p);

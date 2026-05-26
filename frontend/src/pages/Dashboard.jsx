@@ -20,8 +20,9 @@ import {
 } from "recharts";
 import { dashboardApi, machineApi } from "../api/services";
 import ChartTooltip from "../components/charts/ChartTooltip";
+import SafeChart from "../components/charts/SafeChart";
 import axios from "axios";
-import { CHART_COLORS, chartAxisProps, chartGridProps } from "../constants/chartTheme";
+import { CHART_COLORS } from "../constants/chartTheme";
 
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:4000";
 const API_BASE   = import.meta.env.VITE_API_URL    || "http://localhost:4000/api";
@@ -334,12 +335,6 @@ const TooltipStyle = {
   allowEscapeViewBox:{ x: true, y: true },
 };
 
-function piePctLabel({ percent = 0, value = 0 }) {
-  const p = Math.round((percent || 0) * 100);
-  if (!Number(value) || p < 5) return "";
-  return `${p}%`;
-}
-
 // ==============================================================================
 //  DASHBOARD
 // ==============================================================================
@@ -397,12 +392,20 @@ const Dashboard = () => {
   useEffect(()=>{ const t=setInterval(()=>setNowMs(Date.now()),30000); return()=>clearInterval(t); },[]);
 
   useEffect(()=>{
-    const sock=io(SOCKET_URL,{path:"/socket.io/",transports:["websocket","polling"]});
+    const sock=io(SOCKET_URL,{
+      path:"/socket.io/",
+      transports:["polling","websocket"],
+      reconnection:true,
+      reconnectionAttempts:Infinity,
+      reconnectionDelay:1000,
+      reconnectionDelayMax:5000,
+      timeout:10000,
+    });
     sock.on("dashboard_refresh",()=>loadData());
     sock.on("plc_connection_event",d=>{
       if (d.machineId) setPlcMap(p=>({...p,[d.machineId]:d.state==="COMPLETED"||d.state==="CLOSED"}));
     });
-    return()=>sock.disconnect();
+    return()=>sock.close();
   },[loadData]);
 
   const efficiency = useMemo(()=>{
@@ -874,7 +877,8 @@ const Dashboard = () => {
               <SectionHead title="Pass / Fail Split"/>
               <div style={{display:"flex",justifyContent:"center",marginBottom:16}}>
                 <div style={{position:"relative",width:160,height:160,minWidth:1,minHeight:1}}>
-                  <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+                  <SafeChart height={160}>
+                  <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} aspect={undefined}>
                     <PieChart>
                       <Pie data={pieData} cx="50%" cy="50%"
                         innerRadius={50} outerRadius={75}
@@ -887,6 +891,7 @@ const Dashboard = () => {
                       <Tooltip {...TooltipStyle}/>
                     </PieChart>
                   </ResponsiveContainer>
+                  </SafeChart>
                   <div style={{position:"absolute",inset:0,display:"flex",
                     flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
                     <p style={{fontSize:22,fontWeight:800,color:C.txt("pri"),
@@ -925,8 +930,8 @@ const Dashboard = () => {
                   </div>
                 }
               />
-              <div style={{height:220,width:"100%",minWidth:1,minHeight:1,position:"relative"}}>
-                <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+              <SafeChart height={220}>
+                <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} aspect={undefined}>
                   {chartModeHourly === "line" && (
                     <LineChart data={report.hourlyProduction} margin={{top:4,right:8,bottom:0,left:-10}}>
                       <CartesianGrid stroke={C.bdr(0.12)} strokeDasharray="3 4" vertical={false}/>
@@ -960,7 +965,7 @@ const Dashboard = () => {
                     </AreaChart>
                   )}
                 </ResponsiveContainer>
-              </div>
+              </SafeChart>
               <div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>
                 {[
                   {color:C.ok(),   label:"Pass"},
@@ -983,8 +988,8 @@ const Dashboard = () => {
             <div style={{background:C.bg("card"),border:`1px solid ${C.bdr()}`,
               borderRadius:14,padding:20,boxShadow:SHADOW}}>
               <SectionHead title="Production by Shift" right={<ChartModeToggle mode={chartModeShift} onChange={setChartModeShift} />} />
-              <div style={{height:200,width:"100%",minWidth:1,minHeight:1,position:"relative"}}>
-                <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+              <SafeChart height={200}>
+                <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} aspect={undefined}>
                   {chartModeShift === "bar" && (
                     <BarChart data={shiftData} margin={{top:4,right:8,bottom:0,left:-10}}>
                       <CartesianGrid stroke={C.bdr(0.12)} strokeDasharray="3 4" vertical={false}/>
@@ -1016,7 +1021,7 @@ const Dashboard = () => {
                     </AreaChart>
                   )}
                 </ResponsiveContainer>
-              </div>
+              </SafeChart>
             </div>
 
             <div style={{background:C.bg("card"),border:`1px solid ${C.bdr()}`,
@@ -1120,8 +1125,8 @@ const Dashboard = () => {
           <div style={{background:C.bg("card"),border:`1px solid ${C.bdr()}`,borderRadius:14,padding:20,boxShadow:SHADOW}}>
             <SectionHead title="Rejection Type Split"/>
             <div style={{display:"flex",justifyContent:"center",marginBottom:16}}>
-              <div style={{width:200,height:200,minWidth:1,minHeight:1}}>
-                <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+              <SafeChart height={200}>
+                <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} aspect={undefined}>
                   <PieChart>
                     <Pie data={rejectionPieData} dataKey="value" cx="50%" cy="50%" innerRadius={55} outerRadius={85} paddingAngle={3}
                       labelLine={false}>
@@ -1130,7 +1135,7 @@ const Dashboard = () => {
                     <Tooltip {...TooltipStyle} />
                   </PieChart>
                 </ResponsiveContainer>
-              </div>
+              </SafeChart>
             </div>
             <div style={{display:"flex",flexDirection:"column",gap:8}}>
               {rejectionPieData.map((row) => {
@@ -1151,7 +1156,8 @@ const Dashboard = () => {
           <div style={{display:"grid",gridTemplateRows:"220px auto",gap:16}}>
             <div style={{background:C.bg("card"),border:`1px solid ${C.bdr()}`,borderRadius:14,padding:20,boxShadow:SHADOW}}>
               <SectionHead title="Rejection Trend (Hourly)" right={<ChartModeToggle mode={chartModeRejectTrend} onChange={setChartModeRejectTrend} />} />
-              <ResponsiveContainer width="100%" height="100%">
+              <SafeChart height={180}>
+              <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} aspect={undefined}>
                 {chartModeRejectTrend === "area" && (
                   <AreaChart data={rejectionTrend} margin={{ top: 6, right: 8, left: -12, bottom: 0 }}>
                     <CartesianGrid stroke={C.bdr(0.12)} strokeDasharray="3 4" vertical={false}/>
@@ -1186,6 +1192,7 @@ const Dashboard = () => {
                   </BarChart>
                 )}
               </ResponsiveContainer>
+              </SafeChart>
             </div>
 
             <div style={{background:C.bg("card"),border:`1px solid ${C.bdr()}`,borderRadius:14,padding:20,boxShadow:SHADOW}}>
