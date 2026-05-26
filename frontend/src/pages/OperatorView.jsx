@@ -880,6 +880,13 @@ const OperatorView = () => {
 
   const mergePopupPayload = useCallback((payload = {}) => {
     setPopup(prev => {
+      const nextPartId = payload.partId || payload.part_id || prev?.partId || "";
+      const nextStationNo = payload.stationNo || payload.station_no || prev?.stationNo || "";
+      const nextType = payload.type || prev?.type || "";
+      const prevPartId = prev?.partId || prev?.part_id || "";
+      const prevStationNo = prev?.stationNo || prev?.station_no || "";
+      const prevType = prev?.type || "";
+      const isIdentityChanged = String(nextPartId) !== String(prevPartId) || String(nextStationNo) !== String(prevStationNo) || String(nextType) !== String(prevType);
       const iqr = payload.qrResult || payload.qr_result || "", iqrS = normalizeDecisionState(iqr), pqrS = normalizeDecisionState(prev?.qrResult || prev?.qr_result || "");
       const iplc = payload.plcStatus || payload.plc_status || "", iplcS = String(iplc || "").trim().toUpperCase(), pplcS = String(prev?.plcStatus || prev?.plc_status || "").trim().toUpperCase();
       const rl = isResetLikePayload(payload);
@@ -898,7 +905,7 @@ const OperatorView = () => {
         ...((payload.machineId || payload.machine_id) && { machineId: payload.machineId || payload.machine_id }),
         ...(payload.machineName && { machineName: payload.machineName }),
         ...(payload.timestamp && { timestamp: payload.timestamp }),
-        _shownAtMs: Date.now(),
+        _shownAtMs: isIdentityChanged ? Date.now() : (prev?._shownAtMs || Date.now()),
       };
     });
   }, []);

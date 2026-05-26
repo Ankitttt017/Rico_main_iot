@@ -1,4 +1,4 @@
-/**
+﻿/**
  * reportExportService.js
  * Main entry point for the reporting system.
  * Orchestrates database queries, metrics calculation, and file generation.
@@ -9,6 +9,7 @@ const sequelize = require("../../config/db");
 const OperationLog = require("../../models/OperationLog");
 const Machine = require("../../models/Machine");
 const Part = require("../../models/Part");
+const Shift = require("../../models/Shift");
 const QrFormatRule = require("../../models/QrFormatRule");
 const { calculateProductionMetrics } = require("./reportMetricsService");
 const { generateIndustrialExcel } = require("./excelTemplateEngine");
@@ -73,6 +74,64 @@ function isProductionReportLog(log) {
 function normalizeKey(value) {
   return String(value || "").trim().toUpperCase();
 }
+function extractShotFromPartId(partId) {
+  const raw = String(partId || "").trim();
+  if (!raw) return "";
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length <= 10) return "";
+  return digits.slice(10);
+}
+function deriveShotCandidates(log) {
+  const direct = String(log.shot_number || log.shotNumber || "").trim();
+  const fromPartPattern = extractShotFromPartId(log.part_id);
+  const fromPartRaw = String(log.part_id || "").trim();
+  const candidates = [direct, fromPartPattern, fromPartRaw]
+    .map((v) => String(v || "").trim())
+    .filter(Boolean);
+  return [...new Set(candidates)];
+}
+
+function getMinutesForDate(dateValue) {
+  const date = new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.getHours() * 60 + date.getMinutes();
+}
+
+function toShiftMinutes(timeValue) {
+  if (!timeValue) return null;
+  const parts = String(timeValue).split(":").map((p) => Number(p));
+  if (parts.length < 2 || parts.some((p) => Number.isNaN(p))) return null;
+  return parts[0] * 60 + parts[1];
+}
+
+function isDateInShift(dateValue, shift) {
+  const currentMinutes = getMinutesForDate(dateValue);
+  const start = toShiftMinutes(shift.start_time);
+  const end = toShiftMinutes(shift.end_time);
+  if (currentMinutes === null || start === null || end === null) return false;
+  if (start === end) return true;
+  if (start < end) {
+    return currentMinutes >= start && currentMinutes < end;
+  }
+  return currentMinutes >= start || currentMinutes < end;
+}
+
+async function getActiveShiftDefinitions() {
+  return Shift.findAll({
+    where: { is_active: true },
+    order: [["start_time", "ASC"]],
+    raw: true,
+  });
+}
+
+function applyShiftFilter(rows, shiftCode, shifts) {
+  if (!shiftCode) return rows;
+  const target = String(shiftCode).trim().toUpperCase();
+  return rows.filter((row) => {
+    const shift = shifts.find((s) => String(s.shift_code || "").trim().toUpperCase() === target);
+    return shift && isDateInShift(row.createdAt, shift);
+  });
+}
 
 async function getPlcReadingColumns() {
   try {
@@ -115,9 +174,44 @@ async function fetchLatestPlcReadingsByColumn(columnName, values = []) {
   return map;
 }
 
+function isTransientDbError(error) {
+  const msg = String(error?.message || error?.parent?.message || error?.original?.message || "").toUpperCase();
+  const code = String(error?.code || error?.parent?.code || error?.original?.code || "").toUpperCase();
+  return code === "ECONNRESET" || code === "ESOCKET" || code === "ETIMEOUT" || msg.includes("ECONNRESET") || msg.includes("COULD NOT CONNECT");
+}
+
+async function findAllWithRetry(queryFn, retries = 1, waitMs = 1200) {
+  let lastErr;
+  for (let i = 0; i <= retries; i += 1) {
+    try {
+      return await queryFn();
+    } catch (err) {
+      lastErr = err;
+      if (!isTransientDbError(err) || i === retries) break;
+      await new Promise((r) => setTimeout(r, waitMs));
+    }
+  }
+  throw lastErr;
+}
+
 async function runIndustrialExport(res, { filters, reportConfig, type = "full" }) {
   // 1. Resolve Data
   const rows = await fetchProductionData(filters);
+  const machineWhere = {};
+  if (filters?.machineId) machineWhere.id = filters.machineId;
+  if (filters?.lineName) machineWhere.line_name = filters.lineName;
+  const machines = await Machine.findAll({ where: machineWhere, raw: true });
+  const stationPairs = (machines || [])
+    .map((m) => {
+      const machineName = String(m.machine_name || m.machineName || "").trim();
+      const op = String(m.operation_no || m.operationNo || m.station_no || m.stationNo || "").trim();
+      if (!machineName || !op) return null;
+      return { key: `${machineName}__${op}`, machineName, op, label: `${machineName} + ${op}` };
+    })
+    .filter(Boolean)
+    .sort((a, b) =>
+      a.op.localeCompare(b.op, undefined, { numeric: true, sensitivity: "base" }) || a.machineName.localeCompare(b.machineName)
+    );
 
   // 2. Calculate Metrics
   const metrics = calculateProductionMetrics(rows);
@@ -125,6 +219,7 @@ async function runIndustrialExport(res, { filters, reportConfig, type = "full" }
   // 3. Generate File
   await generateIndustrialExcel(res, {
     rows,
+    stationPairs,
     metrics,
     filters,
     reportConfig,
@@ -145,7 +240,7 @@ async function fetchProductionData(filters = {}) {
     barcode, customerCode, station, operatorId, status
   } = filters;
 
-  // Safe date defaults � always query last 24 hours if nothing specified
+  // Safe date defaults — always query last 24 hours if nothing specified
   const now = new Date();
   const from = dateFrom ? new Date(dateFrom) : new Date(now.getTime() - 24 * 60 * 60 * 1000);
   const to   = dateTo   ? new Date(dateTo)   : now;
@@ -163,7 +258,6 @@ async function fetchProductionData(filters = {}) {
 
   if (machineId)   where.machine_id   = machineId;
   if (operationNo) where.operation_no = operationNo;
-  if (shiftCode) where.shift_code = shiftCode;
   if (operatorId) where.user_id = operatorId;
   if (barcode) {
     where.part_id = { [Op.like]: `%${String(barcode).trim()}%` };
@@ -184,22 +278,38 @@ async function fetchProductionData(filters = {}) {
     where.machine_id = { [Op.in]: ids };
   }
 
-  const logs = await OperationLog.findAll({
-    where,
-    include: [
-      {
-        model: Machine,
-        attributes: ["machine_name", "line_name", "operation_no"]
-      }
-    ],
-    order: [["createdAt", "DESC"]],
-    raw: true,
-    nest: true
-  });
+  const logs = await findAllWithRetry(() =>
+    OperationLog.findAll({
+      where,
+      include: [
+        {
+          model: Machine,
+          attributes: ["machine_name", "line_name", "operation_no"]
+        }
+      ],
+      order: [["createdAt", "DESC"]],
+      raw: true,
+      nest: true
+    }), 1, 1500
+  );
 
   // Keep only production-relevant rows. Validation-noise attempts
   // (duplicate/sequence/format/config blocks) are excluded from reports.
-  const productionLogs = logs.filter(isProductionReportLog);
+  let productionLogs = logs.filter(isProductionReportLog);
+  if (shiftCode) {
+    const target = String(shiftCode).trim().toUpperCase();
+    const shifts = await getActiveShiftDefinitions();
+    const byCode = productionLogs.filter(
+      (row) => String(row.shift_code || "").trim().toUpperCase() === target
+    );
+    const byTime = applyShiftFilter(productionLogs, shiftCode, shifts);
+    const merged = new Map();
+    [...byCode, ...byTime].forEach((row) => {
+      const key = `${row.id || ""}|${row.part_id || ""}|${row.operation_no || row.station_no || ""}|${row.createdAt || ""}`;
+      if (!merged.has(key)) merged.set(key, row);
+    });
+    productionLogs = [...merged.values()];
+  }
 
   // Fetch Part & QR Info (Flattening for performance)
   const partIds = [...new Set(productionLogs.map(l => l.part_id))];
@@ -258,7 +368,7 @@ async function fetchProductionData(filters = {}) {
   )];
   const shotNumbers = [...new Set(
     deduplicatedLogs
-      .map((log) => String(log.shot_number || log.shotNumber || "").trim())
+      .flatMap((log) => deriveShotCandidates(log))
       .filter(Boolean)
   )];
   const plcByPartId = partLookupColumn
@@ -295,8 +405,11 @@ async function fetchProductionData(filters = {}) {
       : normalizedPartId.slice(0, 8) || "-";
 
     const partLookupKey = normalizeKey(partIdValue);
-    const shotLookupKey = normalizeKey(log.shot_number || log.shotNumber || "");
-    const plcReadingFromDb = plcByPartId.get(partLookupKey) || plcByShot.get(shotLookupKey) || null;
+    const shotCandidates = deriveShotCandidates(log).map((s) => normalizeKey(s));
+    const plcReadingFromDb =
+      plcByPartId.get(partLookupKey) ||
+      shotCandidates.map((k) => plcByShot.get(k)).find(Boolean) ||
+      null;
 
     return {
       ...log,

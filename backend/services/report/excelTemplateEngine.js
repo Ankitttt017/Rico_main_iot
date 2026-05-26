@@ -6,6 +6,20 @@
 
 const ExcelJS = require("exceljs");
 const { formatIndustrialTimestamp, resolveIndustrialResult } = require("./reportFormatter");
+const DEFAULT_PLC_CYCLE_COLUMNS = [
+  "id","created_at","machine_name","shot_hour","shot_minute","shot_second","ok_shot",
+  "die_close_core_in_time","pouring_time","shot_fwd_time","curing_time","die_open_core_out_time",
+  "ejector_time","extract_time","spray_time","v1_speed","v2_speed","v3_speed","v4_speed","metal_pressure",
+  "furnace_metal_temp","cooling_water_mov","cooling_water_sta","accel_point","deaccel_point","intensification_time",
+  "biscuit_thickness","jet_cooling_pressure","clamp_tonnage_he_low_pct","clamp_tonnage_he_low_mn","clamp_tonnage_op_up_pct",
+  "clamp_tonnage_op_low_pct","clamp_tonnage_he_up_pct","vacuum_pressure","clamp_force_pct","clamp_tonnage","shot_acc_pressure",
+  "intensification_acc_pressure","fixed_die_temp_f1","fixed_die_temp_f2","moving_die_temp_m1","moving_die_temp_m2","slide_temp_s1",
+  "fix_1_flow","fix_2_flow","fix_3_flow","mov_1_flow","mov_2_flow","mov_3_flow","vacuum_pressure_mmhg",
+  "average_die_clamp_tonnage_count","time_for_stroke","stroke","running_mode","emergency_stop","hyd_pump_motor_overload",
+  "hyd_oil_level_low","hyd_oil_high_temp","servo_pump_overload","servo_pump_motor_high_temp","die_close_step","pouring_step",
+  "shot_fwd_step","curing_step","die_open_step","ejector_step","extractor_step","spray_step","cycle_end","ng_shot","shot_status",
+  "shot_year","shot_month","shot_day","shot_uid","machine_key","manual_mode","raw_readings_json","shot_number","recorded_at","cycle_time"
+];
 
 function nowStamp() {
   const d = new Date();
@@ -15,6 +29,7 @@ function nowStamp() {
 
 async function generateIndustrialExcel(res, {
   rows = [],
+  stationPairs = [],
   metrics = {},
   filters = {},
   reportConfig = {},
@@ -33,7 +48,7 @@ async function generateIndustrialExcel(res, {
   const BORDER = "FFD1D5DB";
 
   worksheet.getRow(1).height = 65;
-  worksheet.mergeCells("A1:K1");
+  worksheet.mergeCells("A1:H1");
   const titleCell = worksheet.getCell("A1");
   titleCell.value = (reportConfig.headerLine1 || reportConfig.companyName || "Industrial Traceability System").toUpperCase();
   titleCell.font = { bold: true, size: 20, color: { argb: WHITE }, name: "Calibri" };
@@ -54,7 +69,7 @@ async function generateIndustrialExcel(res, {
   }
 
   worksheet.getRow(2).height = 32;
-  worksheet.mergeCells("A2:K2");
+  worksheet.mergeCells("A2:H2");
   const subTitleCell = worksheet.getCell("A2");
   let subText = reportConfig.headerLine2 || "TRACEABILITY PRODUCTION REPORT";
   if (filters.machineId) subText += ` - MACHINE: ${filters.machineId}`;
@@ -122,18 +137,21 @@ async function generateIndustrialExcel(res, {
     worksheet.getCell(summaryStart + 2, col).alignment = { horizontal: "center" };
   });
 
-  const stationOrder = [...new Set(rows.map((r) => String(r.operation_no || r.operationNo || "").trim()).filter(Boolean))]
-    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
-  const stationLabelByOperation = stationOrder.reduce((acc, operationNo) => {
-    const machineNames = [...new Set(
-      rows
-        .filter((row) => String(row.operation_no || row.operationNo || "").trim() === operationNo)
-        .map((row) => String(row.machineName || row.machine_name || row?.Machine?.machine_name || "").trim())
-        .filter(Boolean)
-    )];
-    acc[operationNo] = machineNames.length > 0 ? `${operationNo} - ${machineNames.join(" / ")}` : operationNo;
-    return acc;
-  }, {});
+  const stationMap = new Map();
+  (stationPairs || []).forEach((s) => {
+    if (!s?.key || !s?.label) return;
+    stationMap.set(s.key, { key: s.key, machineName: s.machineName || "", op: s.op || "", label: s.label });
+  });
+  rows.forEach((row) => {
+    const machineName = String(row.machineName || row.machine_name || row?.Machine?.machine_name || "").trim();
+    const op = String(row.operation_no || row.operationNo || row.stationNo || "").trim();
+    if (!machineName || !op) return;
+    const key = `${machineName}__${op}`;
+    if (!stationMap.has(key)) stationMap.set(key, { key, machineName, op, label: `${machineName} + ${op}` });
+  });
+  const stationPairsFinal = Array.from(stationMap.values()).sort((a, b) =>
+    a.op.localeCompare(b.op, undefined, { numeric: true, sensitivity: "base" }) || a.machineName.localeCompare(b.machineName)
+  );
 
   const grouped = new Map();
   rows.forEach((row) => {
@@ -141,27 +159,30 @@ async function generateIndustrialExcel(res, {
     if (!grouped.has(partSerial)) {
       grouped.set(partSerial, {
         partSerial,
-        shift: row.shift_code || row.shiftCode || "-",
         machineName: row.machineName || "-",
-        modelCode: row.modelCode || "-",
-        modelName: row.qrFormatName || "-",
-        lineName: row.lineName || "-",
+        createdAt: row.createdAt || row.created_at || "-",
         cycleStart: row.cycleStartTime || "-",
         cycleEnd: row.cycleEndTime || "-",
         cycleTime: row.cycleTime || "0.00",
+        endAt: row.plc_end_at || row.endAt || "-",
+        endTime: row.endTime || "-",
+        startAt: row.plc_start_at || row.startAt || "-",
+        startTime: row.startTime || "-",
+        status: row.statusLabel || row.industrialResult || row.result || "-",
+        shotDate: row.shot_date || row.shotDate || "-",
         reason: row.interlock_reason || row.reason || "-",
         stationResults: {},
-        stationCycleTimes: {},
         plcReading: {},
       });
     }
     const bucket = grouped.get(partSerial);
-    const op = String(row.operation_no || row.operationNo || "").trim();
+    const machineName = String(row.machineName || row.machine_name || row?.Machine?.machine_name || "").trim();
+    const op = String(row.operation_no || row.operationNo || row.stationNo || "").trim();
+    const stationKey = machineName && op ? `${machineName}__${op}` : "";
     const resolved = row.industrialResult ? { status: row.industrialResult } : resolveIndustrialResult(row);
     const status = String(resolved.status || "").toUpperCase();
-    if (op) {
-      bucket.stationResults[op] = status === "OK" || status === "NG" ? status : "-";
-      bucket.stationCycleTimes[op] = row.cycleTime || "-";
+    if (stationKey) {
+      bucket.stationResults[stationKey] = status === "OK" || status === "NG" ? status : "-";
     }
     Object.assign(bucket.plcReading, row.plcReading || {});
   });
@@ -172,27 +193,42 @@ async function generateIndustrialExcel(res, {
   const baseColumns = [
     { header: "SR NO", width: 8 },
     { header: "Part Serial No", width: 28 },
-    { header: "Shift", width: 12 },
-    { header: "Machine Name", width: 22 },
-    { header: "Model Code", width: 16 },
-    { header: "Model Name", width: 22 },
-    { header: "Overall Result", width: 16 },
-    { header: "Reason", width: 34 },
-    { header: "Cycle Start", width: 24 },
-    { header: "Cycle End", width: 24 },
-    { header: "Cycle Time (s)", width: 16 },
-    { header: "Line No", width: 14 },
+    { header: "Date & Time", width: 22 },
+    { header: "Part Name", width: 22 },
+    { header: "Customer QR Code", width: 20 },
   ];
-  const stationColumns = stationOrder.map((op) => ({ header: stationLabelByOperation[op] || op, width: 24 }));
-  const stationCycleColumns = stationOrder.map((op) => ({ header: `${stationLabelByOperation[op] || op} CYCLE(S)`, width: 20 }));
-  const plcKeys = [...new Set(rows.flatMap((r) => Object.keys(r.plcReading || {})))]
-    .sort((a, b) => a.localeCompare(b));
+  const stationColumns = stationPairsFinal.map((s) => ({ header: s.label, width: 24 }));
+  const finalColumn = [{ header: "Final", width: 16 }];
+  const livePlcKeys = [...new Set(rows.flatMap((r) => Object.keys(r.plcReading || {})))];
+  const preferredOrder = [...DEFAULT_PLC_CYCLE_COLUMNS, "cycle_start", "end_at", "end_time", "start_at", "start_time", "status", "shot_date"];
+  const rank = new Map(preferredOrder.map((k, i) => [k, i]));
+  const plcKeys = [...new Set([...DEFAULT_PLC_CYCLE_COLUMNS, ...livePlcKeys])]
+    .filter((k) => !["part_name", "plc_ip", "plc_port", "plcreading", "id", "created_at", "status"].includes(String(k || "").toLowerCase()))
+    .sort((a, b) => {
+      const ak = String(a || "").toLowerCase();
+      const bk = String(b || "").toLowerCase();
+      const ar = rank.has(ak) ? rank.get(ak) : 9999;
+      const br = rank.has(bk) ? rank.get(bk) : 9999;
+      if (ar !== br) return ar - br;
+      return ak.localeCompare(bk);
+    });
   const plcColumns = plcKeys.map((key) => ({
-    header: `PLC ${String(key).replaceAll("_", " ")}`.toUpperCase(),
+    header: String(key).replaceAll("_", " ").toUpperCase().replace(/^PLC\s+/i, ""),
     key,
     width: Math.min(Math.max(String(key).length + 6, 14), 28),
   }));
-  const columns = [...baseColumns, ...stationColumns, ...stationCycleColumns, ...plcColumns];
+  const tailColumns = [
+    { header: "Cycle Time", width: 14 },
+    { header: "Cycle Start", width: 22 },
+    { header: "End At", width: 22 },
+    { header: "End Time", width: 14 },
+    { header: "Start At", width: 22 },
+    { header: "Start Time", width: 14 },
+    { header: "Status", width: 14 },
+    { header: "Shot Date", width: 16 },
+    { header: "Reason / Remark", width: 34 },
+  ];
+  const columns = [...baseColumns, ...stationColumns, ...finalColumn, ...plcColumns, ...tailColumns];
 
   columns.forEach((col, i) => {
     worksheet.getColumn(i + 1).width = col.width;
@@ -205,29 +241,23 @@ async function generateIndustrialExcel(res, {
   });
 
   matrixRows.forEach((row, i) => {
-    const stationResults = stationOrder.map((op) => row.stationResults[op] || "-");
-    const stationCycles = stationOrder.map((op) => row.stationCycleTimes[op] || "-");
-    const overall = stationResults.includes("NG") ? "NG" : stationResults.includes("OK") ? "OK" : "-";
+    const stationResults = stationPairsFinal.map((s) => row.stationResults[s.key] || "-");
+    const overall = stationResults.includes("NG") ? "NG" : (stationResults.length > 0 && stationResults.every((x) => x === "OK")) ? "PASSED" : "IN_PROGRESS";
     const plc = row.plcReading || {};
     const values = [
       i + 1,
       row.partSerial,
-      row.shift,
-      row.machineName,
-      row.modelCode,
-      row.modelName,
-      overall,
-      row.reason,
       row.cycleStart,
-      row.cycleEnd,
-      row.cycleTime,
-      row.lineName,
+      (row.plcReading && row.plcReading.part_name) || "-",
+      "-",
       ...stationResults,
-      ...stationCycles,
+      overall,
       ...plcColumns.map((c) => {
         const v = plc[c.key];
         return v === undefined || v === null || v === "" ? "-" : v;
       }),
+      row.cycleTime, row.cycleStart, row.endAt, row.endTime, row.startAt, row.startTime, row.status, row.shotDate,
+      row.reason,
     ];
 
     const rowIndex = tableHeaderRow + 1 + i;
@@ -246,11 +276,12 @@ async function generateIndustrialExcel(res, {
       if (!cell.font || !cell.font.bold) cell.font = { size: 9 };
     });
 
-    const overallCell = worksheet.getCell(rowIndex, 7);
-    if (overall === "OK") overallCell.font = { bold: true, size: 9, color: { argb: "FF059669" } };
+    const overallCell = worksheet.getCell(rowIndex, baseColumns.length + stationColumns.length + 1);
+    if (overall === "OK" || overall === "PASSED") overallCell.font = { bold: true, size: 9, color: { argb: "FF059669" } };
     if (overall === "NG") overallCell.font = { bold: true, size: 9, color: { argb: RED } };
+    if (overall === "IN_PROGRESS") overallCell.font = { bold: true, size: 9, color: { argb: "FFD97706" } };
 
-    stationOrder.forEach((_, sIdx) => {
+    stationPairsFinal.forEach((_, sIdx) => {
       const stationCell = worksheet.getCell(rowIndex, baseColumns.length + sIdx + 1);
       const v = String(stationCell.value || "").toUpperCase();
       if (v === "OK") stationCell.font = { bold: true, size: 9, color: { argb: "FF059669" } };

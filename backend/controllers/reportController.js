@@ -7,6 +7,12 @@
 const { runIndustrialExport, fetchProductionData } = require("../services/report/reportExportService");
 const { calculateProductionMetrics } = require("../services/report/reportMetricsService");
 
+function summarizeDbError(error) {
+  const code = error?.original?.code || error?.parent?.code || error?.code || "UNKNOWN";
+  const msg = error?.original?.message || error?.parent?.message || error?.message || "Database error";
+  return { code, message: msg };
+}
+
 const DEFAULT_REPORT_CONFIG = {
   companyName: "BMW Group",
   plantName: "Gen-6 Bawal Plant",
@@ -37,8 +43,9 @@ exports.getReportData = async (req, res) => {
       metrics
     });
   } catch (error) {
-    console.error("Report data error:", error);
-    res.status(500).json({ error: error.message });
+    const db = summarizeDbError(error);
+    console.error(`[ReportController] getReportData failed code=${db.code} msg=${db.message}`);
+    res.status(500).json({ error: db.message });
   }
 };
 

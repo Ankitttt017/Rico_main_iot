@@ -4636,9 +4636,105 @@ exports.getDashboardReport = async (req, res) => {
 
     const partHistory = [...productionOperationRows]
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    // Enrich dashboard parts list with latest PLC cycle readings from PlcCycleReadings table.
+    // Lookup priority: shot_number from operation logs.
+    const plcReadingByShot = new Map();
+    const plcReadingByUid = new Map();
+    const plcReadingColumns = [];
+    try {
+      const sequelize = require("../config/db");
+      const [columnRows] = await sequelize.query(`
+        SELECT COLUMN_NAME
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME = 'PlcCycleReadings'
+        ORDER BY ORDINAL_POSITION
+      `);
+      for (const c of columnRows || []) {
+        const name = String(c.COLUMN_NAME || "").trim();
+        if (name) plcReadingColumns.push(name);
+      }
+      const normalizeShotToken = (value) => {
+        const raw = String(value ?? "").trim();
+        if (!raw || raw.toUpperCase() === "NULL") return "";
+        const digits = raw.replace(/\D/g, "");
+        if (!digits) return raw.toUpperCase();
+        const noLead = digits.replace(/^0+/, "");
+        return (noLead || "0").toUpperCase();
+      };
+      const extractShotCandidatesFromPartId = (value) => {
+        const s = String(value || "").toUpperCase().trim();
+        if (!s) return [];
+        const candidates = new Set();
+        const allDigitGroups = s.match(/\d+/g) || [];
+        for (const g of allDigitGroups) {
+          const norm = normalizeShotToken(g);
+          if (norm) candidates.add(norm);
+        }
+        // Common format: YYMMDDHHMMSS + shot
+        const tsShot = s.match(/(\d{12})(\d{1,8})$/);
+        if (tsShot?.[2]) {
+          const norm = normalizeShotToken(tsShot[2]);
+          if (norm) candidates.add(norm);
+        }
+        return [...candidates];
+      };
+      const shotValuesSet = new Set();
+      for (const row of partHistory) {
+        const directShot = normalizeShotToken(row.shot_number || row.shotNumber || "");
+        if (directShot) shotValuesSet.add(directShot);
+        const fromPart = extractShotCandidatesFromPartId(row.part_id);
+        for (const c of fromPart) shotValuesSet.add(c);
+      }
+      const shotValues = [...shotValuesSet];
+      if (shotValues.length > 0) {
+        const placeholders = shotValues.map((_, idx) => `:s${idx}`).join(", ");
+        const replacements = shotValues.reduce((acc, value, idx) => {
+          acc[`s${idx}`] = value;
+          return acc;
+        }, {});
+        const [plcRows] = await sequelize.query(`
+          SELECT * FROM PlcCycleReadings
+          WHERE CAST(shot_number AS NVARCHAR(255)) IN (${placeholders})
+          ORDER BY recorded_at DESC
+        `, { replacements });
+
+        for (const row of plcRows || []) {
+          const key = normalizeShotToken(row.shot_number || "");
+          if (!key || plcReadingByShot.has(key)) continue;
+          plcReadingByShot.set(key, row);
+        }
+        for (const row of plcRows || []) {
+          const uidKey = String(row.shot_uid || "").trim();
+          if (!uidKey || plcReadingByUid.has(uidKey)) continue;
+          plcReadingByUid.set(uidKey, row);
+        }
+      }
+    } catch (_plcJoinError) {
+      // Keep dashboard report resilient even when PlcCycleReadings schema/table differs.
+    }
     const historyTotal = partHistory.length;
     const historyStart = (page - 1) * pageSize;
     const pagedHistory = partHistory.slice(historyStart, historyStart + pageSize);
+
+    const normalizeShotToken = (value) => {
+      const raw = String(value ?? "").trim();
+      if (!raw || raw.toUpperCase() === "NULL") return "";
+      const digits = raw.replace(/\D/g, "");
+      if (!digits) return raw.toUpperCase();
+      const noLead = digits.replace(/^0+/, "");
+      return (noLead || "0").toUpperCase();
+    };
+    const extractYymmddhhmmss = (value) => {
+      const s = String(value || "").toUpperCase();
+      const m = s.match(/(\d{12})/);
+      return m ? m[1] : "";
+    };
+    const extractShotSuffix = (value) => {
+      const s = String(value || "").toUpperCase().replace(/\s+/g, "");
+      const m = s.match(/(\d{12})(\d+)$/);
+      return m ? m[2] : "";
+    };
 
     const partsList = partHistory.slice(0, 3000).map((row) => {
       const machine = machineMetaById[Number(row.machine_id)] || machineRowMapById[Number(row.machine_id)] || {};
@@ -4662,9 +4758,22 @@ exports.getDashboardReport = async (req, res) => {
         cycleTime = Math.max(0, (new Date(end).getTime() - new Date(start).getTime()) / 1000).toFixed(1);
       }
 
+      const shotKey = normalizeShotToken(row.shot_number || row.shotNumber || "");
+      const fullPartId = String(row.part_id || "").trim();
+      const fromPartIdTs = extractYymmddhhmmss(fullPartId);
+      const fromPartIdShot = normalizeShotToken(extractShotSuffix(fullPartId));
+      const allPartDigitGroups = (fullPartId.match(/\d+/g) || []).map((g) => normalizeShotToken(g)).filter(Boolean);
+      const plcReading = (fullPartId && plcReadingByUid.get(fullPartId))
+        || (shotKey && plcReadingByShot.get(shotKey))
+        || (fromPartIdShot && plcReadingByShot.get(fromPartIdShot))
+        || (fromPartIdTs && plcReadingByShot.get(normalizeShotToken(fromPartIdTs)))
+        || allPartDigitGroups.map((g) => plcReadingByShot.get(g)).find(Boolean)
+        || null;
+
       return {
         id: row.id,
         partId: row.part_id,
+        partName: row.Part?.part_name || row.Part?.name || null,
         machineId: row.machine_id,
         machineName: machine.machineName || machine.machine_name || null,
         lineName: machine.lineName || machine.line_name || null,
@@ -4676,6 +4785,8 @@ exports.getDashboardReport = async (req, res) => {
         interlockReason: row.interlock_reason || null,
         cycleTime,
         createdAt: row.createdAt,
+        shotNumber: shotKey || null,
+        plcReading,
       };
     });
 
@@ -4707,6 +4818,7 @@ exports.getDashboardReport = async (req, res) => {
         total: historyTotal,
       },
       partsList,
+      plcReadingColumns,
       availableLines,
       availableShifts: shifts.map((shift) => ({
         shiftCode: shift.shift_code,

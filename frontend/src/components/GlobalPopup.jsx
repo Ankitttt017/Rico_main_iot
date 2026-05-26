@@ -1530,7 +1530,7 @@ const GlobalPopup = ({
                   autoCorrect="off"
                   autoCapitalize="off"
                   spellCheck={false}
-                  className="flex-1 bg-slate-950 border border-slate-600 rounded-lg px-4 py-2 font-bold text-sm text-slate-100 placeholder:text-slate-400 outline-none focus:border-amber-500 transition-colors font-mono"
+                  className="flex-1 bg-slate-950 border border-slate-600 rounded-lg px-4 py-2 font-bold text-sm text-slate-400 placeholder:text-slate-400 outline-none focus:border-amber-500 transition-colors font-mono"
                   style={{ caretColor: isUsbScannerMode ? "transparent" : undefined }}
                   tabIndex={isUsbScannerMode ? -1 : 0}
                   onFocus={() => {}}

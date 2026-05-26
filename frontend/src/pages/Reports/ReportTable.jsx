@@ -1,17 +1,26 @@
-import React from "react";
+import React, { useMemo, useState } from "react";
 import { Activity } from "lucide-react";
 
 const StatusChip = ({ status }) => {
   const normalized = String(status || "").trim().toUpperCase();
-  const base = "px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider border";
-  if (normalized === "OK") return <span className={`${base} bg-green-500/10 text-green-500 border-green-500/20`}>OK</span>;
-  if (normalized === "NG") return <span className={`${base} bg-red-500/10 text-red-500 border-red-500/20`}>NG</span>;
-  if (normalized === "BYPASS") return <span className={`${base} bg-amber-500/10 text-amber-500 border-amber-500/20`}>BYPASS</span>;
-  if (normalized === "PENDING" || normalized === "UNKNOWN") return <span className={`${base} bg-blue-500/10 text-blue-500 border-blue-500/20`}>PENDING</span>;
-  return <span className={`${base} bg-slate-500/10 text-slate-500 border-slate-500/20`}>{normalized || "-"}</span>;
+  const base = "inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold border";
+  if (normalized === "PASSED" || normalized === "OK") return <span className={`${base} bg-emerald-500/10 text-emerald-600 border-emerald-500/30`}>{normalized === "PASSED" ? "Passed" : "OK"}</span>;
+  if (normalized === "FAILED" || normalized === "NG") return <span className={`${base} bg-red-500/10 text-red-600 border-red-500/30`}>{normalized === "FAILED" ? "Failed" : "NG"}</span>;
+  if (normalized === "IN_PROGRESS") return <span className={`${base} bg-amber-500/10 text-amber-600 border-amber-500/30`}>In Progress</span>;
+  return <span className={`${base} bg-slate-500/10 text-slate-600 border-slate-500/30`}>-</span>;
 };
 
+const isStatusLike = (key) => key === "overallStatus" || key.startsWith("station_");
+
 const ReportTable = ({ rows = [], columns = [], loading }) => {
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const pagedRows = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return rows.slice(start, start + pageSize);
+  }, [rows, page, pageSize]);
+
   if (loading) {
     return (
       <div className="bg-bg-card border border-border rounded-xl p-20 flex flex-col items-center justify-center space-y-4">
@@ -38,39 +47,43 @@ const ReportTable = ({ rows = [], columns = [], loading }) => {
   return (
     <div className="bg-bg-card border border-border rounded-xl shadow-sm overflow-hidden">
       <div className="h-1 w-full bg-gradient-to-r from-cyan-500 via-emerald-400 to-amber-400" />
-      <div className="overflow-auto max-h-[70vh]">
-        <table className="w-full text-left border-collapse">
+      <div className="overflow-auto max-h-[70vh]" style={{ scrollbarWidth: "thin" }}>
+        <table className="w-max min-w-full border-collapse text-[12px]">
           <thead className="sticky top-0 z-10">
-            <tr className="bg-slate-900/90 border-b border-border backdrop-blur">
+            <tr className="border-b border-border backdrop-blur" style={{ background: "linear-gradient(90deg,#10254d,#1a3a7c,#2d5ea7)" }}>
               {columns.map((column) => (
-                <th key={column.key} className="px-4 py-3 text-[10px] font-black text-white uppercase tracking-widest whitespace-nowrap">
+                <th key={column.key} className="px-3 py-3 text-[10px] font-black text-white uppercase tracking-wider whitespace-nowrap text-center">
                   {column.label}
                 </th>
               ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-border/40">
-            {rows.map((row, idx) => (
+            {pagedRows.map((row, idx) => (
               <tr key={`${row.barcode || "row"}-${idx}`} className={`${idx % 2 === 0 ? "bg-transparent" : "bg-white/[0.02]"} hover:bg-primary/5 transition-colors group`}>
                 {columns.map((column) => {
                   const value = row[column.key];
-                  const text = value === null || value === undefined || value === "" ? "-" : value;
-                  if (column.key === "overallStatus") {
+                  const text = value === null || value === undefined || value === "" ? "�" : String(value);
+                  if (isStatusLike(column.key)) {
                     return (
-                      <td key={column.key} className="px-4 py-3">
+                      <td key={column.key} className="px-3 py-3 text-center whitespace-nowrap">
                         <StatusChip status={text} />
                       </td>
                     );
                   }
                   if (column.key === "ngReason") {
                     return (
-                      <td key={column.key} className="px-4 py-3 text-[11px] text-red-500/80 italic max-w-[220px] truncate" title={String(text)}>
+                      <td key={column.key} className="px-3 py-3 text-[11px] text-red-600/90 max-w-[220px] truncate text-center" title={String(text)}>
                         {text}
                       </td>
                     );
                   }
                   return (
-                    <td key={column.key} className="px-4 py-3 text-[11px] text-text-main whitespace-nowrap">
+                    <td
+                      key={column.key}
+                      className={`px-3 py-3 text-[11px] text-[#111827] text-center font-medium ${column.key.startsWith("plc_") ? "max-w-[220px] truncate" : "whitespace-nowrap"}`}
+                      title={column.key.startsWith("plc_") ? text : undefined}
+                    >
                       {text}
                     </td>
                   );
@@ -80,8 +93,22 @@ const ReportTable = ({ rows = [], columns = [], loading }) => {
           </tbody>
         </table>
       </div>
-      <div className="px-6 py-3 bg-bg-dark/20 border-t border-border flex items-center justify-between">
-        <p className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Displaying {rows.length} records</p>
+      <div className="px-6 py-3 bg-bg-dark/20 border-t border-border flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-2 text-[11px] text-text-muted">
+          <span>Rows/page</span>
+          <select
+            value={pageSize}
+            onChange={(e) => { setPageSize(Number(e.target.value) || 25); setPage(1); }}
+            className="bg-bg-dark border border-border rounded px-2 py-1 text-text-main"
+          >
+            {[10, 25, 50, 100].map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1} className="px-3 py-1 text-xs border border-border rounded disabled:opacity-50">Prev</button>
+          <span className="px-3 py-1 rounded bg-primary text-on-primary text-xs font-bold">Page {page}/{totalPages}</span>
+          <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages} className="px-3 py-1 text-xs border border-border rounded disabled:opacity-50">Next</button>
+        </div>
       </div>
     </div>
   );

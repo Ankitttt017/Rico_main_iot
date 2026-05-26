@@ -323,8 +323,11 @@ async function startServer() {
       performGracefulShutdown("SIGHUP");
     });
   } catch (error) {
-    console.error("Failed to start server:", error);
-    process.exit(1);
+    console.error("Failed to start server with DB connection:", error?.message || error);
+    console.warn("[Startup] Running in degraded mode (DB unavailable). Check MSSQL host/port and restart when DB is reachable.");
+    server.listen(PORT, () => {
+      console.log(`Server running on port ${PORT} (degraded mode, DB unavailable)`);
+    });
   }
 }
 

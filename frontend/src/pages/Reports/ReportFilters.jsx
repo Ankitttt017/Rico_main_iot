@@ -2,9 +2,9 @@ import React, { useState } from "react";
 import { Filter, Calendar, Clock, RefreshCw, X, ChevronDown } from "lucide-react";
 import { toDatetimeLocal, getShiftInterval } from "../../utils/time";
 
-const STATUS_OPTIONS = ["OK", "NG", "BYPASS", "PENDING"];
+const STATUS_OPTIONS = ["OK", "NG", "WIP", "INTERLOCKED"];
 
-const ReportFilters = ({ filters, onFilterChange, onApply, onClear, machines = [] }) => {
+const ReportFilters = ({ filters, onFilterChange, onApply, onClear, machines = [], availableShifts = [] }) => {
   const [isOpen, setIsOpen] = useState(true);
 
   const presets = [
@@ -15,7 +15,6 @@ const ReportFilters = ({ filters, onFilterChange, onApply, onClear, machines = [
   ];
 
   const lines = [...new Set(machines.map((m) => m.line_name || m.lineName).filter(Boolean))];
-  const stations = [...new Set(machines.map((m) => m.operation_no || m.operationNo).filter(Boolean))];
 
   const handlePreset = (key) => {
     const { from, to } = getShiftInterval(key);
@@ -27,9 +26,9 @@ const ReportFilters = ({ filters, onFilterChange, onApply, onClear, machines = [
   };
 
   return (
-    <div className="bg-bg-card border border-border rounded-xl shadow-sm overflow-hidden mb-6">
+    <div className="bg-bg-card border border-border rounded-xl shadow-sm overflow-hidden mb-4">
       <div
-        className="px-6 py-4 border-b border-border bg-bg-dark/30 flex items-center justify-between cursor-pointer"
+        className="px-4 py-3 border-b border-border bg-bg-dark/30 flex items-center justify-between cursor-pointer"
         onClick={() => setIsOpen(!isOpen)}
       >
         <div className="flex items-center gap-2">
@@ -40,7 +39,7 @@ const ReportFilters = ({ filters, onFilterChange, onApply, onClear, machines = [
       </div>
 
       {isOpen && (
-        <div className="p-6 space-y-5">
+        <div className="p-4 space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="relative">
               <Calendar size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
@@ -64,17 +63,10 @@ const ReportFilters = ({ filters, onFilterChange, onApply, onClear, machines = [
             </div>
             <input
               type="text"
-              placeholder="Barcode / Part ID"
+              placeholder="Part Serial No."
               className="w-full bg-bg-dark border border-border rounded-lg px-3 py-2.5 text-xs text-text-main outline-none focus:border-primary/50 transition-all"
               value={filters.barcode || ""}
               onChange={(e) => onFilterChange({ ...filters, barcode: e.target.value })}
-            />
-            <input
-              type="text"
-              placeholder="Customer code"
-              className="w-full bg-bg-dark border border-border rounded-lg px-3 py-2.5 text-xs text-text-main outline-none focus:border-primary/50 transition-all"
-              value={filters.customerCode || ""}
-              onChange={(e) => onFilterChange({ ...filters, customerCode: e.target.value })}
             />
           </div>
 
@@ -107,18 +99,6 @@ const ReportFilters = ({ filters, onFilterChange, onApply, onClear, machines = [
             </select>
             <select
               className="w-full bg-bg-dark border border-border rounded-lg px-3 py-2.5 text-xs text-text-main outline-none focus:border-primary/50 transition-all"
-              value={filters.station || ""}
-              onChange={(e) => onFilterChange({ ...filters, station: e.target.value })}
-            >
-              <option value="">All Stations</option>
-              {stations.map((station) => (
-                <option key={station} value={station}>
-                  {station}
-                </option>
-              ))}
-            </select>
-            <select
-              className="w-full bg-bg-dark border border-border rounded-lg px-3 py-2.5 text-xs text-text-main outline-none focus:border-primary/50 transition-all"
               value={filters.status || ""}
               onChange={(e) => onFilterChange({ ...filters, status: e.target.value })}
             >
@@ -129,30 +109,18 @@ const ReportFilters = ({ filters, onFilterChange, onApply, onClear, machines = [
                 </option>
               ))}
             </select>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <input
-              type="text"
-              placeholder="Shift code (A/B/C)"
+            <select
               className="w-full bg-bg-dark border border-border rounded-lg px-3 py-2.5 text-xs text-text-main outline-none focus:border-primary/50 transition-all"
               value={filters.shiftCode || ""}
               onChange={(e) => onFilterChange({ ...filters, shiftCode: e.target.value })}
-            />
-            <input
-              type="text"
-              placeholder="Operator ID"
-              className="w-full bg-bg-dark border border-border rounded-lg px-3 py-2.5 text-xs text-text-main outline-none focus:border-primary/50 transition-all"
-              value={filters.operatorId || ""}
-              onChange={(e) => onFilterChange({ ...filters, operatorId: e.target.value })}
-            />
-            <input
-              type="text"
-              placeholder="Model code"
-              className="w-full bg-bg-dark border border-border rounded-lg px-3 py-2.5 text-xs text-text-main outline-none focus:border-primary/50 transition-all"
-              value={filters.modelCode || ""}
-              onChange={(e) => onFilterChange({ ...filters, modelCode: e.target.value })}
-            />
+            >
+              <option value="">All Shifts</option>
+              {(availableShifts || []).map((shift) => (
+                <option key={shift.shiftCode} value={shift.shiftCode}>
+                  {shift.shiftName || shift.shiftCode}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div className="flex flex-wrap gap-2">
