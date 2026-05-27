@@ -13,19 +13,17 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          path: C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot
 
       - name: Install Frontend Dependencies
-        working-directory: C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\frontend
+        working-directory: ${{ github.workspace }}\frontend
         run: npm install
 
       - name: Build Frontend
-        working-directory: C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\frontend
+        working-directory: ${{ github.workspace }}\frontend
         run: npm run build
 
       - name: Install Backend Dependencies
-        working-directory: C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\backend\rico-iot
+        working-directory: ${{ github.workspace }}\backend\rico-iot
         run: npm install
 
       - name: Restart Backend
