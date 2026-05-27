@@ -8,7 +8,7 @@ import { FileText, Download, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const DEFAULT_PLC_CYCLE_COLUMNS = [
-  "id","created_at","machine_name","shot_hour","shot_minute","shot_second","ok_shot",
+  "machine_name","shot_date","shot_time","shot_number","cycle_time",
   "die_close_core_in_time","pouring_time","shot_fwd_time","curing_time","die_open_core_out_time",
   "ejector_time","extract_time","spray_time","v1_speed","v2_speed","v3_speed","v4_speed","metal_pressure",
   "furnace_metal_temp","cooling_water_mov","cooling_water_sta","accel_point","deaccel_point","intensification_time",
@@ -16,14 +16,13 @@ const DEFAULT_PLC_CYCLE_COLUMNS = [
   "clamp_tonnage_op_low_pct","clamp_tonnage_he_up_pct","vacuum_pressure","clamp_force_pct","clamp_tonnage","shot_acc_pressure",
   "intensification_acc_pressure","fixed_die_temp_f1","fixed_die_temp_f2","moving_die_temp_m1","moving_die_temp_m2","slide_temp_s1",
   "fix_1_flow","fix_2_flow","fix_3_flow","mov_1_flow","mov_2_flow","mov_3_flow","vacuum_pressure_mmhg",
-  "average_die_clamp_tonnage_count","time_for_stroke","stroke","running_mode","emergency_stop","hyd_pump_motor_overload",
-  "hyd_oil_level_low","hyd_oil_high_temp","servo_pump_overload","servo_pump_motor_high_temp","die_close_step","pouring_step",
-  "shot_fwd_step","curing_step","die_open_step","ejector_step","extractor_step","spray_step","cycle_end","ng_shot","shot_status",
-  "shot_year","shot_month","shot_day","shot_uid","machine_key","manual_mode","raw_readings_json","shot_number","recorded_at","cycle_time"
+  "average_die_clamp_tonnage_count","time_for_stroke","stroke","shot_status"
 ];
 
-const normResult = (v) => {
+const normResult = (v, reason = "") => {
   const s = String(v || "").toUpperCase().trim();
+  const r = String(reason || "").toUpperCase().trim();
+  if (r === "NG_SHOT_STATUS" && ["BLOCK", "INTERLOCKED"].includes(s)) return "NG";
   if (["OK", "PASS", "COMPLETED", "ENDED_OK"].includes(s)) return "OK";
   if (["NG", "FAIL", "FAILED", "ENDED_NG", "INTERLOCKED"].includes(s)) return "NG";
   if (!s || s === "-" || s === "UNKNOWN") return "";
@@ -32,6 +31,15 @@ const normResult = (v) => {
 const formatPlcColumnLabel = (key) => {
   const raw = String(key || "").trim();
   if (!raw) return "PLC";
+  const friendly = {
+    machine_name: "Machine Name",
+    part_name: "Part Name",
+    shot_date: "Shot Date",
+    shot_time: "Shot Time",
+    shot_number: "Shot Number",
+    shot_status: "Shot Status",
+  };
+  if (friendly[raw]) return friendly[raw];
   const formatted = raw
     .replace(/_/g, " ")
     .replace(/\s+/g, " ")
@@ -195,42 +203,7 @@ const ReportsPage = () => {
     const stationPairs = Array.from(machineStationMap.values()).sort((a, b) =>
       a.op.localeCompare(b.op, undefined, { numeric: true, sensitivity: "base" }) || a.machineName.localeCompare(b.machineName)
     );
-    const livePlcKeys = [...new Set(sourceRows.flatMap((r) => {
-      const legacy = r.plcReading && typeof r.plcReading === "object" ? Object.keys(r.plcReading) : [];
-      const snake = r.plc_reading && typeof r.plc_reading === "object" ? Object.keys(r.plc_reading) : [];
-      const plural = r.plcReadings && typeof r.plcReadings === "object" ? Object.keys(r.plcReadings) : [];
-      const cycleCamel = r.plcCycleReadings && typeof r.plcCycleReadings === "object" ? Object.keys(r.plcCycleReadings) : [];
-      const cycleSnake = r.plc_cycle_readings && typeof r.plc_cycle_readings === "object" ? Object.keys(r.plc_cycle_readings) : [];
-      const flat = Object.keys(r || {}).filter((k) => /^plc[_A-Za-z0-9]*/.test(k) && k !== "plcReadings");
-      return [...legacy, ...snake, ...plural, ...cycleCamel, ...cycleSnake, ...flat];
-    }))];
-    const plcSet = new Set([...DEFAULT_PLC_CYCLE_COLUMNS, ...livePlcKeys]);
-    const preferredOrder = [
-      ...DEFAULT_PLC_CYCLE_COLUMNS, "shot_number", "recorded_at", "part_id", "partid", "part_no", "part_number",
-      "model_name", "model", "customer_qr", "customer_code", "process_result", "result", "status", "cycle_time", "ct",
-    ];
-    const rank = new Map(preferredOrder.map((k, i) => [k, i]));
-    const plcKeys = Array.from(plcSet)
-      .filter((k) => {
-        const nk = String(k || "").toLowerCase().trim();
-        return ![
-          "part_name",
-          "plc_ip",
-          "plc_port",
-          "plcreading",
-          "id",
-          "created_at",
-          "status",
-        ].includes(nk);
-      })
-      .sort((a, b) => {
-        const ak = String(a || "").toLowerCase();
-        const bk = String(b || "").toLowerCase();
-        const ar = rank.has(ak) ? rank.get(ak) : 9999;
-        const br = rank.has(bk) ? rank.get(bk) : 9999;
-        if (ar !== br) return ar - br;
-        return ak.localeCompare(bk);
-      });
+    const plcKeys = DEFAULT_PLC_CYCLE_COLUMNS;
     const plcColumns = (() => {
       const used = new Map();
       return plcKeys.map((key) => {
@@ -254,9 +227,8 @@ const ReportsPage = () => {
       { key: "partName", label: "Part Name" },
       { key: "customerCode", label: "Customer QR Code" },
       ...stationPairs.map((s) => ({ key: `station_${s.key}`, label: s.label })),
-      { key: "overallStatus", label: "Final" },
+      { key: "overallStatus", label: "Final Status" },
       ...plcColumns.map((c) => ({ key: `plc_${c.key}`, label: c.label })),
-      ...(filters.machineId ? [{ key: "cycleStartTime", label: "Cycle Start" }, { key: "cycleTimeValue", label: "Cycle Time" }] : []),
       { key: "ngReason", label: "Reason / Remark" },
     ];
 
@@ -270,7 +242,10 @@ const ReportsPage = () => {
         const stationMachine = String(row.machineName || "").trim();
         const stationKey = stationMachine && stationOp ? `${stationMachine}__${stationOp}` : "";
         if (stationKey) {
-          stationResults[stationKey] = String(row.industrialResult || row.statusLabel || "-").toUpperCase();
+          stationResults[stationKey] = normResult(
+            String(row.industrialResult || row.statusLabel || row.result || "-").toUpperCase(),
+            row.reason || row.interlock_reason
+          );
           stationCycleTimes[stationKey] = row.cycleTime || "-";
         }
         Object.assign(plcData, row.plcReading || {});
@@ -305,7 +280,26 @@ const ReportsPage = () => {
         shaped[`cycle_${s.key}`] = stationCycleTimes[s.key] || "-";
       });
       plcColumns.forEach(({ key }) => {
-        shaped[`plc_${key}`] = plcData[key] ?? first[key] ?? "-";
+        if (key === "shot_status") {
+          const code = Number(plcData[key] ?? first[key]);
+          shaped[`plc_${key}`] = ({ 1: "OK", 3: "WARM UP SHOT", 5: "OFF SHOT" }[code] || (plcData[key] ?? first[key] ?? "-"));
+        } else if (key === "shot_date") {
+          const y = plcData.shot_year ?? first.shot_year;
+          const m = plcData.shot_month ?? first.shot_month;
+          const d = plcData.shot_day ?? first.shot_day;
+          shaped[`plc_${key}`] = (y !== undefined && m !== undefined && d !== undefined)
+            ? `${String(y).padStart(4, "0")}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`
+            : (plcData[key] ?? first[key] ?? "-");
+        } else if (key === "shot_time") {
+          const hh = plcData.shot_hour ?? first.shot_hour;
+          const mm = plcData.shot_minute ?? first.shot_minute;
+          const ss = plcData.shot_second ?? first.shot_second;
+          shaped[`plc_${key}`] = (hh !== undefined && mm !== undefined && ss !== undefined)
+            ? `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`
+            : (plcData[key] ?? first[key] ?? "-");
+        } else {
+          shaped[`plc_${key}`] = plcData[key] ?? first[key] ?? "-";
+        }
       });
       return shaped;
     });

@@ -15,6 +15,7 @@ router.get("/traceability/io-snapshot", verifyToken, traceabilityController.getI
 router.get("/traceability/journey/:partId", traceabilityController.getPartJourney);
 router.get("/traceability/:partId", traceabilityController.getPartTraceability);
 router.post("/traceability/verify", verifyToken, traceabilityController.verifyScanForOperator);
+router.post("/traceability/map-customer-qr", verifyToken, traceabilityController.mapCustomerQrCode);
 router.post("/scan/process", verifyToken, traceabilityController.processScan);
 router.post("/plc/operation/start", verifyToken, isAdminOrEngineerStrict, traceabilityController.confirmOperationStart);
 router.post("/plc/operation/end", verifyToken, isAdminOrEngineerStrict, traceabilityController.confirmOperationEnd);

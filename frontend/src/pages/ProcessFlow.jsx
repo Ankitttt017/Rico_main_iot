@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { io } from "socket.io-client";
+import { SOCKET_URL } from "../constants/network";
 import {
   RefreshCw, Route, ZoomIn, ZoomOut,
   ChevronRight, Cpu, CheckCircle, XCircle,
@@ -11,7 +12,6 @@ import {
 } from "lucide-react";
 import { traceabilityApi } from "../api/services";
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:4000";
 
 const statusStyle = {
   RUNNING: { bg: "rgba(34,197,94,0.12)", bd: "rgba(34,197,94,0.38)", fg: "#16a34a", icon: <Play size={10} />, label: "RUNNING", gradient: "linear-gradient(135deg, #16a34a20, #16a34a05)" },

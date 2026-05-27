@@ -186,6 +186,12 @@ function normalizeSpcConfig(value) {
       folderPath: toText(protocolConfig.folderPath || source.folderConfig?.path) || null,
       delimiter: toText(protocolConfig.delimiter) || null,
       encoding: toText(protocolConfig.encoding || "utf8") || "utf8",
+      markingEnabled: protocolConfig.markingEnabled === true,
+      markingSecondaryProtocol: toText(protocolConfig.markingSecondaryProtocol || "TCP_CLIENT").toUpperCase() || "TCP_CLIENT",
+      markingSecondaryIp: toText(protocolConfig.markingSecondaryIp) || null,
+      markingSecondaryPort: toInt(protocolConfig.markingSecondaryPort),
+      markingSecondaryComPort: toText(protocolConfig.markingSecondaryComPort) || null,
+      markingCustomerQrKey: toText(protocolConfig.markingCustomerQrKey || "customer_qr") || "customer_qr",
     },
     parser: {
       mode: toText(parser.mode || "JSON").toUpperCase() || "JSON",

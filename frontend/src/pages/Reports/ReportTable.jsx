@@ -10,6 +10,15 @@ const StatusChip = ({ status }) => {
   return <span className={`${base} bg-slate-500/10 text-slate-600 border-slate-500/30`}>-</span>;
 };
 
+const ShotStatusChip = ({ value }) => {
+  const normalized = String(value || "").trim().toUpperCase();
+  const base = "inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold border";
+  if (normalized === "OK" || normalized === "1") return <span className={`${base} bg-emerald-500/10 text-emerald-600 border-emerald-500/30`}>OK</span>;
+  if (normalized.includes("WARM")) return <span className={`${base} bg-amber-500/10 text-amber-600 border-amber-500/30`}>WARM UP SHOT</span>;
+  if (normalized.includes("OFF") || normalized === "5") return <span className={`${base} bg-red-500/10 text-red-600 border-red-500/30`}>OFF SHOT</span>;
+  return <span className={`${base} bg-slate-500/10 text-slate-600 border-slate-500/30`}>{normalized || "-"}</span>;
+};
+
 const isStatusLike = (key) => key === "overallStatus" || key.startsWith("station_");
 
 const ReportTable = ({ rows = [], columns = [], loading }) => {
@@ -68,6 +77,13 @@ const ReportTable = ({ rows = [], columns = [], loading }) => {
                     return (
                       <td key={column.key} className="px-3 py-3 text-center whitespace-nowrap">
                         <StatusChip status={text} />
+                      </td>
+                    );
+                  }
+                  if (column.key === "plc_shot_status") {
+                    return (
+                      <td key={column.key} className="px-3 py-3 text-center whitespace-nowrap">
+                        <ShotStatusChip value={text} />
                       </td>
                     );
                   }

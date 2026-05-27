@@ -11,12 +11,10 @@ import {
   Maximize2,
   Minimize2,
 } from "lucide-react";
-import axios from "axios";
 import { getStationFeatures, getStationFeatureSettings } from "../utils/stationSettings";
 import { stationSettingsApi, traceabilityApi } from "../api/services";
 import { normalizeScanResponse } from "../utils/scanResponse";
 
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:4000/api";
 
 const StationIcon = React.memo(() => (
   <MapPin size={32} className="opacity-40 text-amber-500 animate-bounce" />
@@ -531,7 +529,8 @@ const GlobalPopup = ({
       setScanBanner(normalized);
 
       if (!normalized.ok) {
-        localValidatedPartIdRef.current = scannedCode;
+        // Failed/blocked QR is not a validated active part.
+        localValidatedPartIdRef.current = "";
         setValidationInfo("");
         setValidationError(normalized.message);
         setLocalScanDecision(String(normalized.decision || "FAIL").toUpperCase());
@@ -559,6 +558,8 @@ const GlobalPopup = ({
       setValidationInfo("");
       setValidationError(normalized.message);
       setLocalScanDecision("FAIL");
+      setLocalQrValidated(false);
+      localValidatedPartIdRef.current = "";
     } finally {
       if (requestSeq === validateRequestSeqRef.current) {
         setValidatingQr(false);
@@ -758,7 +759,7 @@ const GlobalPopup = ({
     const targetStationNo = stationNo || popup?.stationNo || popup?.station_no;
     const targetFeatures = getStationFeatures(targetStationNo, stationSettings);
     const isOnlyQrCheck = targetFeatures.qr === true && targetFeatures.operation === false;
-    const isManual = String(targetStationNo).toUpperCase() === "OP020" || Boolean(stationSettings?.[targetStationNo]?.manualResult);
+    const isManual = targetFeatures?.manualResult === true;
 
     const popupType = String(popup?.type || "").trim().toUpperCase();
     const popupQrState = resolveQrState(popup);
@@ -774,17 +775,19 @@ const GlobalPopup = ({
     ].join("|");
 
     let duration = 0;
+    const STANDARD_SUCCESS_CLOSE_MS = 6000;
+    const STANDARD_ERROR_CLOSE_MS = 9000;
 
     // Faster auto-close / auto-reset for QR-focused industrial flow
     if (isOnlyQrCheck) {
       const qrState = popupQrState;
       if (qrState === "PASS" || qrState === "DUPLICATE") {
-        duration = 7000;
+        duration = STANDARD_SUCCESS_CLOSE_MS;
       } else if (popup?.type === "ERROR" || qrState === "FAIL" || qrState === "BLOCKED") {
-        duration = Math.max(criticalAutoCloseMs || 0, 8000);
+        duration = Math.max(criticalAutoCloseMs || 0, STANDARD_ERROR_CLOSE_MS);
       } else {
         // Even when upstream state is partial/WAIT, close quickly to be ready for next industrial scan.
-        duration = 7000;
+        duration = STANDARD_SUCCESS_CLOSE_MS;
       }
     } else if (isManual) {
       // Manual-result station behavior:
@@ -796,7 +799,7 @@ const GlobalPopup = ({
       }
       const hasManualDecisionPending = Boolean(manualSelection);
       if ((validationError || popupType === "ERROR") && !hasManualDecisionPending) {
-        duration = 7000; // auto-close plain validation errors so next scan can start
+        duration = STANDARD_ERROR_CLOSE_MS; // auto-close plain validation errors so next scan can start
       } else
       if (manualSuccessMsg) {
         duration = 2200; // close quickly after final manual submit success
@@ -811,16 +814,18 @@ const GlobalPopup = ({
         const operationState = resolveOperationState(popup);
 
         if (operationState === "PASS") {
-          duration = 7000; // Auto-close for PASS
+          duration = STANDARD_SUCCESS_CLOSE_MS; // Auto-close for PASS
         } else if (["FAIL", "COMM", "TIMEOUT"].includes(operationState) || popupType === "ERROR" || qrState === "FAIL") {
-          duration = Math.max(criticalAutoCloseMs || 0, 8000); // shorter for errors
+          duration = Math.max(criticalAutoCloseMs || 0, STANDARD_ERROR_CLOSE_MS); // shorter for errors
         } else {
           const isCritical = popupType === "ERROR" || qrState === "FAIL";
           const hasStateDetails = Boolean(partId || stationNo || qrState !== "WAIT" || operationState !== "IDLE");
           if (!hasStateDetails) {
-            duration = 7000;
+            duration = STANDARD_SUCCESS_CLOSE_MS;
           } else {
-            duration = isCritical ? Math.max(criticalAutoCloseMs || 0, 8000) : Math.max(autoCloseMs || 0, 7000);
+            duration = isCritical
+              ? Math.max(criticalAutoCloseMs || 0, STANDARD_ERROR_CLOSE_MS)
+              : Math.max(autoCloseMs || 0, STANDARD_SUCCESS_CLOSE_MS);
           }
         }
       }
@@ -900,7 +905,8 @@ const GlobalPopup = ({
   // Keep validation errors visible so operators can read and act (no blink/disappear).
   useEffect(() => {
     const targetStationNo = stationNo || popup?.stationNo || popup?.station_no;
-    const isManual = String(targetStationNo).toUpperCase() === "OP020" || Boolean(stationSettings?.[targetStationNo]?.manualResult);
+    const targetFeatures = getStationFeatures(targetStationNo, stationSettings);
+    const isManual = targetFeatures?.manualResult === true;
     if (!isManual) return undefined;
 
     if (!validationInfo && !manualSuccessMsg) return undefined;
@@ -928,14 +934,22 @@ const GlobalPopup = ({
       Boolean(popup) &&
       (Boolean(scannerInfo?.isSimulation) || mode === "USB_SERIAL" || manualScanMode === true || popup?.manualScanMode === true);
     if (!shouldAutoFocus) return;
+    const isTypingInAnotherField = () => {
+      const active = document?.activeElement;
+      const tag = String(active?.tagName || "").toUpperCase();
+      const editable = active?.isContentEditable === true || ["INPUT", "TEXTAREA", "SELECT"].includes(tag);
+      return editable && active !== scanInputRef.current;
+    };
     if (isUsbMode) {
       const timer = setTimeout(() => {
+        if (isTypingInAnotherField()) return;
         if (scanInputRef.current && typeof scanInputRef.current.focus === "function") {
           scanInputRef.current.focus({ preventScroll: true });
         }
       }, 80);
       const keepFocusTimer = setInterval(() => {
         if (!popup) return;
+        if (isTypingInAnotherField()) return;
         const active = document?.activeElement;
         if (scanInputRef.current && active !== scanInputRef.current && typeof scanInputRef.current.focus === "function") {
           scanInputRef.current.focus({ preventScroll: true });
@@ -947,12 +961,14 @@ const GlobalPopup = ({
       };
     }
     const timer = setTimeout(() => {
+      if (isTypingInAnotherField()) return;
       if (scanInputRef.current && typeof scanInputRef.current.focus === "function") {
         scanInputRef.current.focus();
       }
     }, 80);
     const keepFocusTimer = setInterval(() => {
       if (!popup) return;
+      if (isTypingInAnotherField()) return;
       const active = document?.activeElement;
       if (scanInputRef.current && active !== scanInputRef.current && typeof scanInputRef.current.focus === "function") {
         scanInputRef.current.focus();
@@ -1007,8 +1023,7 @@ const GlobalPopup = ({
 
     const targetStationNo = stationNo || popup?.stationNo || popup?.station_no;
     const targetFeatures = getStationFeatures(targetStationNo, stationSettings);
-    const isManualResultStation =
-      targetFeatures?.manualResult === true || String(targetStationNo).toUpperCase() === "OP020";
+    const isManualResultStation = targetFeatures?.manualResult === true;
 
     const currentQrState = resolveQrState(popup);
     const currentOperationState = resolveOperationState(popup);
@@ -1042,6 +1057,12 @@ const GlobalPopup = ({
     const onUsbScannerKeyDown = (event) => {
       if (!popup) return;
       if (event.ctrlKey || event.altKey || event.metaKey) return;
+      const target = event.target;
+      const tag = String(target?.tagName || "").toUpperCase();
+      const isEditable =
+        target?.isContentEditable === true ||
+        ["INPUT", "TEXTAREA", "SELECT"].includes(tag);
+      if (isEditable && target !== scanInputRef.current) return;
 
       const now = Date.now();
       if (now - usbLastKeyAtRef.current > 250) {
@@ -1099,17 +1120,14 @@ const GlobalPopup = ({
       return () => { isActive = false; };
     }
 
-    const token = localStorage.getItem("token");
     const fetchJourney = async () => {
       try {
         const hasBlockingError = Boolean(validationError) || String(popup?.type || "").toUpperCase() === "ERROR";
         if (!journeyData && !hasBlockingError) {
           setLoading(true);
         }
-        const res = await axios.get(`${API_BASE}/traceability/journey/${encodeURIComponent(partId)}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (isActive) setJourneyData(res.data);
+        const res = await traceabilityApi.journeyByPart(partId);
+        if (isActive) setJourneyData(res);
       } catch (error) {
         console.warn("[GlobalPopup] Journey fetch failed:", error?.message || error);
       } finally {
@@ -1197,7 +1215,7 @@ const GlobalPopup = ({
 
   const targetStationNo = stationNo || popup.stationNo || popup.station_no;
   const features = getStationFeatures(targetStationNo, stationSettings);
-  const isManualResultStation = features?.manualResult === true || String(targetStationNo).toUpperCase() === "OP020";
+  const isManualResultStation = features?.manualResult === true;
 
   const stationScopedJourney = journeyScope === "station" && targetStationNo
     ? enrichedStations.filter((s) => String(s.stationNo || "").trim().toUpperCase() === String(targetStationNo).trim().toUpperCase())

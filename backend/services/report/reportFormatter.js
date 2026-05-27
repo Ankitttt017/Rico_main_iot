@@ -32,6 +32,11 @@ function resolveIndustrialResult(row) {
   const plcStatus = String(row.plc_status || "").toUpperCase();
   const reason    = String(row.interlock_reason || "").toUpperCase();
 
+  // NG shot events (warmup/off-shot etc.) are production NG outcomes.
+  if (reason === "NG_SHOT_STATUS") {
+    return { status: "NG", category: "PRODUCTION" };
+  }
+
   // 1. Validation Rejects / Process Artifacts
   const isValidationReject = VALIDATION_REJECT_REASONS.some(r => 
     reason.includes(r) || plcStatus.includes(r) || rawResult.includes(r)

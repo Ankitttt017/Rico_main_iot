@@ -17,6 +17,7 @@ const { resolveIndustrialResult } = require("./reportFormatter");
 const PLC_READING_TABLE = "PlcCycleReadings";
 
 const PLC_PART_ID_CANDIDATE_COLUMNS = [
+  "shot_uid",
   "part_id",
   "partid",
   "part_serial_no",
@@ -51,6 +52,28 @@ const NON_PRODUCTION_REASONS = new Set([
   "VALIDATION_ERROR",
 ]);
 
+function enrichPlcReadingDisplay(row) {
+  if (!row || typeof row !== "object") return row;
+  const next = { ...row };
+  const y = Number(next.shot_year);
+  const m = Number(next.shot_month);
+  const d = Number(next.shot_day);
+  const hh = Number(next.shot_hour);
+  const mm = Number(next.shot_minute);
+  const ss = Number(next.shot_second);
+  if (Number.isFinite(y) && Number.isFinite(m) && Number.isFinite(d)) {
+    next.shot_date = `${String(y).padStart(4, "0")}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  }
+  if (Number.isFinite(hh) && Number.isFinite(mm) && Number.isFinite(ss)) {
+    next.shot_time = `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+  }
+  const shotStatus = Number(next.shot_status);
+  if (shotStatus === 1) next.shot_status_text = "OK";
+  else if (shotStatus === 3) next.shot_status_text = "WARM_UP_SHOT";
+  else if (shotStatus === 5) next.shot_status_text = "OFFSET_SHOT";
+  return next;
+}
+
 function isProductionReportLog(log) {
   if (!log) return false;
 
@@ -61,7 +84,7 @@ function isProductionReportLog(log) {
 
   if (status === "RESET" || status === "VALIDATION_ONLY") return false;
   if (NON_PRODUCTION_REASONS.has(reason)) return false;
-  if (result === "BLOCK") return false;
+  if (result === "BLOCK" && reason !== "NG_SHOT_STATUS") return false;
 
   if (status === "INTERLOCKED") {
     if (validationResult === "DUPLICATE" || validationResult === "BLOCKED") return false;
@@ -74,18 +97,31 @@ function isProductionReportLog(log) {
 function normalizeKey(value) {
   return String(value || "").trim().toUpperCase();
 }
+function normalizeShotToken(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw || raw.toUpperCase() === "NULL") return "";
+  const digits = raw.replace(/\D/g, "");
+  if (!digits) return raw.toUpperCase();
+  const noLead = digits.replace(/^0+/, "");
+  return (noLead || "0").toUpperCase();
+}
 function extractShotFromPartId(partId) {
   const raw = String(partId || "").trim();
   if (!raw) return "";
   const digits = raw.replace(/\D/g, "");
-  if (digits.length <= 10) return "";
-  return digits.slice(10);
+  if (!digits) return "";
+  // Common production format: YYMMDDHHMMSS + SHOT_SUFFIX
+  const tsShot = digits.match(/^(\d{12})(\d{1,8})$/);
+  if (tsShot?.[2]) return tsShot[2];
+  if (digits.length <= 12) return "";
+  return digits.slice(12);
 }
 function deriveShotCandidates(log) {
   const direct = String(log.shot_number || log.shotNumber || "").trim();
   const fromPartPattern = extractShotFromPartId(log.part_id);
   const fromPartRaw = String(log.part_id || "").trim();
-  const candidates = [direct, fromPartPattern, fromPartRaw]
+  const digitGroups = fromPartRaw.match(/\d+/g) || [];
+  const candidates = [direct, fromPartPattern, fromPartRaw, ...digitGroups]
     .map((v) => String(v || "").trim())
     .filter(Boolean);
   return [...new Set(candidates)];
@@ -170,6 +206,31 @@ async function fetchLatestPlcReadingsByColumn(columnName, values = []) {
     } catch (_) {
       // Keep report resilient even when schema differs on some installations.
     }
+  }
+  return map;
+}
+
+async function fetchLatestPlcReadingsByShotTokens(values = []) {
+  const map = new Map();
+  const shotValues = [...new Set(values.map((v) => normalizeShotToken(v)).filter(Boolean))];
+  if (!shotValues.length) return map;
+  try {
+    const placeholders = shotValues.map((_, idx) => `:s${idx}`).join(", ");
+    const replacements = shotValues.reduce((acc, value, idx) => {
+      acc[`s${idx}`] = value;
+      return acc;
+    }, {});
+    const [rows] = await sequelize.query(
+      `SELECT * FROM ${PLC_READING_TABLE} WHERE CAST(shot_number AS NVARCHAR(255)) IN (${placeholders}) ORDER BY recorded_at DESC`,
+      { replacements }
+    );
+    for (const row of rows || []) {
+      const key = normalizeShotToken(row.shot_number || "");
+      if (!key || map.has(key)) continue;
+      map.set(key, row);
+    }
+  } catch (_) {
+    return map;
   }
   return map;
 }
@@ -374,8 +435,13 @@ async function fetchProductionData(filters = {}) {
   const plcByPartId = partLookupColumn
     ? await fetchLatestPlcReadingsByColumn(partLookupColumn, partIdsForPlcLookup)
     : new Map();
+  const plcByUid = plcColumns.has("shot_uid")
+    ? await fetchLatestPlcReadingsByColumn("shot_uid", partIdsForPlcLookup)
+    : new Map();
   const plcByShot = shotLookupColumn
-    ? await fetchLatestPlcReadingsByColumn(shotLookupColumn, shotNumbers)
+    ? (String(shotLookupColumn).toLowerCase() === "shot_number"
+      ? await fetchLatestPlcReadingsByShotTokens(shotNumbers)
+      : await fetchLatestPlcReadingsByColumn(shotLookupColumn, shotNumbers))
     : new Map();
 
   // Enrich & Standardize
@@ -405,11 +471,13 @@ async function fetchProductionData(filters = {}) {
       : normalizedPartId.slice(0, 8) || "-";
 
     const partLookupKey = normalizeKey(partIdValue);
-    const shotCandidates = deriveShotCandidates(log).map((s) => normalizeKey(s));
-    const plcReadingFromDb =
+    const shotCandidates = deriveShotCandidates(log).map((s) => normalizeShotToken(s) || normalizeKey(s));
+    const plcReadingFromDbRaw =
+      plcByUid.get(partLookupKey) ||
       plcByPartId.get(partLookupKey) ||
       shotCandidates.map((k) => plcByShot.get(k)).find(Boolean) ||
       null;
+    const plcReadingFromDb = enrichPlcReadingDisplay(plcReadingFromDbRaw);
 
     return {
       ...log,

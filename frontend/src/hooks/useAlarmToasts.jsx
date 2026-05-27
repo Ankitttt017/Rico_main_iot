@@ -7,10 +7,11 @@
  */
 import { useEffect } from "react";
 import { io } from "socket.io-client";
+import { SOCKET_URL } from "../constants/network";
 import toast from "react-hot-toast";
 import IndustrialToast from "../components/IndustrialToast";
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:4000";
+
 
 // Simple ASCII icon strings for each event type.
 const ICONS = {
@@ -163,3 +164,6 @@ export function useAlarmToasts() {
     };
   }, []);
 }
+
+
+

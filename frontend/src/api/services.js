@@ -276,6 +276,12 @@ export const traceabilityApi = {
     });
     return data;
   },
+  mapCustomerQr: async (payload) => {
+    const { data } = await apiClient.post(ENDPOINTS.traceability.mapCustomerQr, payload, {
+      timeout: 10000,
+    });
+    return data;
+  },
   plcStart: async (payload) => {
     const { data } = await apiClient.post(ENDPOINTS.traceability.plcStart, payload);
     return data;
@@ -323,6 +329,10 @@ export const traceabilityApi = {
 };
 
 export const dashboardApi = {
+  oee: async () => {
+    const { data } = await apiClient.get(ENDPOINTS.dashboard.oee);
+    return data;
+  },
   summary: async (params) => {
     const { data } = await apiClient.get(ENDPOINTS.dashboard.summary, { params });
     return data;

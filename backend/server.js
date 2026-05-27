@@ -50,6 +50,7 @@ require("./models/StationFeatureSetting");
 require("./models/RoleAccessSetting");
 require("./models/PlcRegisterRange");
 require("./models/ScannerConnection");
+require("./models/PartCodeMapping");
 const { getPartRoom, setSocketServer } = require("./services/realtimeService");
 const { resetAllMachineLocks } = require("./services/machineLockService");
 const scannerService = require("./services/scannerConnectionService");
@@ -213,6 +214,8 @@ async function runStartupDbTask(label, taskFn) {
 
 let statusEmitterTimerRef = null;
 let shuttingDown = false;
+let lastStatusEmitterDbErrorAt = 0;
+const STATUS_EMITTER_DB_ERROR_THROTTLE_MS = 60 * 1000;
 
 function stopStatusEmitter() {
   if (statusEmitterTimerRef) {
@@ -240,7 +243,20 @@ function scheduleStatusEmitter() {
         scanners.map((scanner) => scanner.toJSON())
       );
     } catch (error) {
-      console.error("Socket status emitter error:", error);
+      const now = Date.now();
+      const isDbConnError =
+        String(error?.name || "").includes("SequelizeConnectionError") ||
+        String(error?.parent?.code || "").toUpperCase() === "ESOCKET";
+      if (isDbConnError) {
+        if (now - lastStatusEmitterDbErrorAt >= STATUS_EMITTER_DB_ERROR_THROTTLE_MS) {
+          lastStatusEmitterDbErrorAt = now;
+          console.warn(
+            `[SocketStatus] DB connection issue while emitting status; will retry. ${error?.message || ""}`
+          );
+        }
+      } else {
+        console.error("Socket status emitter error:", error);
+      }
     } finally {
       if (!shuttingDown) {
         scheduleStatusEmitter();

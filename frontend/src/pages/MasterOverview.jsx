@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { io } from "socket.io-client";
+import { SOCKET_URL } from "../constants/network";
 import { 
   Activity, 
   Cpu, 
@@ -19,7 +20,7 @@ import {
 } from "lucide-react";
 import { machineApi, dashboardApi } from "../api/services";
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:4000";
+
 
 const MasterOverview = () => {
   const [machines, setMachines] = useState([]);
@@ -272,3 +273,6 @@ const MasterOverview = () => {
 };
 
 export default MasterOverview;
+
+
+

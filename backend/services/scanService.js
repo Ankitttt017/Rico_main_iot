@@ -166,6 +166,15 @@ async function ensurePlcCycleReadingExists(parsed) {
 }
 
 async function checkPlcCycleReading(barcode) {
+  const isOkShotStatus = (value) => Number(value) === 1;
+  const getShotStatusCode = (row) => Number(row?.shot_status);
+  const getShotStatusLabel = (value) => {
+    const code = Number(value);
+    if (code === 1) return "OK";
+    if (code === 3) return "WARM_UP_SHOT";
+    if (code === 5) return "OFFSET_SHOT";
+    return Number.isFinite(code) ? `UNKNOWN_${code}` : "UNKNOWN";
+  };
   const parsed = parseBarcodeToCycleReadingFields(barcode);
 
   if (parsed.success) {
@@ -199,7 +208,19 @@ async function checkPlcCycleReading(barcode) {
       });
 
       if (results && results.length > 0) {
-        return { success: true, reading: results[0], shotNumber: parsed.shot_number };
+        const reading = results[0];
+        const shotStatus = getShotStatusCode(reading);
+        if (!isOkShotStatus(shotStatus)) {
+          return {
+            success: false,
+            reason: "NG_SHOT_STATUS",
+            message: `Shot status ${shotStatus} (${getShotStatusLabel(shotStatus)}) is not allowed.`,
+            reading,
+            shotNumber: parsed.shot_number,
+            shotStatus,
+          };
+        }
+        return { success: true, reading, shotNumber: parsed.shot_number, shotStatus };
       }
     } catch (err) {
       console.warn(`[PLC_CYCLE_AUDIT] Exact query failed (table may not have columns):`, err.message);
@@ -270,7 +291,19 @@ async function checkPlcCycleReading(barcode) {
           });
 
           if (strictResults && strictResults.length > 0) {
-            return { success: true, reading: strictResults[0], shotNumber: parsedSeq };
+            const reading = strictResults[0];
+            const shotStatus = getShotStatusCode(reading);
+            if (!isOkShotStatus(shotStatus)) {
+              return {
+                success: false,
+                reason: "NG_SHOT_STATUS",
+                message: `Shot status ${shotStatus} (${getShotStatusLabel(shotStatus)}) is not allowed.`,
+                reading,
+                shotNumber: parsedSeq,
+                shotStatus,
+              };
+            }
+            return { success: true, reading, shotNumber: parsedSeq, shotStatus };
           }
         } catch (err) {
           // ignore
@@ -283,7 +316,19 @@ async function checkPlcCycleReading(barcode) {
   try {
     const [results] = await sequelize.query(query + " ORDER BY recorded_at DESC", { replacements });
     if (results && results.length > 0) {
-      return { success: true, reading: results[0], shotNumber };
+      const reading = results[0];
+      const shotStatus = getShotStatusCode(reading);
+      if (!isOkShotStatus(shotStatus)) {
+        return {
+          success: false,
+          reason: "NG_SHOT_STATUS",
+          message: `Shot status ${shotStatus} (${getShotStatusLabel(shotStatus)}) is not allowed.`,
+          reading,
+          shotNumber,
+          shotStatus,
+        };
+      }
+      return { success: true, reading, shotNumber, shotStatus };
     }
   } catch (err) {
     // ignore
@@ -622,12 +667,41 @@ exports.saveScan = async (partId, stationNo, result, machineId = 0, userId = nul
     if (!skipShotValidation && station === firstStation) {
       const plcMatch = await checkPlcCycleReading(normalizedPartId);
       if (!plcMatch?.success) {
+        const blockedPart = await Part.findOne({ where: { part_id: normalizedPartId } }) || await Part.create({
+          part_id: normalizedPartId,
+          month: now.getMonth() + 1,
+          year: now.getFullYear(),
+          current_operation: null,
+          current_station: null,
+          status: "IN_PROGRESS",
+        });
+        const interlockReason = String(plcMatch?.reason || "PART_NOT_FOUND").toUpperCase();
+        const blockedLog = await OperationLog.create({
+          part_id: normalizedPartId,
+          machine_id: mId || null,
+          operation_no: station,
+          station_no: station,
+          plc_status: "INTERLOCKED",
+          result: "BLOCK",
+          scan_attempt_type: "INITIAL",
+          validation_result: "FAILED",
+          operation_result: "INTERLOCKED",
+          user_id: userId,
+          interlock_reason: interlockReason,
+          shot_number: plcMatch?.shotNumber || null,
+        });
+        blockedPart.last_validation_result = "FAILED";
+        blockedPart.interlock_reason = interlockReason;
+        await blockedPart.save();
         return {
           decision: "BLOCK",
-          reason: "PART_NOT_FOUND",
+          reason: interlockReason,
           validationResult: "FAILED",
-          message: "Part QR not found in moulding records. Verify part was recorded first.",
+          message: interlockReason === "NG_SHOT_STATUS"
+            ? (plcMatch?.message || "Shot status is not OK. Warm-up/offset shots are blocked.")
+            : "Part QR not found in moulding records. Verify part was recorded first.",
           currentStatus: "REJECTED_PLC_MATCH",
+          operationLogId: blockedLog.id,
         };
       }
     }

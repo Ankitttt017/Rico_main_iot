@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { scannerApi, machineApi } from "../api/services";
-import { formatMachineLabel } from "../utils/machineFields";
+import { formatMachineLabel, sanitizeLineName } from "../utils/machineFields";
 import ConfirmModal from "../components/ConfirmModal";
 
 /* ─── constants ────────────────────────────────────────────── */
@@ -20,7 +20,7 @@ const EMPTY_FORM = {
   plcStartRegister: "", plcEndRegister: "", plcDataType: "ALPHANUM",
   plcTimeoutMs: "8000", plcReadRetryCount: "3", plcReadRetryDelayMs: "300",
   concatSeparator: "",
-  mappedMachineId: "", isActive: true, isSimulation: false,
+  mappedMachineId: "", isActive: true, isSimulation: false, scannerRole: "",
 };
 
 const SCANNER_MODES = [
@@ -97,6 +97,7 @@ const Scanners = () => {
       plcReadRetryDelayMs: scanner.plcReadRetryDelayMs ? String(scanner.plcReadRetryDelayMs) : "300",
       concatSeparator: scanner.concatSeparator || "",
       mappedMachineId: String(scanner.mappedMachineId || ""),
+      scannerRole: String(scanner.scannerRole || ""),
       isActive: Boolean(scanner.isActive),
       isSimulation: Boolean(scanner.isSimulation),
     });
@@ -121,6 +122,7 @@ const Scanners = () => {
         plcReadRetryCount: form.plcReadRetryCount ? Number(form.plcReadRetryCount) : null,
         plcReadRetryDelayMs: form.plcReadRetryDelayMs ? Number(form.plcReadRetryDelayMs) : null,
         mappedMachineId: form.mappedMachineId ? Number(form.mappedMachineId) : null,
+        scannerRole: form.scannerRole || null,
       };
       if (editingId) await scannerApi.update(editingId, payload);
       else await scannerApi.create(payload);
@@ -179,6 +181,7 @@ const Scanners = () => {
         plcReadRetryCount: form.plcReadRetryCount ? Number(form.plcReadRetryCount) : null,
         plcReadRetryDelayMs: form.plcReadRetryDelayMs ? Number(form.plcReadRetryDelayMs) : null,
         mappedMachineId: form.mappedMachineId ? Number(form.mappedMachineId) : null,
+        scannerRole: form.scannerRole || null,
       };
       const result = await scannerApi.testRead(payload);
       setTestReadResult(result);
@@ -342,6 +345,14 @@ const Scanners = () => {
                   className={selectCls}>
                   <option value="">— Select Machine —</option>
                   {machines.map(m => <option key={m.id} value={m.id}>{formatMachineLabel(m)}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-[9px] font-black text-text-muted uppercase tracking-wider block mb-1.5">Scanner Role (Optional)</label>
+                <select value={form.scannerRole} onChange={e => setForm({ ...form, scannerRole: e.target.value })} className={selectCls}>
+                  <option value="">GENERAL</option>
+                  <option value="START_QR">START_QR</option>
+                  <option value="CUSTOMER_QR">CUSTOMER_QR</option>
                 </select>
               </div>
             </div>
@@ -562,8 +573,8 @@ const Scanners = () => {
                               {scanner.mappedMachine.machineName}
                             </span>
                           </div>
-                          {scanner.mappedMachine.lineName && (
-                            <p className="text-[9px] text-text-muted mt-0.5 ml-4">{scanner.mappedMachine.lineName}</p>
+                          {sanitizeLineName(scanner.mappedMachine.lineName) && (
+                            <p className="text-[9px] text-text-muted mt-0.5 ml-4">{sanitizeLineName(scanner.mappedMachine.lineName)}</p>
                           )}
                         </div>
                       ) : (

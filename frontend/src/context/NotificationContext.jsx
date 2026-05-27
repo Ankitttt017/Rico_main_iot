@@ -1,10 +1,10 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { io } from "socket.io-client";
 import { alarmApi } from "../api/services";
+import { SOCKET_URL } from "../constants/network";
 
 const NotificationContext = createContext();
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:4000";
 
 export const NotificationProvider = ({ children }) => {
   const [notifications, setNotifications] = useState([]);

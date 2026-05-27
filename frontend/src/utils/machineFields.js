@@ -158,11 +158,19 @@ export function getMachineStage(machine) {
   return machine?.operationNo || machine?.stationNo || "-";
 }
 
+export function sanitizeLineName(lineName) {
+  const normalized = String(lineName || "").trim();
+  if (!normalized) return "";
+  if (normalized.toUpperCase() === "OIL PAN K-12") return "";
+  return normalized;
+}
+
 export function formatMachineLabel(machine) {
   if (!machine) {
     return "Machine";
   }
   const stage = getMachineStage(machine);
-  const line = machine.lineName ? ` | ${machine.lineName}` : "";
+  const cleanLine = sanitizeLineName(machine.lineName);
+  const line = cleanLine ? ` | ${cleanLine}` : "";
   return `${stage} - ${machine.machineName || "Machine"}${line}`;
 }

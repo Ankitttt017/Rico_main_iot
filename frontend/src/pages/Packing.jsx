@@ -9,6 +9,7 @@
 // ============================================================
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
+import { SOCKET_URL } from "../constants/network";
 import {
   Boxes, Printer, RefreshCw, ScanLine, CheckCircle2,
   Clock, Package, QrCode, X, AlertCircle,
@@ -16,7 +17,7 @@ import {
 } from "lucide-react";
 import { packingApi } from "../api/services";
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:4000";
+
 
 // ── Design tokens ──────────────────────────────────────────────────────────
 const DS = `
@@ -909,3 +910,6 @@ const Packing=()=>{
 };
 
 export default Packing;
+
+
+

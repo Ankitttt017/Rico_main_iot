@@ -434,6 +434,12 @@ function emptyForm() {
     spcFolderPattern: "*.json",
     spcFolderParser: "JSON",
     spcFolderDeleteAfterRead: true,
+    markingEnabled: false,
+    markingSecondaryProtocol: "TCP_CLIENT",
+    markingSecondaryIp: "",
+    markingSecondaryPort: "",
+    markingSecondaryComPort: "",
+    markingCustomerQrKey: "customer_qr",
     spcDynamicRegisters: [],
     spcRetryCount: "4",
     spcRetryDelayMs: "1500",
@@ -550,6 +556,12 @@ function formFromMachine(m) {
     spcFolderPattern: spc.folderConfig?.pattern || "*.json",
     spcFolderParser: spc.folderConfig?.parser || "JSON",
     spcFolderDeleteAfterRead: spc.folderConfig?.deleteAfterRead !== false,
+    markingEnabled: spc.protocolConfig?.markingEnabled === true,
+    markingSecondaryProtocol: spc.protocolConfig?.markingSecondaryProtocol || "TCP_CLIENT",
+    markingSecondaryIp: spc.protocolConfig?.markingSecondaryIp || "",
+    markingSecondaryPort: String(spc.protocolConfig?.markingSecondaryPort ?? ""),
+    markingSecondaryComPort: spc.protocolConfig?.markingSecondaryComPort || "",
+    markingCustomerQrKey: spc.protocolConfig?.markingCustomerQrKey || "customer_qr",
     spcDynamicRegisters: Array.isArray(spc.dynamicRegisters)
       ? spc.dynamicRegisters.map((r) => ({
           id: uid(),
@@ -662,6 +674,14 @@ function buildPayload(f) {
       validationRule: r.validationRule || "",
     })).filter((r) => r.register !== null),
     sourceConfigNotes: (f.sourceConfigNotes || "").trim() || null,
+    protocolConfig: {
+      markingEnabled: f.markingEnabled === true,
+      markingSecondaryProtocol: String(f.markingSecondaryProtocol || "TCP_CLIENT").toUpperCase(),
+      markingSecondaryIp: (f.markingSecondaryIp || "").trim() || null,
+      markingSecondaryPort: toNum(f.markingSecondaryPort),
+      markingSecondaryComPort: (f.markingSecondaryComPort || "").trim() || null,
+      markingCustomerQrKey: (f.markingCustomerQrKey || "customer_qr").trim() || "customer_qr",
+    },
   };
 
   return {
@@ -1144,12 +1164,14 @@ export default function MachinePage() {
     }
   };
 
-  const handleTestConnection = async () => {
+  const handleTestConnection = async ({ useMarking = false } = {}) => {
     setShowTestModal(true);
     setTesting(true);
     setTestResult(null);
     try {
-      const uiMode = String(form.spcMode || "TCP_CLIENT").toUpperCase();
+      const uiMode = useMarking
+        ? String(form.markingSecondaryProtocol || "TCP_CLIENT").toUpperCase()
+        : String(form.spcMode || "TCP_CLIENT").toUpperCase();
       const modeMap = {
         TCP_CLIENT: "TCP_CLIENT",
         TCP_SERVER: "TCP_SERVER",
@@ -1162,9 +1184,15 @@ export default function MachinePage() {
         SIMULATION: "SIMULATION",
       };
       const mode = modeMap[uiMode] || "TCP_CLIENT";
-      const endpoint = mode === "HTTP_API" ? form.spcSourceIp : mode === "FILE_WATCH" ? null : undefined;
-      const sourceIp = mode === "SERIAL" ? (form.spcSourceIp || "") : (form.spcSourceIp || form.plcIp || "");
-      const sourcePort = mode === "USB_SCANNER" ? null : toNum(form.spcSourcePort || form.plcPort);
+      const endpoint = mode === "HTTP_API"
+        ? (useMarking ? form.markingSecondaryIp : form.spcSourceIp)
+        : mode === "FILE_WATCH"
+          ? null
+          : undefined;
+      const sourceIp = mode === "SERIAL"
+        ? (useMarking ? (form.markingSecondaryComPort || form.markingSecondaryIp || "") : (form.spcSourceIp || ""))
+        : (useMarking ? (form.markingSecondaryIp || form.plcIp || "") : (form.spcSourceIp || form.plcIp || ""));
+      const sourcePort = mode === "USB_SCANNER" ? null : toNum(useMarking ? (form.markingSecondaryPort || form.plcPort) : (form.spcSourcePort || form.plcPort));
 
       if (mode === "TCP_CLIENT" && !sourceIp) {
         throw new Error("Source IP is required for TCP Client test");
@@ -1197,7 +1225,7 @@ export default function MachinePage() {
       });
 
       const payload = {
-        mode: uiMode,
+        mode: useMarking ? `MARKING_${uiMode}` : uiMode,
         connectivity: connection,
       };
 
@@ -2081,6 +2109,63 @@ export default function MachinePage() {
                           </>
                         );
                       })()}
+
+                      <SectionCard title="Marking QR Capture" subtitle="Optional secondary scanner/customer QR mapping config" icon={ScanLine}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, background: C.card }}>
+                            <div>
+                              <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: C.text }}>Enable Marking Mode</p>
+                              <p style={{ margin: "2px 0 0", fontSize: 10, color: C.hint }}>When enabled, machine can capture second customer QR for old-to-new mapping.</p>
+                            </div>
+                            <Toggle checked={form.markingEnabled === true} onChange={(v) => setF("markingEnabled", v)} color={C.amber} />
+                          </div>
+
+                          {form.markingEnabled && (
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10 }}>
+                              <div>
+                                <Label>Secondary Protocol</Label>
+                                <FSelect value={form.markingSecondaryProtocol} onChange={(e) => setF("markingSecondaryProtocol", e.target.value)}>
+                                  <option value="TCP_CLIENT">TCP Client</option>
+                                  <option value="TCP_SERVER">TCP Server</option>
+                                  <option value="USB_SERIAL">USB Serial</option>
+                                  <option value="USB_HID">USB HID</option>
+                                  <option value="PLC_REGISTER">PLC Register</option>
+                                </FSelect>
+                              </div>
+                              <div>
+                                <Label>{["USB_SERIAL", "SERIAL"].includes(String(form.markingSecondaryProtocol || "").toUpperCase()) ? "Secondary COM / Host" : "Secondary IP / Host"}</Label>
+                                <FInput value={form.markingSecondaryIp} onChange={(e) => setF("markingSecondaryIp", e.target.value)} placeholder={["USB_SERIAL", "SERIAL"].includes(String(form.markingSecondaryProtocol || "").toUpperCase()) ? "COM5" : "192.168.1.60"} mono />
+                              </div>
+                              <div>
+                                <Label>{["USB_SERIAL", "SERIAL"].includes(String(form.markingSecondaryProtocol || "").toUpperCase()) ? "Baud / Port (optional)" : "Secondary Port"}</Label>
+                                <FInput value={form.markingSecondaryPort} onChange={(e) => setF("markingSecondaryPort", e.target.value)} placeholder={["USB_SERIAL", "SERIAL"].includes(String(form.markingSecondaryProtocol || "").toUpperCase()) ? "9600" : "9001"} mono />
+                              </div>
+                              <div>
+                                <Label>Customer QR Key</Label>
+                                <FInput value={form.markingCustomerQrKey} onChange={(e) => setF("markingCustomerQrKey", e.target.value)} placeholder="customer_qr" mono />
+                              </div>
+                              <div>
+                                <Label>Secondary COM Port (if serial)</Label>
+                                <FInput value={form.markingSecondaryComPort} onChange={(e) => setF("markingSecondaryComPort", e.target.value)} placeholder="COM5" mono />
+                              </div>
+                              <div style={{ display: "flex", alignItems: "flex-end" }}>
+                                <button
+                                  type="button"
+                                  onClick={() => handleTestConnection({ useMarking: true })}
+                                  style={{
+                                    display: "inline-flex", alignItems: "center", gap: 6,
+                                    padding: "8px 12px", borderRadius: 8,
+                                    border: `1px solid ${C.greenBd}`, background: C.greenLt, color: C.green,
+                                    fontSize: 12, fontWeight: 700, cursor: "pointer",
+                                  }}
+                                >
+                                  <Zap size={12} /> Test Marking Source
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </SectionCard>
 
                       
 

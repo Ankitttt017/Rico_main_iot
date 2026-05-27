@@ -9,7 +9,7 @@ import {
   Eye, EyeOff, Loader2, User, Lock, Shield,
   Wrench, HardHat, ChevronRight,
 } from "lucide-react";
-import axios from "axios";
+import { authApi } from "../api/services";
 
 // ── Keyframe + theme injection (same pattern as ComponentJourney) ──────────
 const STYLES = `
@@ -134,11 +134,7 @@ const CreateUser = () => {
     e.preventDefault();
     setStatus({ type: "loading", message: "Creating user account…" });
     try {
-      await axios.post(
-        "http://localhost:4000/api/auth/register",
-        formData,
-        { headers: { Authorization: `Bearer ${localStorage.getItem("token")}` } }
-      );
+      await authApi.register(formData);
       setStatus({ type: "success", message: `User "${formData.username}" created successfully.` });
       setFormData({ username: "", password: "", role: "Operator" });
     } catch (err) {

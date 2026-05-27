@@ -20,6 +20,11 @@ const Scanner = sequelize.define("Scanner", {
     allowNull: false,
     defaultValue: "TCP_CLIENT",
   },
+  scanner_role: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    defaultValue: null,
+  },
   plc_ip: {
     type: DataTypes.STRING,
     allowNull: true,

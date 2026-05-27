@@ -258,6 +258,7 @@ async function ensureScannerColumnsExist() {
 
     const scannerColumns = [
       { name: "scanner_mode", type: "NVARCHAR(30)", defaultValue: "'TCP_CLIENT'" },
+      { name: "scanner_role", type: "NVARCHAR(30)", defaultValue: "NULL" },
       { name: "plc_ip", type: "NVARCHAR(100)", defaultValue: "NULL" },
       { name: "plc_port", type: "INT", defaultValue: "NULL" },
       { name: "plc_protocol", type: "NVARCHAR(30)", defaultValue: "'MODBUS_TCP'" },

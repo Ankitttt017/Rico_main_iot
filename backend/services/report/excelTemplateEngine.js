@@ -7,7 +7,7 @@
 const ExcelJS = require("exceljs");
 const { formatIndustrialTimestamp, resolveIndustrialResult } = require("./reportFormatter");
 const DEFAULT_PLC_CYCLE_COLUMNS = [
-  "id","created_at","machine_name","shot_hour","shot_minute","shot_second","ok_shot",
+  "machine_name","shot_date","shot_time","shot_number","cycle_time",
   "die_close_core_in_time","pouring_time","shot_fwd_time","curing_time","die_open_core_out_time",
   "ejector_time","extract_time","spray_time","v1_speed","v2_speed","v3_speed","v4_speed","metal_pressure",
   "furnace_metal_temp","cooling_water_mov","cooling_water_sta","accel_point","deaccel_point","intensification_time",
@@ -15,10 +15,7 @@ const DEFAULT_PLC_CYCLE_COLUMNS = [
   "clamp_tonnage_op_low_pct","clamp_tonnage_he_up_pct","vacuum_pressure","clamp_force_pct","clamp_tonnage","shot_acc_pressure",
   "intensification_acc_pressure","fixed_die_temp_f1","fixed_die_temp_f2","moving_die_temp_m1","moving_die_temp_m2","slide_temp_s1",
   "fix_1_flow","fix_2_flow","fix_3_flow","mov_1_flow","mov_2_flow","mov_3_flow","vacuum_pressure_mmhg",
-  "average_die_clamp_tonnage_count","time_for_stroke","stroke","running_mode","emergency_stop","hyd_pump_motor_overload",
-  "hyd_oil_level_low","hyd_oil_high_temp","servo_pump_overload","servo_pump_motor_high_temp","die_close_step","pouring_step",
-  "shot_fwd_step","curing_step","die_open_step","ejector_step","extractor_step","spray_step","cycle_end","ng_shot","shot_status",
-  "shot_year","shot_month","shot_day","shot_uid","machine_key","manual_mode","raw_readings_json","shot_number","recorded_at","cycle_time"
+  "average_die_clamp_tonnage_count","time_for_stroke","stroke","shot_status"
 ];
 
 function nowStamp() {
@@ -198,36 +195,33 @@ async function generateIndustrialExcel(res, {
     { header: "Customer QR Code", width: 20 },
   ];
   const stationColumns = stationPairsFinal.map((s) => ({ header: s.label, width: 24 }));
-  const finalColumn = [{ header: "Final", width: 16 }];
-  const livePlcKeys = [...new Set(rows.flatMap((r) => Object.keys(r.plcReading || {})))];
-  const preferredOrder = [...DEFAULT_PLC_CYCLE_COLUMNS, "cycle_start", "end_at", "end_time", "start_at", "start_time", "status", "shot_date"];
-  const rank = new Map(preferredOrder.map((k, i) => [k, i]));
-  const plcKeys = [...new Set([...DEFAULT_PLC_CYCLE_COLUMNS, ...livePlcKeys])]
-    .filter((k) => !["part_name", "plc_ip", "plc_port", "plcreading", "id", "created_at", "status"].includes(String(k || "").toLowerCase()))
-    .sort((a, b) => {
-      const ak = String(a || "").toLowerCase();
-      const bk = String(b || "").toLowerCase();
-      const ar = rank.has(ak) ? rank.get(ak) : 9999;
-      const br = rank.has(bk) ? rank.get(bk) : 9999;
-      if (ar !== br) return ar - br;
-      return ak.localeCompare(bk);
-    });
+  const finalColumn = [{ header: "Final Status", width: 16 }];
+  const plcKeys = DEFAULT_PLC_CYCLE_COLUMNS;
+  const formatPlcHeader = (key) => {
+    const raw = String(key || "").trim().toLowerCase();
+    const friendly = {
+      machine_name: "Machine Name",
+      shot_date: "Shot Date",
+      shot_time: "Shot Time",
+      shot_number: "Shot Number",
+      shot_status: "Shot Status",
+      cycle_time: "Cycle Time",
+    };
+    if (friendly[raw]) return friendly[raw];
+    return String(key || "")
+      .replaceAll("_", " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .split(" ")
+      .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : w))
+      .join(" ");
+  };
   const plcColumns = plcKeys.map((key) => ({
-    header: String(key).replaceAll("_", " ").toUpperCase().replace(/^PLC\s+/i, ""),
+    header: formatPlcHeader(key),
     key,
     width: Math.min(Math.max(String(key).length + 6, 14), 28),
   }));
-  const tailColumns = [
-    { header: "Cycle Time", width: 14 },
-    { header: "Cycle Start", width: 22 },
-    { header: "End At", width: 22 },
-    { header: "End Time", width: 14 },
-    { header: "Start At", width: 22 },
-    { header: "Start Time", width: 14 },
-    { header: "Status", width: 14 },
-    { header: "Shot Date", width: 16 },
-    { header: "Reason / Remark", width: 34 },
-  ];
+  const tailColumns = [{ header: "Reason / Remark", width: 34 }];
   const columns = [...baseColumns, ...stationColumns, ...finalColumn, ...plcColumns, ...tailColumns];
 
   columns.forEach((col, i) => {
@@ -253,10 +247,31 @@ async function generateIndustrialExcel(res, {
       ...stationResults,
       overall,
       ...plcColumns.map((c) => {
+        if (c.key === "shot_status") {
+          const code = Number(plc.shot_status);
+          return ({ 1: "OK", 3: "WARM UP SHOT", 5: "OFF SHOT" }[code] || (plc.shot_status ?? "-"));
+        }
+        if (c.key === "shot_date") {
+          const y = plc.shot_year;
+          const m = plc.shot_month;
+          const d = plc.shot_day;
+          if (y !== undefined && m !== undefined && d !== undefined && y !== null && m !== null && d !== null) {
+            return `${String(y).padStart(4, "0")}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+          }
+          return plc.shot_date || "-";
+        }
+        if (c.key === "shot_time") {
+          const hh = plc.shot_hour;
+          const mm = plc.shot_minute;
+          const ss = plc.shot_second;
+          if (hh !== undefined && mm !== undefined && ss !== undefined && hh !== null && mm !== null && ss !== null) {
+            return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+          }
+          return "-";
+        }
         const v = plc[c.key];
         return v === undefined || v === null || v === "" ? "-" : v;
       }),
-      row.cycleTime, row.cycleStart, row.endAt, row.endTime, row.startAt, row.startTime, row.status, row.shotDate,
       row.reason,
     ];
 
@@ -287,6 +302,22 @@ async function generateIndustrialExcel(res, {
       if (v === "OK") stationCell.font = { bold: true, size: 9, color: { argb: "FF059669" } };
       if (v === "NG") stationCell.font = { bold: true, size: 9, color: { argb: RED } };
     });
+
+    const shotStatusColIndex = columns.findIndex((c) => String(c.key || "") === "shot_status");
+    if (shotStatusColIndex >= 0) {
+      const shotStatusCell = worksheet.getCell(rowIndex, shotStatusColIndex + 1);
+      const shotStatusText = String(shotStatusCell.value || "").toUpperCase();
+      if (shotStatusText === "OK") {
+        shotStatusCell.font = { bold: true, size: 9, color: { argb: "FF059669" } };
+        shotStatusCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE8F8EE" } };
+      } else if (shotStatusText.includes("WARM")) {
+        shotStatusCell.font = { bold: true, size: 9, color: { argb: "FFD97706" } };
+        shotStatusCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF4E5" } };
+      } else if (shotStatusText.includes("OFF")) {
+        shotStatusCell.font = { bold: true, size: 9, color: { argb: RED } };
+        shotStatusCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEECEC" } };
+      }
+    }
   });
 
   worksheet.views = [{ state: "frozen", ySplit: tableHeaderRow }];

@@ -12,6 +12,7 @@ class PlcPollingService {
     this.signalHistory = new Map(); // machineId -> { signalName -> [values] }
     this.DEFAULT_POLLING_INTERVAL_MS = 300;
     this.QUIET_PLC_POLL_LOGS = String(process.env.QUIET_PLC_POLL_LOGS || "true").trim().toLowerCase() !== "false";
+    this.lastRefetchWarnAt = new Map(); // machineId -> timestamp
   }
 
   async start() {
@@ -69,7 +70,12 @@ class PlcPollingService {
       }
       latestMachine = dbMachine;
     } catch (err) {
-      console.warn(`[PollingService] Failed to re-fetch machine ${machine.id}:`, err.message);
+      const now = Date.now();
+      const prev = this.lastRefetchWarnAt.get(machine.id) || 0;
+      if (now - prev >= 30_000) {
+        this.lastRefetchWarnAt.set(machine.id, now);
+        console.warn(`[PollingService] Failed to re-fetch machine ${machine.id}: ${err.message}`);
+      }
     }
 
     // Guard: Skip polling during active handshake cycle to prevent lease contention

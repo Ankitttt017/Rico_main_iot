@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { RefreshCw, Save, Settings2, ChevronDown, Info, Activity, X } from "lucide-react";
 import { machineApi, stationSettingsApi, traceabilityApi } from "../api/services";
-import { getMachineStage } from "../utils/machineFields";
+import { getMachineStage, sanitizeLineName } from "../utils/machineFields";
 import {
   DEFAULT_STATION_FEATURES,
   getStationFeatureSettings,
@@ -223,7 +223,8 @@ const StationControl = () => {
         });
       }
       const row = grouped.get(stationNo);
-      row.lineNames.add(String(machine.lineName || "-").trim() || "-");
+      const cleanLine = sanitizeLineName(machine.lineName);
+      row.lineNames.add(cleanLine || "-");
       row.hasSpc = row.hasSpc || machine?.spcConfig?.enabled === true;
       row.bypassedCount += machine?.machineBypassEnabled ? 1 : 0;
       row.machines.push({

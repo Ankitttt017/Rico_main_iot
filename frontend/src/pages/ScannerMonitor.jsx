@@ -5,6 +5,7 @@
 // ============================================================
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
+import { SOCKET_URL, SCANNER_CONNECTION_GRACE_MS } from "../constants/network";
 import {
   RefreshCw, ScanLine, Wifi, WifiOff, Activity,
   Clock, Globe, CheckCircle2, XCircle, Play, X,
@@ -13,8 +14,8 @@ import toast from "react-hot-toast";
 import { scannerApi } from "../api/services";
 import { formatMachineLabel } from "../utils/machineFields";
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:4000";
-const CONNECTION_GRACE_MS = Number(import.meta.env.VITE_SCANNER_CONNECTION_GRACE_MS || 20000);
+
+const CONNECTION_GRACE_MS = SCANNER_CONNECTION_GRACE_MS;
 
 // ── Design tokens ──────────────────────────────────────────────────────────
 const DS = `
@@ -700,3 +701,6 @@ const ScannerMonitor = () => {
 };
 
 export default ScannerMonitor;
+
+
+

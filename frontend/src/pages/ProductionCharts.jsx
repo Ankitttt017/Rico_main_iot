@@ -94,17 +94,14 @@ const SH =`0 2px 12px rgba(var(--pc-navy),.08),0 1px 3px rgba(var(--pc-navy),.05
 const SHM=`0 6px 24px rgba(var(--pc-navy),.14),0 2px 8px rgba(var(--pc-navy),.07)`;
 
 const DEFAULT_PLC_CYCLE_COLUMNS = [
-  "id","recorded_at","created_at","machine_name","plc_ip","plc_port","part_name","shot_hour","shot_minute","shot_second",
-  "shot_number","ok_shot","cycle_time","die_close_core_in_time","pouring_time","shot_fwd_time","curing_time","die_open_core_out_time",
-  "ejector_time","extract_time","spray_time","v1_speed","v2_speed","v3_speed","v4_speed","metal_pressure","furnace_metal_temp",
-  "cooling_water_mov","cooling_water_sta","accel_point","deaccel_point","intensification_time","biscuit_thickness","jet_cooling_pressure",
-  "clamp_tonnage_he_low_pct","clamp_tonnage_he_low_mn","clamp_tonnage_op_up_pct","clamp_tonnage_op_low_pct","clamp_tonnage_he_up_pct",
-  "vacuum_pressure","clamp_force_pct","clamp_tonnage","shot_acc_pressure","intensification_acc_pressure","fixed_die_temp_f1","fixed_die_temp_f2",
-  "moving_die_temp_m1","moving_die_temp_m2","slide_temp_s1","fix_1_flow","fix_2_flow","fix_3_flow","mov_1_flow","mov_2_flow","mov_3_flow",
-  "vacuum_pressure_mmhg","average_die_clamp_tonnage_count","time_for_stroke","stroke","running_mode","emergency_stop","hyd_pump_motor_overload",
-  "hyd_oil_level_low","hyd_oil_high_temp","servo_pump_overload","servo_pump_motor_high_temp","die_close_step","pouring_step","shot_fwd_step",
-  "curing_step","die_open_step","ejector_step","extractor_step","spray_step","cycle_end","ng_shot","shot_status","shot_year","shot_month",
-  "shot_day","shot_uid","machine_key","manual_mode","Cycle Start","raw_readings_json","shot_date"
+  "machine_name","shot_date","shot_time","shot_number","cycle_time","die_close_core_in_time","pouring_time","shot_fwd_time",
+  "curing_time","die_open_core_out_time","ejector_time","extract_time","spray_time","v1_speed","v2_speed","v3_speed","v4_speed",
+  "metal_pressure","furnace_metal_temp","cooling_water_mov","cooling_water_sta","accel_point","deaccel_point","intensification_time",
+  "biscuit_thickness","jet_cooling_pressure","clamp_tonnage_he_low_pct","clamp_tonnage_he_low_mn","clamp_tonnage_op_up_pct",
+  "clamp_tonnage_op_low_pct","clamp_tonnage_he_up_pct","vacuum_pressure","clamp_force_pct","clamp_tonnage","shot_acc_pressure",
+  "intensification_acc_pressure","fixed_die_temp_f1","fixed_die_temp_f2","moving_die_temp_m1","moving_die_temp_m2","slide_temp_s1",
+  "fix_1_flow","fix_2_flow","fix_3_flow","mov_1_flow","mov_2_flow","mov_3_flow","vacuum_pressure_mmhg","average_die_clamp_tonnage_count",
+  "time_for_stroke","stroke","shot_status"
 ];
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -124,6 +121,15 @@ function toDateRange(r){
 function formatPlcColumnLabel(key){
   const raw = String(key || "").trim();
   if (!raw) return "PLC";
+  const friendly = {
+    machine_name: "Machine Name",
+    part_name: "Part Name",
+    shot_date: "Shot Date",
+    shot_time: "Shot Time",
+    shot_number: "Shot Number",
+    shot_status: "Shot Status",
+  };
+  if (friendly[raw]) return friendly[raw];
   return raw
     .replace(/_/g, " ")
     .replace(/\s+/g, " ")
@@ -454,8 +460,10 @@ const ProductionCharts=()=>{
 
   const totalPartsPages = Math.max(1, Math.ceil(filteredParts.length / partsPageSize));
 
-  const normalizeStationResult = (value) => {
+  const normalizeStationResult = (value, reason = "") => {
     const s = String(value || "").trim().toUpperCase();
+    const r = String(reason || "").trim().toUpperCase();
+    if (r === "NG_SHOT_STATUS" && ["BLOCK", "INTERLOCKED"].includes(s)) return "NG";
     if (!s) return "";
     if (["OK", "PASS", "COMPLETED", "ENDED_OK"].includes(s)) return "OK";
     if (["NG", "FAIL", "FAILED", "ENDED_NG", "INTERLOCKED", "REJECTED"].includes(s)) return "NG";
@@ -491,7 +499,7 @@ const ProductionCharts=()=>{
     const machineName = (part.machineName || machineMap.get(Number(part.machineId))?.machineName || "").toString().trim();
     const op = (part.stationNo || part.operationNo || "").toString().trim();
     const directKey = `${machineName}__${op}`;
-    const directStatus = normalizeStationResult(part.result || part.status);
+    const directStatus = normalizeStationResult(part.result || part.status, part.interlockReason || part.reason);
     if (machineName || op) map.set(directKey, directStatus);
 
     const timeline = Array.isArray(part.stationTimeline) ? part.stationTimeline : [];
@@ -499,7 +507,7 @@ const ProductionCharts=()=>{
       const tMachine = (t.machineName || t.machine_name || machineName || "").toString().trim();
       const tOp = (t.stationNo || t.station_no || t.operationNo || t.operation_no || "").toString().trim();
       const tKey = `${tMachine}__${tOp}`;
-      const tStatus = normalizeStationResult(t.result || t.status || t.opStatus);
+      const tStatus = normalizeStationResult(t.result || t.status || t.opStatus, t.interlockReason || t.reason);
       if (tMachine || tOp) map.set(tKey, tStatus);
     });
     return map;
@@ -516,57 +524,7 @@ const ProductionCharts=()=>{
   const isSingleMachineView = Boolean(filters.machineId);
 
   const plcColumns = useMemo(() => {
-    const keys = new Set();
-    const schemaColumns = Array.isArray(report.plcReadingColumns) && report.plcReadingColumns.length
-      ? report.plcReadingColumns
-      : DEFAULT_PLC_CYCLE_COLUMNS;
-    schemaColumns.forEach((k) => {
-      if (k) keys.add(String(k));
-    });
-    (filteredParts || []).forEach((p) => {
-      const objLegacy = p?.plcReading && typeof p.plcReading === "object" ? p.plcReading : null;
-      const obj = p?.plcReadings && typeof p.plcReadings === "object" ? p.plcReadings : null;
-      if (objLegacy) {
-        Object.keys(objLegacy).forEach((k) => keys.add(k));
-      }
-      if (obj) {
-        Object.keys(obj).forEach((k) => keys.add(k));
-      }
-      Object.keys(p || {}).forEach((k) => {
-        if (/^plc[_A-Za-z0-9]*/.test(k) && k !== "plcReadings") keys.add(k);
-      });
-    });
-    const preferredOrder = [
-      ...DEFAULT_PLC_CYCLE_COLUMNS,
-      "shot_number",
-      "recorded_at",
-      "part_id",
-      "partid",
-      "part_no",
-      "part_number",
-      "model_name",
-      "model",
-      "customer_qr",
-      "customer_code",
-      "process_result",
-      "result",
-      "status",
-      "cycle_time",
-      "ct",
-    ];
-    const rank = new Map(preferredOrder.map((k, i) => [k, i]));
-    const filteredKeys = Array.from(keys).filter((k) => {
-      const nk = String(k || "").trim().toLowerCase();
-      return !["plcreading", "plc_ip", "plc_port", "part_name"].includes(nk);
-    });
-    const sorted = filteredKeys.sort((a, b) => {
-      const ak = String(a || "").toLowerCase();
-      const bk = String(b || "").toLowerCase();
-      const ar = rank.has(ak) ? rank.get(ak) : 9999;
-      const br = rank.has(bk) ? rank.get(bk) : 9999;
-      if (ar !== br) return ar - br;
-      return ak.localeCompare(bk);
-    });
+    const sorted = DEFAULT_PLC_CYCLE_COLUMNS;
     const usedLabels = new Map();
     return sorted.map((key) => {
       const baseLabel = formatPlcColumnLabel(key);
@@ -583,6 +541,22 @@ const ProductionCharts=()=>{
     }
     if (part?.plcReadings && typeof part.plcReadings === "object" && key in part.plcReadings) {
       return part.plcReadings[key];
+    }
+    if (key === "shot_time") {
+      const hh = part?.plcReading?.shot_hour ?? part?.plcReadings?.shot_hour;
+      const mm = part?.plcReading?.shot_minute ?? part?.plcReadings?.shot_minute;
+      const ss = part?.plcReading?.shot_second ?? part?.plcReadings?.shot_second;
+      if ([hh, mm, ss].every((v) => v !== null && v !== undefined && v !== "")) {
+        return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+      }
+    }
+    if (key === "shot_date") {
+      const y = part?.plcReading?.shot_year ?? part?.plcReadings?.shot_year;
+      const m = part?.plcReading?.shot_month ?? part?.plcReadings?.shot_month;
+      const d = part?.plcReading?.shot_day ?? part?.plcReadings?.shot_day;
+      if ([y, m, d].every((v) => v !== null && v !== undefined && v !== "")) {
+        return `${String(y).padStart(4, "0")}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+      }
     }
     return part?.[key];
   };
@@ -1206,7 +1180,7 @@ const ProductionCharts=()=>{
             <Card noPad title={`Production Parts List — ${filteredParts.length} records`}
               subtitle="All scanned parts this period" icon={List} accent={C.navy()}>
               <div className="pc-thin-scroll" style={{overflowX:"auto"}}>
-                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,fontFamily:"inherit"}}>
                   <thead>
                     <tr style={{background:C.bg("surf"),borderBottom:`1px solid ${C.bdr()}`}}>
                       {[
@@ -1216,7 +1190,7 @@ const ProductionCharts=()=>{
                         "Part Name",
                         "Customer QR Code",
                         ...stationColumns.map((c)=>c.label),
-                        "Final",
+                        "Final Status",
                         ...(isSingleMachineView ? ["Cycle Time (s)"] : []),
                         ...plcColumns.map((c) => c.label),
                         "Reason / Remark"
@@ -1244,13 +1218,13 @@ const ProductionCharts=()=>{
                           background:i%2===1?C.bg("surf"):"transparent",transition:"background .1s"}}
                           onMouseEnter={e=>e.currentTarget.style.background=C.steel(0.04)}
                           onMouseLeave={e=>e.currentTarget.style.background=i%2===1?C.bg("surf"):"transparent"}>
-                          <td style={{padding:"9px 13px",color:C.txt("muted"),fontSize:10}}>{((partsPage - 1) * partsPageSize) + i + 1}</td>
+                          <td style={{padding:"9px 13px",color:C.txt("muted"),fontSize:11,fontWeight:500}}>{((partsPage - 1) * partsPageSize) + i + 1}</td>
                           <td style={{padding:"9px 13px"}}>
-                            <span style={{fontFamily:"'DM Mono',monospace",fontSize:11,
+                            <span style={{fontFamily:"inherit",fontSize:11,
                               fontWeight:700,color:"#111827"}}>{p.partId||"—"}</span>
                           </td>
-                          <td style={{padding:"9px 13px",fontSize:10,color:"#111827",
-                            fontFamily:"'DM Mono',monospace",whiteSpace:"nowrap"}}>
+                          <td style={{padding:"9px 13px",fontSize:11,color:"#111827",
+                            fontFamily:"inherit",fontWeight:500,whiteSpace:"nowrap"}}>
                             {p.createdAt?new Date(p.createdAt).toLocaleString("en-IN",{
                               day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}):"—"}
                           </td>
@@ -1283,7 +1257,7 @@ const ProductionCharts=()=>{
                           <td style={{padding:"9px 13px"}}>
                             <div style={{display:"flex",flexDirection:"column",gap:2}}>
                               <div style={{display:"flex",alignItems:"center",gap:6}}>
-                                <span style={{fontFamily:"'DM Mono',monospace",fontSize:11,fontWeight:700,
+                                <span style={{fontFamily:"inherit",fontSize:11,fontWeight:600,
                                   color:p.cycleTime ? "#111827" : C.txt("muted")}}>
                                   {p.cycleTime || "—"}
                                 </span>
@@ -1313,8 +1287,16 @@ const ProductionCharts=()=>{
                           </td>
                           )}
                           {plcColumns.map((c) => (
-                            <td key={`${i}-plc-${c.key}`} style={{padding:"9px 13px",fontSize:11,color:"#111827",fontFamily:"'DM Mono',monospace",textAlign:"center",whiteSpace:"nowrap",maxWidth:220,overflow:"hidden",textOverflow:"ellipsis"}}>
-                              {renderCellValue(getPlcValue(p, c.key))}
+                            <td key={`${i}-plc-${c.key}`} style={{padding:"9px 13px",fontSize:11,color:"#111827",fontFamily:"inherit",fontWeight:500,textAlign:"center",whiteSpace:"nowrap",maxWidth:220,overflow:"hidden",textOverflow:"ellipsis"}}>
+                              {c.key === "shot_status"
+                                ? (() => {
+                                    const code = Number(getPlcValue(p, c.key));
+                                    if (code === 1) return <Bdg v="ok" l="OK" />;
+                                    if (code === 3) return <Bdg v="ng" l="WARM UP SHOT" />;
+                                    if (code === 5) return <Bdg v="ng" l="OFF SHOT" />;
+                                    return renderCellValue(getPlcValue(p, c.key));
+                                  })()
+                                : renderCellValue(getPlcValue(p, c.key))}
                             </td>
                           ))}
                           <td style={{padding:"9px 13px",fontSize:10,color:isNg?C.ng():C.txt("muted"),

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { io } from "socket.io-client";
+import { SOCKET_URL } from "../constants/network";
 import {
   AlertTriangle,
   CheckCircle,
@@ -24,7 +25,7 @@ import {
 import toast from "react-hot-toast";
 import { traceabilityApi } from "../api/services";
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:4000";
+
 
 function eventTypeClass(type) {
   if (type === "SUCCESS") return "text-emerald-400";
@@ -316,6 +317,9 @@ const Traceability = () => {
 };
 
 export default Traceability;
+
+
+
 
 
 

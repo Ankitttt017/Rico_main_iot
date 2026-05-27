@@ -6,6 +6,7 @@
 // ============================================================
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { io } from "socket.io-client";
+import { SOCKET_URL } from "../constants/network";
 import {
   RefreshCw, Filter, CheckCircle2, XCircle,
   AlertTriangle, Cpu, Activity, History, Clock,
@@ -21,11 +22,8 @@ import {
 import { dashboardApi, machineApi } from "../api/services";
 import ChartTooltip from "../components/charts/ChartTooltip";
 import SafeChart from "../components/charts/SafeChart";
-import axios from "axios";
 import { CHART_COLORS } from "../constants/chartTheme";
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:4000";
-const API_BASE   = import.meta.env.VITE_API_URL    || "http://localhost:4000/api";
 
 // —— Design tokens —————————————————————————————————————————————————————————————
 const DS = `
@@ -375,14 +373,12 @@ const Dashboard = () => {
         machineApi.list(),
         dashboardApi.summary(query),
         dashboardApi.report(query),
-        axios.get(`${API_BASE}/dashboard/oee`,{
-          headers:{Authorization:`Bearer ${localStorage.getItem("token")}`}
-        }).catch(()=>null),
+        dashboardApi.oee().catch(()=>null),
       ]);
       setMachines(m||[]);
       setSummary(s||EMPTY_SUMMARY);
       setReport(r||EMPTY_REPORT);
-      if (o) setOeeData(o.data?.oee||[]);
+      if (o) setOeeData(o?.oee||[]);
     } catch(e){
       console.error("Dashboard load error",e);
     } finally { setLoading(false); }

@@ -8,6 +8,7 @@ const ProductionLog = require("../models/ProductionLog");
 const ReworkLog = require("../models/ReworkLog");
 const Shift = require("../models/Shift");
 const QrFormatRule = require("../models/QrFormatRule");
+const PartCodeMapping = require("../models/PartCodeMapping");
 const MachineRuntimeState = require("../models/MachineRuntimeState");
 const { saveScan } = require("../services/scanService");
 const { getPlcCircuitSnapshot } = require("../services/plcCommunicationService");
@@ -58,6 +59,20 @@ function normalizeStation(value) {
   return String(value || "")
     .trim()
     .toUpperCase();
+}
+
+async function resolveMappedPartId(inputCode) {
+  const raw = String(inputCode || "").trim();
+  if (!raw) return { resolvedPartId: "", customerQrCode: null };
+  const row = await PartCodeMapping.findOne({
+    where: { customer_qr: raw, is_active: true },
+    order: [["updatedAt", "DESC"]],
+  });
+  if (!row) return { resolvedPartId: raw, customerQrCode: null };
+  return {
+    resolvedPartId: String(row.old_part_id || raw).trim(),
+    customerQrCode: String(row.customer_qr || raw).trim(),
+  };
 }
 
 function getMachineOperationStage(machine) {
@@ -559,6 +574,23 @@ async function enforceScannerProtocolBinding({ machine, body, req, scanner }) {
   };
 }
 
+async function enforceStartQrScannerRoleIfConfigured({ machine, sourceIp }) {
+  const srcIp = normalizeIp(sourceIp || "");
+  if (!machine || !srcIp) return { ok: true };
+  const roleScanners = await Scanner.findAll({
+    where: { mapped_machine_id: machine.id, is_active: true },
+  });
+  const startRoleScanners = roleScanners.filter(
+    (s) => String(s.scanner_role || "").trim().toUpperCase() === "START_QR"
+  );
+  if (startRoleScanners.length === 0) return { ok: true };
+  const matched = startRoleScanners.some((s) => sameIp(s.scanner_ip, srcIp));
+  if (!matched) {
+    return { ok: false, status: 403, error: "Scan source is not authorized as START_QR for this machine" };
+  }
+  return { ok: true };
+}
+
 async function getActiveStationSequence() {
   const machines = await Machine.findAll({
     where: { is_active: true },
@@ -637,7 +669,7 @@ function isJourneyNoiseLog(log) {
 
   if (plcStatus === "INTERLOCKED") {
     if (validationResult === "DUPLICATE" || validationResult === "BLOCKED") return true;
-    if (result === "BLOCK") return true;
+    if (result === "BLOCK" && reason !== "NG_SHOT_STATUS") return true;
   }
 
   return false;
@@ -2656,6 +2688,7 @@ exports.processScan = async (req, res) => {
   try {
     const { partId, stationNo, operation, result } = req.body;
     let normalizedPartId = String(partId || "").trim();
+    let customerQrCode = null;
 
     const machine = await resolveMachineFromRequest(req.body, req);
     if (!machine) {
@@ -2665,6 +2698,10 @@ exports.processScan = async (req, res) => {
     const bound = await enforceScannerProtocolBinding({ machine, body: req.body, req });
     if (!bound.ok) {
       return res.status(bound.status).json({ error: bound.error });
+    }
+    const roleGuard = await enforceStartQrScannerRoleIfConfigured({ machine, sourceIp: bound.sourceIp });
+    if (!roleGuard.ok) {
+      return res.status(roleGuard.status).json({ error: roleGuard.error });
     }
 
     let scannerRead = null;
@@ -2688,6 +2725,9 @@ exports.processScan = async (req, res) => {
         error: "partId is required (or configure scanner mode PLC_REGISTER with valid register range)",
       });
     }
+    const resolvedCode = await resolveMappedPartId(normalizedPartId);
+    normalizedPartId = resolvedCode.resolvedPartId;
+    customerQrCode = resolvedCode.customerQrCode;
 
     const machineStage = getMachineOperationStage(machine);
     const requestedStage = normalizeStation(stationNo || operation);
@@ -2893,6 +2933,7 @@ exports.processScan = async (req, res) => {
     res.json({
       ...response,
       partId: normalizedPartId,
+      customerQrCode,
       scannerRead,
       machine: {
         id: machine.id,
@@ -2908,10 +2949,12 @@ exports.processScan = async (req, res) => {
 exports.verifyScanForOperator = async (req, res) => {
   try {
     const { qrCode, machineId, result } = req.body;
-    const normalizedPartId = String(qrCode || "").trim();
-    if (!normalizedPartId || !machineId) {
+    const inputCode = String(qrCode || "").trim();
+    if (!inputCode || !machineId) {
       return res.status(400).json({ error: "qrCode and machineId are required" });
     }
+    const resolvedCode = await resolveMappedPartId(inputCode);
+    const normalizedPartId = resolvedCode.resolvedPartId;
 
     const machine = await Machine.findByPk(machineId);
     if (!machine) {
@@ -2920,6 +2963,10 @@ exports.verifyScanForOperator = async (req, res) => {
     const bound = await enforceScannerProtocolBinding({ machine, body: req.body, req });
     if (!bound.ok) {
       return res.status(bound.status).json({ error: bound.error });
+    }
+    const roleGuard = await enforceStartQrScannerRoleIfConfigured({ machine, sourceIp: bound.sourceIp });
+    if (!roleGuard.ok) {
+      return res.status(roleGuard.status).json({ error: roleGuard.error });
     }
 
     const stationNo = getMachineOperationStage(machine);
@@ -3095,6 +3142,7 @@ exports.verifyScanForOperator = async (req, res) => {
       status: response.decision === "ALLOW" ? "OK" : "NG",
       ...response,
       partId: normalizedPartId,
+      customerQrCode: resolvedCode.customerQrCode,
       machine: {
         id: machine.id,
         machineName: machine.machine_name,
@@ -3883,6 +3931,72 @@ exports.submitManualResult = async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+};
+
+exports.mapCustomerQrCode = async (req, res) => {
+  try {
+    const oldPartId = String(req.body.oldPartId || req.body.partId || "").trim();
+    const customerQrCode = String(req.body.customerQrCode || req.body.customerQr || "").trim();
+    const machineId = Number(req.body.machineId || 0) || null;
+    const stationNo = normalizeStation(req.body.stationNo || req.body.operationNo || "");
+    const sourceIp = normalizeIp(req.body.scannerIp || req.body.sourceIp || req.ip || req.socket?.remoteAddress || "");
+
+    if (!oldPartId || !customerQrCode) {
+      return res.status(400).json({ error: "oldPartId and customerQrCode are required" });
+    }
+    if (oldPartId === customerQrCode) {
+      return res.status(400).json({ error: "customerQrCode must be different from oldPartId" });
+    }
+
+    const part = await Part.findOne({ where: { part_id: oldPartId } });
+    if (!part) {
+      return res.status(404).json({ error: `Original part not found: ${oldPartId}` });
+    }
+
+    const existing = await PartCodeMapping.findOne({ where: { customer_qr: customerQrCode, is_active: true } });
+    if (existing && String(existing.old_part_id || "") !== oldPartId) {
+      return res.status(409).json({ error: "Customer QR already mapped to another part" });
+    }
+
+    // Optional strict routing (non-breaking):
+    // Only enforce scanner-role validation when a CUSTOMER_QR scanner is configured for this machine.
+    if (machineId) {
+      const roleScanners = await Scanner.findAll({
+        where: {
+          mapped_machine_id: machineId,
+          is_active: true,
+        },
+      });
+      const customerRoleScanners = roleScanners.filter((s) => String(s.scanner_role || "").trim().toUpperCase() === "CUSTOMER_QR");
+      if (customerRoleScanners.length > 0 && sourceIp) {
+        const matched = customerRoleScanners.some((s) => sameIp(s.scanner_ip, sourceIp));
+        if (!matched) {
+          return res.status(403).json({
+            error: "Scan source is not authorized for customer QR mapping on this machine",
+          });
+        }
+      }
+    }
+
+    await PartCodeMapping.upsert({
+      old_part_id: oldPartId,
+      customer_qr: customerQrCode,
+      machine_id: machineId,
+      station_no: stationNo || null,
+      is_active: true,
+    });
+
+    return res.json({
+      success: true,
+      message: "Customer QR mapped successfully",
+      oldPartId,
+      customerQrCode,
+      machineId,
+      stationNo: stationNo || null,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
   }
 };
 
@@ -4735,6 +4849,27 @@ exports.getDashboardReport = async (req, res) => {
       const m = s.match(/(\d{12})(\d+)$/);
       return m ? m[2] : "";
     };
+    const enrichPlcReadingDisplay = (row) => {
+      if (!row || typeof row !== "object") return row;
+      const next = { ...row };
+      const y = Number(next.shot_year);
+      const m = Number(next.shot_month);
+      const d = Number(next.shot_day);
+      const hh = Number(next.shot_hour);
+      const mm = Number(next.shot_minute);
+      const ss = Number(next.shot_second);
+      if (Number.isFinite(y) && Number.isFinite(m) && Number.isFinite(d)) {
+        next.shot_date = `${String(y).padStart(4, "0")}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+      }
+      if (Number.isFinite(hh) && Number.isFinite(mm) && Number.isFinite(ss)) {
+        next.shot_time = `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+      }
+      const shotStatus = Number(next.shot_status);
+      if (shotStatus === 1) next.shot_status_text = "OK";
+      else if (shotStatus === 3) next.shot_status_text = "WARM_UP_SHOT";
+      else if (shotStatus === 5) next.shot_status_text = "OFFSET_SHOT";
+      return next;
+    };
 
     const partsList = partHistory.slice(0, 3000).map((row) => {
       const machine = machineMetaById[Number(row.machine_id)] || machineRowMapById[Number(row.machine_id)] || {};
@@ -4763,12 +4898,13 @@ exports.getDashboardReport = async (req, res) => {
       const fromPartIdTs = extractYymmddhhmmss(fullPartId);
       const fromPartIdShot = normalizeShotToken(extractShotSuffix(fullPartId));
       const allPartDigitGroups = (fullPartId.match(/\d+/g) || []).map((g) => normalizeShotToken(g)).filter(Boolean);
-      const plcReading = (fullPartId && plcReadingByUid.get(fullPartId))
+      const plcReadingRaw = (fullPartId && plcReadingByUid.get(fullPartId))
         || (shotKey && plcReadingByShot.get(shotKey))
         || (fromPartIdShot && plcReadingByShot.get(fromPartIdShot))
         || (fromPartIdTs && plcReadingByShot.get(normalizeShotToken(fromPartIdTs)))
         || allPartDigitGroups.map((g) => plcReadingByShot.get(g)).find(Boolean)
         || null;
+      const plcReading = enrichPlcReadingDisplay(plcReadingRaw);
 
       return {
         id: row.id,

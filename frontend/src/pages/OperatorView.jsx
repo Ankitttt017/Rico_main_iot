@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
+import { SOCKET_URL } from "../constants/network";
 import {
   AlertTriangle, CheckCircle2, Clock3, Factory,
   Gauge, RefreshCw, ShieldCheck, Wrench,
@@ -17,7 +18,7 @@ import ConfirmModal from "../components/ConfirmModal";
 import { getMachineStage } from "../utils/machineFields";
 import { getStationFeatureSettings, getStationFeatures, saveStationFeatureSettings } from "../utils/stationSettings";
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:4000";
+
 const LIVE_REFRESH_COOLDOWN = 350;
 const QR_EVENT_DEDUPE_MS = 3000;
 const POPUP_EVENT_DEDUPE_MS = 1800;
@@ -26,6 +27,9 @@ const OPERATOR_STATION_LOCK_KEY = "operator-view-station-lock-v1";
 const USB_FOCUS_INTERVAL_MS = 300;
 const USB_IDLE_FLUSH_MS = 120;
 const USB_SCAN_MAX_GAP_MS = 80;
+const POPUP_STARTUP_GRACE_MS = 1500;
+const POPUP_STALE_EVENT_MS = 12000;
+const SOCKET_EVENT_DEDUPE_MS = 800;
 
 // ── Design tokens & responsive breakpoints ───────────────────────────────
 const DS = `
@@ -208,6 +212,42 @@ function isResetLikePayload(payload = {}) {
   const reason = String(payload.reason || payload.qrReason || "").trim().toUpperCase();
   const message = String(payload.message || "").trim().toUpperCase();
   return status === "RESET" || reason.includes("RESET") || message.includes("RESET");
+}
+function normalizeOperationState(value) {
+  const raw = String(value || "").trim().toUpperCase();
+  if (["PASSED", "PASS", "ENDED_OK", "COMPLETED", "COMPLETED_OK", "COMPLETED_NG"].includes(raw)) return "PASS";
+  if (["FAILED", "FAIL", "ENDED_NG", "NG"].includes(raw)) return "FAIL";
+  if (["RUNNING", "STARTED", "IN_PROGRESS", "IN PROCESS"].includes(raw)) return "RUN";
+  if (["WAITING_MACHINE", "START_SENT", "WAITING_RUNNING", "WAITING_PLC", "WAITING", "OP_WAIT", "SCANNED", "VALIDATED", "PENDING"].includes(raw)) return "WAIT";
+  if (["PLC_TIMEOUT", "TIMEOUT", "COMM_ERROR", "PLC_COMM_ERROR"].includes(raw)) return "COMM";
+  if (["INTERLOCKED", "BLOCKED"].includes(raw)) return "BLOCKED";
+  return "";
+}
+function makeEventIdentityKey(payload = {}) {
+  const partId = normalizePartId(payload.partId || payload.part_id);
+  const stationNo = String(payload.stationNo || payload.station_no || "").trim().toUpperCase();
+  const machineId = String(payload.machineId || payload.machine_id || "").trim();
+  const decision = normalizeDecisionState(payload.qrResult || payload.qr_result || payload.decision || payload.qrStatus);
+  const opState = normalizeOperationState(payload.operationStatus || payload.plcStatus || payload.plc_status || payload.status);
+  const reason = String(payload.reason || payload.qrReason || "").trim().toUpperCase();
+  return [partId, stationNo, machineId, decision, opState, reason].join("|");
+}
+
+function parsePayloadTimeMs(payload = {}) {
+  const tokens = [
+    payload.timestamp,
+    payload.createdAt,
+    payload.updatedAt,
+    payload._shownAtMs,
+  ];
+  for (const token of tokens) {
+    if (token === undefined || token === null || token === "") continue;
+    const n = Number(token);
+    if (Number.isFinite(n) && n > 0) return n;
+    const t = new Date(token).getTime();
+    if (Number.isFinite(t) && t > 0) return t;
+  }
+  return 0;
 }
 function getOperationVariant(status) {
   const s = String(status || "").trim().toUpperCase();
@@ -471,6 +511,14 @@ const OperatorView = () => {
   const [loadingStats, setLoadingStats] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [popup, setPopup] = useState(null);
+  const [scanState, setScanState] = useState({
+    inputQr: "",
+    activePartId: "",
+    failedQr: "",
+    qrStatus: "IDLE", // IDLE | VERIFYING | PASS | FAIL | BLOCKED
+    operationStatus: "WAIT", // WAIT | RUNNING | PASS | FAIL | COMM_ERROR
+    manualResultStatus: "IDLE", // IDLE | REQUIRED | SUBMITTING | SUBMITTED
+  });
   const usbScannerInputRef = useRef(null);
   const usbBufferRef = useRef("");
   const usbFlushTimerRef = useRef(null);
@@ -507,9 +555,11 @@ const OperatorView = () => {
   const selectedStationRef = useRef("");
   const machinesRef = useRef([]);
   const liveRefreshTimerRef = useRef(null);
+  const operatorViewBootAtRef = useRef(Date.now());
   const lastLiveRefreshRef = useRef(0);
   const lastQrEventRef = useRef({ key: "", at: 0 });
   const lastPopupEventRef = useRef({ key: "", at: 0 });
+  const lastSocketIdentityRef = useRef({ key: "", at: 0 });
 
   const isMobile = breakpoint === "sm" || breakpoint === "md";
   const isTablet = breakpoint === "lg";
@@ -612,7 +662,7 @@ const OperatorView = () => {
   const effectiveScannerConnected = isUsbScannerMode ? usbConnected : scannerConnected;
   const scannerStatusLabel = !scannerConfigured ? "Not Set" : isUsbScannerMode ? (usbConnected ? "USB Active" : "USB Idle") : (scannerConnected ? "Online" : "Offline");
 
-  const isManualResultStation = useMemo(() => stationFeatureConfig?.manualResult === true || String(selectedStation).toUpperCase() === "OP020", [stationFeatureConfig, selectedStation]);
+  const isManualResultStation = useMemo(() => stationFeatureConfig?.manualResult === true, [stationFeatureConfig]);
   const isOperationEnabled = useMemo(() => stationFeatureConfig?.operation !== false, [stationFeatureConfig]);
 
   const opStatusSource = useMemo(() => {
@@ -810,6 +860,17 @@ const OperatorView = () => {
     return true;
   }, []);
 
+  const shouldIgnoreStartupPopup = useCallback((payload = {}) => {
+    const now = Date.now();
+    const bootAge = now - operatorViewBootAtRef.current;
+    if (bootAge > POPUP_STARTUP_GRACE_MS) return false;
+    const hasDecision = hasQrDecision(payload);
+    if (!hasDecision) return true;
+    const payloadMs = parsePayloadTimeMs(payload);
+    if (!payloadMs) return true;
+    return (now - payloadMs) > POPUP_STALE_EVENT_MS;
+  }, []);
+
   useEffect(() => {
     if (!suppressReadyPopup) return undefined;
     const timer = setTimeout(() => setSuppressReadyPopup(false), 15000);
@@ -825,6 +886,27 @@ const OperatorView = () => {
     const now = Date.now();
     if (lastQrEventRef.current.key === key && now - lastQrEventRef.current.at < QR_EVENT_DEDUPE_MS) return false;
     lastQrEventRef.current = { key, at: now };
+    setScanState((prev) => {
+      const decision = String(sig.decision || "").toUpperCase();
+      const failed = ["BLOCK", "FAIL", "NG", "REJECT", "INVALID"].includes(decision);
+      const passed = ["ALLOW", "PASS", "OK", "ACCEPT", "VALID"].includes(decision);
+      const nextQrStatus = failed ? (String(payload.reason || "").toUpperCase() === "PREVIOUS_STATION_NOT_COMPLETED" ? "BLOCKED" : "FAIL") : passed ? "PASS" : "IDLE";
+      const stationKey = String(sig.stationNo || selectedStationRef.current || "").trim().toUpperCase();
+      const stationFeatures = getStationFeatures(stationKey, stationSettings);
+      const manualRequired = passed && stationFeatures?.manualResult === true;
+      const previousOp = String(prev.operationStatus || "WAIT").toUpperCase();
+      const nextOp = failed ? "FAIL" : manualRequired ? "WAIT" : (previousOp && previousOp !== "FAIL" ? previousOp : "WAIT");
+      return {
+        ...prev,
+        inputQr: sig.partId || prev.inputQr,
+        // Important: failed/blocked QR must never become active part.
+        activePartId: passed ? (sig.partId || prev.activePartId) : "",
+        failedQr: failed ? (sig.partId || prev.failedQr) : "",
+        qrStatus: nextQrStatus,
+        operationStatus: nextOp,
+        manualResultStatus: manualRequired ? "REQUIRED" : "IDLE",
+      };
+    });
     setQrSignal(sig); setQrFeed(prev => [sig, ...prev].slice(0, 6));
     // Failsafe: always raise/update popup when a valid QR decision is received,
     // even if the event arrived from a path that didn't emit operator_popup.
@@ -876,6 +958,20 @@ const OperatorView = () => {
     return true;
   }, [isPayloadForActiveMachine, stationSettings]);
 
+  const processIncomingSocketScanEvent = useCallback((payload = {}, source = "") => {
+    if (shouldIgnoreStartupPopup(payload)) return false;
+    if (!isPayloadForActiveMachine(payload)) return false;
+    const now = Date.now();
+    const identityKey = makeEventIdentityKey(payload);
+    if (lastSocketIdentityRef.current.key === identityKey && now - lastSocketIdentityRef.current.at < SOCKET_EVENT_DEDUPE_MS) {
+      return false;
+    }
+    lastSocketIdentityRef.current = { key: identityKey, at: now };
+    const hasDecision = hasQrDecision(payload);
+    if (hasDecision) processQrSignal(payload);
+    return hasDecision;
+  }, [isPayloadForActiveMachine, processQrSignal, shouldIgnoreStartupPopup]);
+
   useEffect(() => {
     setPopup((prev) => {
       if (!prev) return prev;
@@ -897,7 +993,15 @@ const OperatorView = () => {
       const iplc = payload.plcStatus || payload.plc_status || "", iplcS = String(iplc || "").trim().toUpperCase(), pplcS = String(prev?.plcStatus || prev?.plc_status || "").trim().toUpperCase();
       const rl = isResetLikePayload(payload);
       const applyQr = Boolean(iqr) && (iqrS !== "WAIT" || !pqrS || pqrS === "WAIT" || rl);
-      const applyPlc = Boolean(iplc) && (iplcS !== "WAIT" || !pplcS || pplcS === "WAIT" || rl);
+      const prevOpNorm = normalizeOperationState(pplcS);
+      const incomingOpNorm = normalizeOperationState(iplcS);
+      const isDowngradeToWait =
+        incomingOpNorm === "WAIT" &&
+        ["PASS", "RUN", "FAIL", "COMM", "BLOCKED"].includes(prevOpNorm);
+      const applyPlc =
+        Boolean(iplc) &&
+        !isDowngradeToWait &&
+        (iplcS !== "WAIT" || !pplcS || pplcS === "WAIT" || rl);
       return {
         ...prev, ...(payload.type && { type: payload.type }), ...(payload.title && { title: payload.title }),
         ...(applyQr && { qrResult: iqr }), ...(applyPlc && { plcStatus: iplc }),
@@ -932,6 +1036,14 @@ const OperatorView = () => {
     }
     setQrSignal(null); setQrFeed([]);
     setPopup(null);
+    setScanState({
+      inputQr: "",
+      activePartId: "",
+      failedQr: "",
+      qrStatus: "IDLE",
+      operationStatus: "WAIT",
+      manualResultStatus: "IDLE",
+    });
     setLiveState(prev => prev ? { ...prev, machineState: { ...prev.machineState, state: "IDLE" }, current: null } : null);
     scheduleLiveRefresh(); return true;
   }, [scheduleLiveRefresh]);
@@ -1003,9 +1115,8 @@ const OperatorView = () => {
     const connectTimer = setTimeout(() => {
       socket.connect();
     }, 0);
-    socket.on("scan_event", (p = {}) => {
-      if (!isPayloadForActiveMachine(p)) return;
-      const rel = processQrSignal(p);
+    const handleUnifiedScanPayload = (p = {}) => {
+      const rel = processIncomingSocketScanEvent(p, "unified");
       const d = extractQrDecision(p);
       if (d) {
         setSuppressReadyPopup(false);
@@ -1036,42 +1147,9 @@ const OperatorView = () => {
         }
       }
       if (rel || d) scheduleLiveRefresh();
-    });
-    socket.on("QR_VALIDATED", (p = {}) => {
-      if (!isPayloadForActiveMachine(p)) return;
-      const rel = processQrSignal(p);
-      const d = extractQrDecision(p);
-      if (d) {
-        setSuppressReadyPopup(false);
-        if (d === "BLOCK") {
-          mergePopupPayload({
-            type: "ERROR",
-            title: "Scan Blocked",
-            message: formatScanErrorMessage(p),
-            reason: p.reason || "",
-            partId: p.partId || p.part_id,
-            stationNo: p.stationNo || p.station_no,
-            machineId: p.machineId || p.machine_id,
-            qrStatus: "FAILED",
-            operationStatus: "BLOCKED",
-            timestamp: p.timestamp,
-          });
-        } else {
-          mergePopupPayload({
-            type: "INFO",
-            title: "Scan Passed",
-            message: `QR Validated at ${p.stationNo || "Station"}`,
-            partId: p.partId || p.part_id,
-            stationNo: p.stationNo || p.station_no,
-            machineId: p.machineId || p.machine_id,
-            qrStatus: "PASSED",
-            operationStatus: getPassOperationStatusForStation(p.stationNo || p.station_no, stationSettings),
-            timestamp: p.timestamp,
-          });
-        }
-      }
-      if (rel || d) scheduleLiveRefresh();
-    });
+    };
+    socket.on("scan_event", handleUnifiedScanPayload);
+    socket.on("QR_VALIDATED", handleUnifiedScanPayload);
     socket.on("PLC_RUNNING", () => { scheduleLiveRefresh(); });
     socket.on("PLC_COMPLETED_OK", () => { scheduleLiveRefresh(); });
     socket.on("PLC_COMPLETED_NG", () => { scheduleLiveRefresh(); });
@@ -1079,42 +1157,11 @@ const OperatorView = () => {
     
     socket.on("journey_update", (p = {}) => {
       if (String(p.sourceEvent || "").toLowerCase() === "scan_event") return;
-      if (!isPayloadForActiveMachine(p)) return;
-      const d = extractQrDecision(p);
-      const rel = hasQrDecision(p) ? processQrSignal(p) : false;
-      if (d) {
-        setSuppressReadyPopup(false);
-        if (d === "BLOCK") {
-          mergePopupPayload({
-            type: "ERROR",
-            title: "Scan Blocked",
-            message: formatScanErrorMessage(p),
-            reason: p.reason || "",
-            partId: p.partId || p.part_id,
-            stationNo: p.stationNo || p.station_no,
-            machineId: p.machineId || p.machine_id,
-            qrStatus: "FAILED",
-            operationStatus: "BLOCKED",
-            timestamp: p.timestamp,
-          });
-        } else {
-          mergePopupPayload({
-            type: "INFO",
-            title: "Scan Passed",
-            message: `QR Validated at ${p.stationNo || "Station"}`,
-            partId: p.partId || p.part_id,
-            stationNo: p.stationNo || p.station_no,
-            machineId: p.machineId || p.machine_id,
-            qrStatus: "PASSED",
-            operationStatus: getPassOperationStatusForStation(p.stationNo || p.station_no, stationSettings),
-            timestamp: p.timestamp,
-          });
-        }
-      }
-      if (rel || d) scheduleLiveRefresh();
+      handleUnifiedScanPayload(p);
     });
     socket.on("operator_popup", (p = {}) => {
       if (shouldSuppressPopupPayload(p) || isDuplicatePopupEvent(p)) return;
+      processIncomingSocketScanEvent(p, "operator_popup");
       if (!isPayloadForActiveMachine(p)) return;
       if (String(p.partId || p.part_id || "").trim()) {
         setSuppressReadyPopup(false);
@@ -1123,7 +1170,6 @@ const OperatorView = () => {
         ? formatScanErrorMessage({ ...p, reason: p.reason || p.qrReason })
         : p.message;
       mergePopupPayload({ ...p, ...(nm ? { message: nm } : {}) });
-      if (hasQrDecision(p) || String(p.sourceEvent || "").toLowerCase() === "scan_event") processQrSignal(p);
       scheduleLiveRefresh();
     });
     socket.on("dashboard_refresh", () => scheduleLiveRefresh());
@@ -1140,7 +1186,7 @@ const OperatorView = () => {
         socket.disconnect();
       }
     };
-  }, [scheduleLiveRefresh, processQrSignal, mergePopupPayload, isDuplicatePopupEvent, isPayloadForActiveMachine]);
+  }, [scheduleLiveRefresh, processQrSignal, processIncomingSocketScanEvent, mergePopupPayload, isDuplicatePopupEvent, isPayloadForActiveMachine, shouldIgnoreStartupPopup]);
 
   const handleClosePopup = useCallback((reason = "manual") => {
     setPopup((prev) => {
@@ -1182,12 +1228,22 @@ const OperatorView = () => {
       scheduleLiveRefresh();
     } catch (error) {
       await scannerApi.markUsbActivity({ machineId: selectedMachineIdRef.current }).catch(() => null);
-      setUsbDebug(`Submit failed: ${error?.response?.data?.error || error?.message || "unknown"}`);
+      const errorMessage = error?.response?.data?.error || error?.response?.data?.message || error?.message || "USB scan validation failed";
+      setUsbDebug(`Submit failed: ${errorMessage}`);
+      setScanState((prev) => ({
+        ...prev,
+        inputQr: code,
+        activePartId: "",
+        failedQr: code,
+        qrStatus: "FAIL",
+        operationStatus: "FAIL",
+        manualResultStatus: "IDLE",
+      }));
       setPopup((prev) => ({
         ...prev,
         type: "ERROR",
         title: "Scan Blocked",
-        message: error?.response?.data?.error || "USB scan validation failed",
+        message: errorMessage,
         partId: code,
         stationNo: selectedStationRef.current || "",
         machineId: selectedMachineIdRef.current || "",
@@ -1230,6 +1286,13 @@ const OperatorView = () => {
 
     const onKeyDown = (event) => {
       if (event.ctrlKey || event.altKey || event.metaKey) return;
+      const target = event.target;
+      const tag = String(target?.tagName || "").toUpperCase();
+      const isEditableTarget =
+        target?.isContentEditable === true ||
+        ["INPUT", "TEXTAREA", "SELECT"].includes(tag);
+      // Do not treat normal typing in search/manual fields as scanner input.
+      if (isEditableTarget && target !== usbScannerInputRef.current) return;
       const now = Date.now();
       if (now - Number(usbLastKeyAtRef.current || 0) > USB_SCAN_MAX_GAP_MS) {
         usbBufferRef.current = "";
@@ -1243,6 +1306,7 @@ const OperatorView = () => {
         return;
       }
       if (event.key.length === 1) {
+        event.preventDefault();
         usbBufferRef.current += event.key;
         if (usbFlushTimerRef.current) clearTimeout(usbFlushTimerRef.current);
         usbFlushTimerRef.current = setTimeout(flush, USB_IDLE_FLUSH_MS);
@@ -2032,4 +2096,7 @@ const OperatorView = () => {
 };
 
 export default OperatorView;
+
+
+
 
