@@ -23,7 +23,7 @@ jobs:
         run: npm run build
 
       - name: Copy Frontend Build
-        run: xcopy /E /Y /I "${{ github.workspace }}\frontend\dist" "C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\frontend\dist"
+        run: xcopy /E /Y /I "${{ github.workspace }}\frontend\dist" "C:\Users\IOT1\Desktop\Rico_Main_Iot\frontend\dist"
 
       - name: Install Traceability Frontend Dependencies
         working-directory: C:\Users\IOT1\Desktop\Tracebility\frontend
