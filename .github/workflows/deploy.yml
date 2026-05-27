@@ -34,7 +34,7 @@ jobs:
         run: npm run build
 
       - name: Install Rico IoT Backend Dependencies
-        working-directory: ${{ github.workspace }}\Rico_main_iot\backend\rico-iot
+        working-directory: ${{ github.workspace }}\backend
         run: npm install
 
       - name: Install Traceability Backend Dependencies
