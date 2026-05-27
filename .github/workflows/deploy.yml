@@ -15,15 +15,15 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Frontend Dependencies
-        working-directory: ${{ github.workspace }}\Rico_main_iot\frontend
+        working-directory: ${{ github.workspace }}\frontend
         run: npm install
 
       - name: Build Frontend
-        working-directory: ${{ github.workspace }}\Rico_main_iot\frontend
+        working-directory: ${{ github.workspace }}\frontend
         run: npm run build
 
       - name: Install Backend Dependencies
-        working-directory: ${{ github.workspace }}\Rico_main_iot\backend\rico-iot
+        working-directory: ${{ github.workspace }}\backend\rico-iot
         run: npm install
 
       - name: Restart Backend
