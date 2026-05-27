@@ -15,22 +15,22 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rico IoT Frontend Dependencies
-        working-directory: ${{ github.workspace }}\frontend
+        working-directory: ${{ github.workspace }}\Rico_main_iot\frontend
         run: npm install
 
       - name: Build Rico IoT Frontend
-        working-directory: ${{ github.workspace }}\frontend
+        working-directory: ${{ github.workspace }}\Rico_main_iot\frontend
         run: npm run build
 
-      - name: Copy Rico IoT Frontend Build to Desktop
-        run: xcopy /E /Y /I "${{ github.workspace }}\frontend\dist" "C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\frontend\dist"
+      - name: Copy Rico IoT Frontend Build
+        run: robocopy "${{ github.workspace }}\Rico_main_iot\frontend\dist" "C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\frontend\dist" /E & exit 0
 
       - name: Install Rico IoT Backend Dependencies
-        working-directory: ${{ github.workspace }}\backend
+        working-directory: ${{ github.workspace }}\Rico_main_iot\backend
         run: npm install
 
-      - name: Copy Rico IoT Backend to Desktop
-        run: xcopy /E /Y /I "${{ github.workspace }}\backend" "C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\backend\rico-iot"
+      - name: Copy Rico IoT Backend
+        run: robocopy "${{ github.workspace }}\Rico_main_iot\backend" "C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\backend\rico-iot" /E /XD node_modules .git & exit 0
 
       - name: Install Traceability Frontend Dependencies
         working-directory: C:\Users\IOT1\Desktop\Tracebility\frontend
