@@ -22,6 +22,12 @@ jobs:
         working-directory: ${{ github.workspace }}\frontend
         run: npm run build
 
+      - name: Copy Frontend Build
+        run: xcopy /E /Y /I "${{ github.workspace }}\frontend\dist" "C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\frontend\dist"
+
+      - name: Copy Traceability Build
+        run: xcopy /E /Y /I "${{ github.workspace }}\Rico_main_iot\frontend\dist" "C:\Users\IOT1\Desktop\Tracebility\frontend\dist"
+
       - name: Install Backend Dependencies
         working-directory: ${{ github.workspace }}\backend
         run: npm install
