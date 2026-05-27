@@ -11,16 +11,25 @@ jobs:
       run:
         shell: cmd
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          path: C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot
+
       - name: Install Frontend Dependencies
         working-directory: C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\frontend
         run: npm install
+
       - name: Build Frontend
         working-directory: C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\frontend
         run: npm run build
+
       - name: Install Backend Dependencies
         working-directory: C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\backend\rico-iot
         run: npm install
+
       - name: Restart Backend
         run: C:\Users\IOT1\AppData\Roaming\npm\pm2.cmd restart rico-iot-backend
+
       - name: Reload Nginx
         run: cd C:\nginx && nginx.exe -s reload
