@@ -14,16 +14,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Frontend Dependencies
-        working-directory: ${{ github.workspace }}\frontend
+      - name: Install Rico IoT Frontend Dependencies
+        working-directory: C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\frontend
         run: npm install
 
-      - name: Build Frontend
-        working-directory: ${{ github.workspace }}\frontend
+      - name: Build Rico IoT Frontend
+        working-directory: C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\frontend
         run: npm run build
-
-      - name: Copy Frontend Build
-        run: xcopy /E /Y /I "${{ github.workspace }}\frontend\dist" "C:\Users\IOT1\Desktop\Rico_Main_Iot\frontend\dist"
 
       - name: Install Traceability Frontend Dependencies
         working-directory: C:\Users\IOT1\Desktop\Tracebility\frontend
@@ -34,7 +31,7 @@ jobs:
         run: npm run build
 
       - name: Install Rico IoT Backend Dependencies
-        working-directory: ${{ github.workspace }}\backend
+        working-directory: C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\backend\rico-iot
         run: npm install
 
       - name: Install Traceability Backend Dependencies
