@@ -23,7 +23,7 @@ jobs:
         run: npm run build
 
       - name: Install Backend Dependencies
-        working-directory: ${{ github.workspace }}\backend\rico-iot
+        working-directory: ${{ github.workspace }}\backend
         run: npm install
 
       - name: Restart Backend
