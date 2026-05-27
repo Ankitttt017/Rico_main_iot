@@ -453,14 +453,38 @@ const Dashboard = () => {
   
   const rejectionAnalysisRows = useMemo(() => {
     const historyRows = Array.isArray(report.interlockHistory) ? report.interlockHistory : [];
-    if (historyRows.length > 0) {
-      return historyRows.map((row) => ({
+    const recentNgRows = (report.recentScans || []).filter(
+      (row) => String(row.result || "").toUpperCase() === "NG"
+    );
+
+    const mergedRows = [
+      ...historyRows.map((row) => ({
+        id: row.id || null,
         partId: row.partId || row.part_id || "—",
         reason: row.reason || row.interlock_reason || row.message || "Unknown reason",
         result: "NG",
-      }));
-    }
-    return (report.recentScans || []).filter((row) => String(row.result || "").toUpperCase() === "NG");
+        createdAt: row.createdAt || row.timestamp || null,
+        timestamp: row.timestamp || row.createdAt || null,
+      })),
+      ...recentNgRows.map((row) => ({
+        ...row,
+        createdAt: row.createdAt || row.timestamp || null,
+        timestamp: row.timestamp || row.createdAt || null,
+      })),
+    ];
+
+    const seen = new Set();
+    return mergedRows.filter((row) => {
+      const key = [
+        row.id || "",
+        row.partId || row.part_id || "",
+        String(row.reason || row.interlock_reason || "").trim(),
+        row.timestamp || row.createdAt || "",
+      ].join("|");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }, [report.interlockHistory, report.recentScans]);
 
   const rejectionPieData = useMemo(() => {
