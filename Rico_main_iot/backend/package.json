@@ -1,0 +1,9 @@
+{
+  "scripts": {
+    "dev": "npx kill-port 5000 && npm --prefix rico-iot run dev",
+    "start": "npm --prefix rico-iot start"
+  },
+  "devDependencies": {
+    "kill-port": "^2.0.1"
+  }
+}
