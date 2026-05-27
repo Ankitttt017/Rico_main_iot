@@ -133,6 +133,10 @@ function getMachineId(machine) {
   return machine?.machine_key || machine?.plc_ip || DEFAULT_MACHINE.machine_key;
 }
 
+function getMachineReportIp(machine) {
+  return machine?.plc_ip || machine?.ip || machine?.machine_key || DEFAULT_MACHINE.plc_ip;
+}
+
 function buildColumns(rows) {
   const keys = new Set();
   rows.forEach((row) => {
@@ -212,7 +216,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     setError("");
     try {
       const response = await getPlcReadingHistory({
-        ip: getMachineId(selectedMachine),
+        ip: getMachineReportIp(selectedMachine),
         from: fromDate,
         to: toDate,
         limit: 5000,
@@ -220,7 +224,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       setRows(Array.isArray(response.data?.data) ? response.data.data : []);
     } catch (err) {
       setRows([]);
-      setError(err.response?.data?.message || "Unable to load PLC report.");
+      setError(err.response?.data?.error || err.response?.data?.message || "Unable to load PLC report.");
     } finally {
       setLoading(false);
     }
@@ -247,7 +251,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   }, [rows]);
 
   const excelUrl = getPlcHistoryExportUrl({
-    ip: getMachineId(selectedMachine),
+    ip: getMachineReportIp(selectedMachine),
     from: fromDate,
     to: toDate,
     limit: 5000,

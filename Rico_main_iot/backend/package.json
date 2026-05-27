@@ -1,9 +1,31 @@
 {
+  "name": "rico-main-iot-backend",
+  "version": "1.0.0",
+  "main": "server.js",
+  "type": "commonjs",
   "scripts": {
-    "dev": "npx kill-port 5000 && npm --prefix rico-iot run dev",
-    "start": "npm --prefix rico-iot start"
+    "start": "pm2 startOrRestart ../ecosystem.config.js --only rico-main-iot-backend --update-env",
+    "dev": "pm2 startOrRestart ../ecosystem.config.js --only rico-main-iot-backend --update-env",
+    "restart": "pm2 restart rico-main-iot-backend --update-env",
+    "stop": "pm2 stop rico-main-iot-backend",
+    "logs": "pm2 logs rico-main-iot-backend"
   },
   "devDependencies": {
     "kill-port": "^2.0.1"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.5.2",
+    "helmet": "^8.2.0",
+    "mongoose": "^9.6.2",
+    "morgan": "^1.10.1",
+    "mqtt": "^5.15.1",
+    "msnodesqlv8": "^5.2.0",
+    "mssql": "^12.5.4",
+    "sequelize": "^6.37.8",
+    "socket.io": "^4.8.3",
+    "tedious": "^19.2.1"
   }
 }

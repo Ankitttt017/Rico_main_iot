@@ -8,10 +8,8 @@ import {
   getPlcLatestReadings,
   getPlcReadingHistory,
 } from "../../services/api";
+import { SOCKET_URL } from "../../services/endpoints";
 
-const SERVER_URL =
-  import.meta.env.VITE_SOCKET_URL ||
-  (import.meta.env.DEV ? "http://localhost:5000" : window.location.origin);
 const PLC_LATEST_POLL_MS = Number(import.meta.env.VITE_PLC_LATEST_POLL_MS || 2000);
 
 const MACHINE_NAMES = {
@@ -1243,14 +1241,13 @@ function PLCDashboard() {
   }, [machines]);
 
   useEffect(() => {
-    const socket = io(SERVER_URL, {
+    const socket = io(SOCKET_URL, {
       reconnection: true,
       reconnectionDelay: 2000,
     });
     socketRef.current = socket;
 
     socket.on("connect", () => {
-      console.log("Socket connected");
       if (disconnectTimerRef.current) {
         clearTimeout(disconnectTimerRef.current);
         disconnectTimerRef.current = null;
@@ -1259,7 +1256,6 @@ function PLCDashboard() {
     });
 
     socket.on("disconnect", () => {
-      console.log("Socket disconnected");
       if (disconnectTimerRef.current) clearTimeout(disconnectTimerRef.current);
       disconnectTimerRef.current = setTimeout(() => {
         setSocketConnected(false);
@@ -3352,7 +3348,7 @@ function PLCDashboard() {
           </section>
 
           <footer className="footer">
-            {machineName} | PLC: {plcConfig.ip}:{plcConfig.port} | SERVER: {SERVER_URL} | POLL: 1s
+            {machineName} | PLC: {plcConfig.ip}:{plcConfig.port} | SERVER: {SOCKET_URL} | POLL: 1s
           </footer>
         </div>
       </div>

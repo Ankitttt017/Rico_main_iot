@@ -1,8 +1,10 @@
-﻿name: Rico IoT - Auto Deploy
+name: Rico IoT - Auto Deploy
+
 on:
   push:
     branches:
       - master
+
 jobs:
   deploy:
     name: Build and Deploy
@@ -30,25 +32,11 @@ jobs:
         run: npm install
 
       - name: Copy Rico IoT Backend
-        run: robocopy "${{ github.workspace }}\Rico_main_iot\backend" "C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\backend\rico-iot" /E /XD node_modules .git & exit 0
-
-      - name: Install Traceability Frontend Dependencies
-        working-directory: C:\Users\IOT1\Desktop\Tracebility\frontend
-        run: npm install
-
-      - name: Build Traceability Frontend
-        working-directory: C:\Users\IOT1\Desktop\Tracebility\frontend
-        run: npm run build
-
-      - name: Install Traceability Backend Dependencies
-        working-directory: C:\Users\IOT1\Desktop\Tracebility\backend
-        run: npm install
+        run: robocopy "${{ github.workspace }}\Rico_main_iot\backend" "C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\backend" /E /XD node_modules .git /XF *.log .env & exit 0
 
       - name: Restart Rico IoT Backend
-        run: C:\Users\IOT1\AppData\Roaming\npm\pm2.cmd restart rico-iot-backend
-
-      - name: Restart Traceability Backend
-        run: C:\Users\IOT1\AppData\Roaming\npm\pm2.cmd restart traceability-backend
+        working-directory: C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot
+        run: C:\Users\IOT1\AppData\Roaming\npm\pm2.cmd startOrRestart ecosystem.config.js --only rico-main-iot-backend --update-env && C:\Users\IOT1\AppData\Roaming\npm\pm2.cmd save
 
       - name: Reload Nginx
         run: cd C:\nginx && nginx.exe -s reload

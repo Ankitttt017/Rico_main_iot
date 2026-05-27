@@ -1,5 +1,14 @@
 {
-  "dependencies": {
-    "nodemon": "^3.1.14"
+  "name": "rico-main-iot",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "backend:dev": "npm --prefix backend run dev",
+    "backend:start": "npm --prefix backend start",
+    "frontend:dev": "npm --prefix frontend run dev",
+    "frontend:build": "npm --prefix frontend run build",
+    "build": "npm run frontend:build",
+    "check": "node --check backend/server.js",
+    "verify": "npm run check && npm run frontend:build"
   }
 }

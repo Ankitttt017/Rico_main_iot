@@ -1,5 +1,5 @@
 import React, { useRef, useState } from "react";
-import { deleteOperation, getOperations, updateOperation, uploadSheet } from "../../services/api";
+import { deleteOperation, getOperations, getPartSheetDownloadUrl, updateOperation, uploadSheet } from "../../services/api";
 import { useI18n } from "../../context/I18nContext";
 
 const OperationsTab = ({ part, partId, onOperationsChange, onSheetsChange }) => {
@@ -315,7 +315,7 @@ const SheetSection = ({ title, actionLabel, type, partId, data, emptyMsg, onShee
                     {row.filePath ? (
                       <a
                         className="text-teal-700 hover:underline"
-                        href={`/api/parts/${partId}/sheets/${type}/${row.id}/download`}
+                        href={getPartSheetDownloadUrl(partId, type, row.id)}
                         target="_blank"
                         rel="noreferrer"
                       >

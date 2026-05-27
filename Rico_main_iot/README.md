@@ -6,14 +6,18 @@ This project now runs only the Rico IoT/master-data app. The old combined backen
 
 ```text
 Rico_main_iot/
+  backend/               Express API and SQL Server data access
+    src/                 API routes, controllers, DB, PLC monitor modules
+    schema.mssql.sql     SQL Server schema
   frontend/              React + Vite frontend
-  backend/
-    rico-iot/            Express API and SQL Server data access
+    src/                 UI source code
+  ecosystem.config.js    PM2 process config
+  package.json           Project-level helper scripts
 ```
 
 ## Database
 
-Configure SQL Server in `backend/rico-iot/.env`:
+Configure SQL Server in `backend/.env`:
 
 ```env
 PORT=5000
@@ -29,13 +33,13 @@ DB_PASSWORD=your_sql_password
 
 For a named instance such as `SQLEXPRESS`, set `DB_INSTANCE_NAME=SQLEXPRESS` and leave `DB_PORT` empty.
 
-If you want Windows authentication, set `DB_TRUSTED_CONNECTION=true` and install the optional driver in `backend/rico-iot`:
+If you want Windows authentication, set `DB_TRUSTED_CONNECTION=true` and install the optional driver in `backend`:
 
 ```bash
 npm install msnodesqlv8
 ```
 
-The IoT schema is in `backend/rico-iot/schema.mssql.sql`. To let the backend run the non-destructive schema check on startup, set:
+The IoT schema is in `backend/schema.mssql.sql`. To let the backend run the non-destructive schema check on startup, set:
 
 ```env
 DB_AUTO_MIGRATE=true
@@ -46,15 +50,15 @@ DB_AUTO_MIGRATE=true
 Backend:
 
 ```bash
-cd backend/rico-iot
-npm start
+npm run backend:dev
 ```
 
 Frontend:
 
 ```bash
-cd frontend
-npm run dev
+npm run frontend:dev
 ```
 
 The frontend runs on `http://localhost:5173` and proxies `/api/*` to the backend on `http://localhost:5000`.
+
+If port `5000` is already in use, stop the existing backend process before running another backend instance.
