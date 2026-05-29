@@ -496,9 +496,9 @@ function KpiCard({ title, value, tone }) {
   }[tone] || "border-slate-200 bg-white text-slate-700";
 
   return (
-    <div className={`rounded-lg border p-4 shadow-sm ${toneClass}`}>
+    <div className={`rounded-lg border p-3 shadow-sm ${toneClass}`}>
       <p className="text-xs font-extrabold uppercase tracking-[0.16em] opacity-75">{title}</p>
-      <p className="mt-2 text-3xl font-black">{value}</p>
+      <p className="mt-1 text-2xl font-black sm:text-3xl">{value}</p>
     </div>
   );
 }
@@ -893,10 +893,10 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   return (
     <AppLayout onLogout={onLogout} currentUser={currentUser} hideFooter>
       <div className="space-y-5">
-        <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <h1 className="text-2xl font-black text-slate-950">{machineLabel} Production Report</h1>
+            <div className="min-w-0">
+              <h1 className="text-xl font-black leading-tight text-slate-950 sm:text-2xl">{machineLabel} Production Report</h1>
               <p className="text-sm font-semibold text-slate-500">
                 Machine production history | {fromDate} to {toDate}
               </p>
@@ -926,8 +926,8 @@ export default function PlcReportPage({ onLogout, currentUser }) {
           </button>
 
           {filtersOpen && (
-            <div className="border-t border-slate-200 p-4">
-              <div className="grid gap-3 lg:grid-cols-[190px_190px_170px_150px_170px_170px_120px_132px] lg:items-end">
+            <div className="border-t border-slate-200 p-3 sm:p-4">
+              <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))] 2xl:[grid-template-columns:minmax(170px,1fr)_minmax(170px,1fr)_minmax(150px,0.9fr)_minmax(130px,0.8fr)_minmax(150px,0.9fr)_minmax(150px,0.9fr)_minmax(110px,0.7fr)_minmax(120px,0.75fr)] 2xl:items-end">
                 <label className="block">
                   <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">Line</span>
                   <select
@@ -938,7 +938,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                       const nextMachines = getMachinesForLine(nextLine);
                       if (nextMachines.length) setDraftMachineId(getMachineId(nextMachines[0]));
                     }}
-                    className="mt-1 h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                    className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
                   >
                     <option value="all">All Lines</option>
                     {lines.map((line) => (
@@ -953,7 +953,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                   <select
                     value={draftMachineId}
                     onChange={(event) => setDraftMachineId(event.target.value)}
-                    className="mt-1 h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                    className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
                   >
                     {draftMachineOptions.map((machine) => (
                       <option key={getMachineId(machine)} value={getMachineId(machine)}>
@@ -973,7 +973,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                       }
                       applyQuickDateFilter(event.target.value);
                     }}
-                    className="mt-1 h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                    className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
                   >
                     {QUICK_DATE_FILTERS.map((filter) => (
                       <option key={filter.key} value={filter.key}>{filter.label}</option>
@@ -986,7 +986,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                   <select
                     value={draftShiftFilter}
                     onChange={(event) => setDraftShiftFilter(event.target.value)}
-                    className="mt-1 h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                    className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
                   >
                     {SHIFT_FILTERS.map((filter) => (
                       <option key={filter.key} value={filter.key}>{filter.label}</option>
@@ -995,16 +995,16 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                 </label>
                 <label className="block">
                   <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">From</span>
-                  <input type="date" value={draftFromDate} onChange={handleFromDateChange} className="mt-1 h-11 w-full rounded-lg border border-slate-300 px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" />
+                  <input type="date" value={draftFromDate} onChange={handleFromDateChange} className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" />
                 </label>
                 <label className="block">
                   <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">To</span>
-                  <input type="date" value={draftToDate} onChange={handleToDateChange} className="mt-1 h-11 w-full rounded-lg border border-slate-300 px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" />
+                  <input type="date" value={draftToDate} onChange={handleToDateChange} className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" />
                 </label>
-                <button type="button" onClick={applyReportFilters} className="h-11 rounded-lg bg-blue-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-blue-700">
+                <button type="button" onClick={applyReportFilters} className="h-10 rounded-lg bg-blue-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-blue-700 sm:self-end">
                   Apply
                 </button>
-                <button type="button" onClick={downloadExcel} className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-emerald-700">
+                <button type="button" onClick={downloadExcel} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-emerald-700 sm:self-end">
                   <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v12m0 0l4-4m-4 4l-4-4M5 21h14" />
                   </svg>
@@ -1015,7 +1015,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
           )}
         </section>
 
-        <section className="grid gap-4 md:grid-cols-5">
+        <section className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(145px,1fr))]">
           <KpiCard title="OK Shot" value={kpis.ok} tone="emerald" />
           <KpiCard title="Warm Up Shot" value={kpis.warm} tone="amber" />
           <KpiCard title="Off Shot" value={kpis.off} tone="rose" />

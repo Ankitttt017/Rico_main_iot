@@ -1603,7 +1603,7 @@ function PLCDashboard() {
           --muted: #7f8ea3;
           --faint: #4d5b6e;
           --cyan: #22d3ee;
-          --overview-card-height: 124px;
+          --overview-card-height: 108px;
           background:
             linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px) 0 0 / 36px 36px,
             linear-gradient(0deg, rgba(255,255,255,0.02) 1px, transparent 1px) 0 0 / 36px 36px,
@@ -1619,9 +1619,9 @@ function PLCDashboard() {
         .header {
           display: grid;
           grid-template-columns: 1fr auto;
-          gap: 16px;
+          gap: 12px;
           align-items: center;
-          padding: 14px 16px;
+          padding: 12px 14px;
           border: 1px solid var(--line-strong);
           border-radius: 14px;
           background: linear-gradient(135deg, #f8fbff 0%, #edf4ff 100%);
@@ -1787,7 +1787,7 @@ function PLCDashboard() {
 
         .overview {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+          grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
           grid-auto-rows: minmax(var(--overview-card-height), auto);
           gap: 10px;
           margin: 10px 0;
@@ -1797,7 +1797,7 @@ function PLCDashboard() {
           border: 1px solid var(--line-strong);
           border-radius: 10px;
           background: linear-gradient(180deg, #ffffff, #f2f6fb);
-          padding: 12px 14px;
+          padding: 10px 12px;
           min-height: var(--overview-card-height);
           min-width: 0;
           display: flex;
@@ -1883,7 +1883,7 @@ function PLCDashboard() {
           border: 1px solid var(--line-strong);
           border-radius: 10px;
           background: linear-gradient(180deg, #ffffff, #f2f6fb);
-          padding: 12px 14px;
+          padding: 10px 12px;
           min-height: var(--overview-card-height);
           min-width: 0;
           position: relative;
@@ -1917,7 +1917,7 @@ function PLCDashboard() {
         }
 
         .metric-value {
-          margin-top: 12px;
+          margin-top: 8px;
           color: var(--text);
           font-family: var(--mono);
           font-size: clamp(17px, 1.15vw, 22px);
@@ -2494,8 +2494,8 @@ function PLCDashboard() {
         }
 
         .group-section {
-          margin: 14px 0 24px;
-          padding: 0 14px;
+          margin: 12px 0 18px;
+          padding: 0 12px;
         }
 
         .group-header {
@@ -2540,8 +2540,8 @@ function PLCDashboard() {
 
         .cards-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
-          gap: 12px;
+          grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+          gap: 10px;
         }
 
         .param-table-wrap {
@@ -2629,8 +2629,8 @@ function PLCDashboard() {
           border: 1px solid var(--line-strong);
           border-left: 3px solid var(--accent);
           border-radius: 10px;
-          min-height: 86px;
-          padding: 10px 12px;
+          min-height: 78px;
+          padding: 9px 10px;
           box-shadow: 0 8px 18px rgba(19,75,143,0.055);
           transition: border-color 0.16s ease, transform 0.16s ease, background 0.16s ease;
           display: flex;
