@@ -388,7 +388,7 @@ const PartMasterPage = ({ onLogout, currentUser }) => {
               <p className="mb-4 text-xs text-slate-400">
                 This section gives you an overall summary of the plant. The plant utilisation, machine utilisation, operator efficiency and idle time is depicted over the interval selected for the current period.
               </p>
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="auto-fit-stats">
                 <StatBox value={total} label="Part Registered" Icon={PeopleIcon} />
                 <StatBox value={stats.part_types || 0} label={t("partTypes")} Icon={ClipIcon} />
                 <StatBox value={stats.linked || 0} label={t("partLinked")} Icon={LinkIcon} />
@@ -426,7 +426,7 @@ const PartMasterPage = ({ onLogout, currentUser }) => {
               <p className="text-base font-medium">{t("noPartsFound")}</p>
             </div>
           ) : (
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-7">
+            <div className="auto-fit-cards">
               {parts.map(part => (
                 <PartCard key={part.material_code} part={part} t={t} />
               ))}

@@ -422,7 +422,7 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
           </div>
 
           {/* Stats bar */}
-          <div className="mb-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="auto-fit-stats mb-5">
             {[
               { label: "Total",   value: stats.total,   color: "text-slate-950",   bg: "bg-white", accent: "bg-slate-400" },
               { label: "Running", value: stats.running, color: "text-emerald-700", bg: "bg-emerald-50", accent: "bg-emerald-500" },
@@ -467,7 +467,7 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
               <p className="text-base font-medium">No machines found for selected filters.</p>
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-4">
+            <div className="auto-fit-cards">
               {pagedMachines.map(machine => (
                 <MachineCard
                   key={machine.id}

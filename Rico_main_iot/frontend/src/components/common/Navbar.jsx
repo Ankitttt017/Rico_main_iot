@@ -9,7 +9,7 @@ const pageMeta = {
   "/parts": { title: "Part Master", subtitle: "Material and process master data" },
   "/machines": { title: "Machine Tracking", subtitle: "Live machine state and active operation view" },
   "/operations": { title: "Operation Master", subtitle: "Part routing, process steps and logs" },
-  "/plc-monitor": { title: "Real Time Monitor", subtitle: "Live PLC machine parameters" },
+  "/plc-monitor": { title: "Real Time Monitor", subtitle: "" },
   "/plc-report": { title: "My Report", subtitle: "Machine production history and exports" },
 };
 
@@ -141,7 +141,7 @@ const Navbar = ({ onLogout, currentUser }) => {
             <span className="hidden h-9 w-1 rounded-full bg-[#007cba] sm:block" />
             <div className="min-w-0">
               <h1 className="truncate text-xl font-extrabold text-slate-950">{meta.title}</h1>
-              <p className="hidden truncate text-sm text-slate-500 md:block">{meta.subtitle}</p>
+              {meta.subtitle && <p className="hidden truncate text-sm text-slate-500 md:block">{meta.subtitle}</p>}
             </div>
           </div>
         </div>

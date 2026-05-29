@@ -1,22 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import BrandLogo from "../components/common/BrandLogo";
 import {
   Activity,
   AlertTriangle,
   ClipboardList,
-  Download,
   Gauge,
-  Languages,
   LogOut,
-  Moon,
   Monitor,
   Package,
   RefreshCw,
-  Save,
-  Settings,
-  Sun,
   Timer,
   User,
-  Wrench,
   X,
 } from "lucide-react";
 import {
@@ -120,12 +114,12 @@ const PLC_REGISTER_GROUPS = [
     keys: [
       { name: "cooling_water_mov", label: "Cooling Water MOV", unit: "L/min" },
       { name: "cooling_water_sta", label: "Cooling Water STA", unit: "L/min" },
-      { name: "furnace_metal_temp", label: "Furnace Metal Temp", unit: "C" },
-      { name: "fixed_die_temp_f1", label: "Fixed Die Temp F1", unit: "C" },
-      { name: "fixed_die_temp_f2", label: "Fixed Die Temp F2", unit: "C" },
-      { name: "moving_die_temp_m1", label: "Moving Die Temp M1", unit: "C" },
-      { name: "moving_die_temp_m2", label: "Moving Die Temp M2", unit: "C" },
-      { name: "slide_temp_s1", label: "Slide Temp S1", unit: "C" },
+      { name: "furnace_metal_temp", label: "Furnace Metal Temp", unit: "°C" },
+      { name: "fixed_die_temp_f1", label: "Fixed Die Temp F1", unit: "°C" },
+      { name: "fixed_die_temp_f2", label: "Fixed Die Temp F2", unit: "°C" },
+      { name: "moving_die_temp_m1", label: "Moving Die Temp M1", unit: "°C" },
+      { name: "moving_die_temp_m2", label: "Moving Die Temp M2", unit: "°C" },
+      { name: "slide_temp_s1", label: "Slide Temp S1", unit: "°C" },
     ],
   },
   {
@@ -166,7 +160,7 @@ const SelectField = ({ label, value, onChange, children, theme = "light" }) => (
       className={`h-[38px] w-full rounded border px-3 text-sm font-semibold outline-none transition ${
         theme === "dark"
           ? "border-[#303848] bg-black text-zinc-300 focus:border-[#626b7b]"
-          : "border-[#c8d8ff] bg-[#f8fbff] text-slate-800 shadow-sm focus:border-[#4b49ac] focus:ring-2 focus:ring-[#98bdff]/40"
+          : "border-[#c9d8ea] bg-[#f8fbff] text-slate-800 shadow-sm focus:border-[#1474b8] focus:ring-2 focus:ring-[#1474b8]/15"
       }`}
     >
       {children}
@@ -269,8 +263,8 @@ const PlcMachineCard = ({ reading, machineInfo, lineInfo, theme = "light", curre
   const isDark = theme === "dark";
   const online = Boolean(reading?.is_online);
   const machineName = reading?.machine_name || machineInfo?.name || "PLC Machine";
-  const successTone = isDark ? "text-[#10ff00]" : "text-emerald-700";
-  const dangerTone = isDark ? "text-red-200" : "text-[#f3797e]";
+  const successTone = isDark ? "text-emerald-300" : "text-emerald-700";
+  const dangerTone = isDark ? "text-rose-200" : "text-rose-600";
   const productionMetrics = [
     { label: "Cycle Time", value: reading?.cycle_time, unit: "s", icon: Timer, tone: successTone },
     { label: "Shot Date", value: formatDateOnly(reading?.shot_date), icon: ClipboardList, tone: successTone },
@@ -278,8 +272,12 @@ const PlcMachineCard = ({ reading, machineInfo, lineInfo, theme = "light", curre
     { label: "Shot Number", value: reading?.shot_number, icon: Activity, tone: successTone },
     { label: "OK Shot", value: reading?.ok_shot, icon: Gauge, tone: successTone },
     { label: "Clamp Tonnage", value: reading?.clamp_tonnage, unit: "T", icon: Gauge, tone: dangerTone },
-    { label: "Metal Temp", value: reading?.furnace_metal_temp, unit: "C", icon: AlertTriangle, tone: dangerTone },
+    { label: "Metal Temp", value: reading?.furnace_metal_temp, unit: "°C", icon: AlertTriangle, tone: dangerTone },
   ];
+  const alertMetrics = [
+    { label: "Metal Temp", value: reading?.furnace_metal_temp, unit: "°C" },
+    { label: "Clamp Tonnage", value: reading?.clamp_tonnage, unit: "T" },
+  ].filter((item) => item.value !== null && item.value !== undefined && item.value !== "");
   const timingMetrics = [
     { label: "Die Close/Core In", value: reading?.die_close_core_in_time, unit: "s" },
     { label: "Pouring", value: reading?.pouring_time, unit: "s" },
@@ -293,57 +291,37 @@ const PlcMachineCard = ({ reading, machineInfo, lineInfo, theme = "light", curre
   return (
     <article className={`overflow-hidden rounded-xl border ${
       isDark
-        ? "border-red-950/50 bg-gradient-to-r from-[#720c16] via-[#4b080f] to-[#090909] shadow-[0_18px_42px_rgba(0,0,0,0.42)]"
-        : "border-[#b6caff] bg-gradient-to-br from-[#e4ecff] via-[#d9e6ff] to-[#cedcff] shadow-[0_24px_54px_rgba(75,73,172,0.26)] ring-1 ring-white/70"
+        ? "border-slate-800 bg-gradient-to-br from-[#111827] via-[#0f172a] to-[#020617] shadow-[0_18px_42px_rgba(0,0,0,0.42)]"
+        : "border-[#bfd0e8] bg-gradient-to-br from-white via-[#f4f8fd] to-[#e9f1fb] shadow-[0_20px_44px_rgba(19,75,143,0.14)] ring-1 ring-white/80"
     }`}>
       <div className="p-4">
-        <div className="grid items-start gap-5 xl:grid-cols-[1.25fr_0.9fr_auto]">
+        <div className="grid items-start gap-5 xl:grid-cols-[1.25fr_auto]">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <Monitor className={`h-5 w-5 ${isDark ? "text-white" : "text-[#20224a]"}`} />
-              <h2 className={`truncate text-lg font-black ${isDark ? "text-white" : "text-[#20224a]"}`}>{machineName}</h2>
+              <Monitor className={`h-5 w-5 ${isDark ? "text-white" : "text-[#0b2f68]"}`} />
+              <h2 className={`truncate text-lg font-black ${isDark ? "text-white" : "text-[#0b2f68]"}`}>{machineName}</h2>
             </div>
             <div className={`mt-2 flex items-center gap-2 text-sm font-bold ${isDark ? "text-zinc-200" : "text-slate-700"}`}>
               <Package className="h-4 w-4" />
               <span className="truncate">{reading?.part_name || "No part assigned"}</span>
             </div>
-            <p className={`mt-3 font-mono text-xs font-bold ${isDark ? "text-red-100/70" : "text-slate-500"}`}>
-              {reading?.plc_ip || "-"}:{reading?.plc_port || "-"}
-            </p>
-          </div>
-
-          <div className="min-w-0">
-            <div className="flex items-center gap-3">
-              <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-sm font-black ${isDark ? "bg-white/80 text-slate-700" : "bg-[#dce8ff] text-[#4b49ac] ring-1 ring-[#98bdff]"}`}>
-                {(currentUser?.name || "OP").slice(0, 2).toUpperCase()}
-              </div>
-              <div className="min-w-0">
-                <p className={`truncate text-sm font-black ${isDark ? "text-white" : "text-slate-900"}`}>{currentUser?.name || "Operator"}</p>
-                <p className={`flex items-center gap-1 text-sm font-bold ${isDark ? "text-[#10ff00]" : "text-[#4b49ac]"}`}>
-                  <Activity className="h-4 w-4" />
-                  Live from PlcCycleReadings
-                </p>
-              </div>
-            </div>
           </div>
 
           <div className="flex flex-wrap justify-start gap-3 xl:justify-end">
             <span className={`inline-flex h-10 min-w-[118px] items-center justify-center rounded-md px-4 text-sm font-black ${
-              online ? isDark ? "bg-[#2d2929] text-white" : "bg-emerald-50 text-emerald-700" : isDark ? "bg-red-500/15 text-red-100" : "bg-[#fff0f1] text-[#f3797e]"
+              online ? isDark ? "bg-emerald-500/15 text-emerald-200" : "bg-emerald-50 text-emerald-700" : isDark ? "bg-red-500/15 text-red-100" : "bg-rose-50 text-rose-600"
             }`}>
               {online ? "Complete" : "Offline"}
             </span>
             <button
               type="button"
               onClick={() => onOpenTable(reading)}
-              className="flex h-10 w-24 items-center justify-center rounded-md bg-[#4b49ac] text-white transition hover:bg-[#3f3d9b]"
-              title="See table and reports"
+              className="flex h-10 items-center justify-center gap-2 rounded-md bg-[#134b8f] px-4 text-sm font-black text-white transition hover:bg-[#0d3a70]"
+              title="Open detailed report"
             >
               <ClipboardList className="h-5 w-5" />
+              Details
             </button>
-            <span className={`flex h-10 w-20 items-center justify-center rounded-md ${isDark ? "bg-[#2b2929] text-white" : "bg-slate-100 text-slate-700"}`}>
-              <Timer className="h-5 w-5" />
-            </span>
           </div>
         </div>
 
@@ -356,33 +334,47 @@ const PlcMachineCard = ({ reading, machineInfo, lineInfo, theme = "light", curre
           ))}
         </div>
 
-        <div className={`mt-4 grid overflow-hidden rounded-lg border md:grid-cols-2 xl:grid-cols-5 ${isDark ? "border-white/10 bg-black/20" : "border-[#b6caff] bg-[#eef4ff]/80"}`}>
-          {[
-            ["Line", lineInfo?.line_name],
-            ["Machine Code", machineInfo?.machine_code],
-            ["Protocol", machineInfo?.protocol],
-            ["Configured IP", machineInfo?.ip_address || reading?.plc_ip],
-            ["Port", machineInfo?.port || reading?.plc_port],
-          ].map(([label, value]) => (
-            <div key={label} className={`min-w-0 border-b border-r px-4 py-3 last:border-r-0 ${isDark ? "border-white/10" : "border-[#dce8ff]"}`}>
-              <p className={`text-[11px] font-black uppercase tracking-wide ${isDark ? "text-red-100/60" : "text-[#667092]"}`}>{label}</p>
-              <p className={`mt-1 min-w-0 break-words text-sm font-black ${isDark ? "text-white" : "text-[#20224a]"}`}>{formatValue(value)}</p>
-            </div>
-          ))}
-        </div>
+        {alertMetrics.length > 0 && (
+          <div className={`mt-4 grid gap-3 rounded-lg border p-3 md:grid-cols-2 ${isDark ? "border-rose-500/20 bg-rose-500/10" : "border-rose-200 bg-rose-50"}`}>
+            {alertMetrics.map(({ label, value, unit }) => (
+              <div key={label} className={`flex items-center gap-2 text-sm font-black ${isDark ? "text-rose-100" : "text-rose-700"}`}>
+                <AlertTriangle className="h-4 w-4" />
+                {label}: {formatValue(value, unit || "")}
+              </div>
+            ))}
+          </div>
+        )}
 
-        <div className={`mt-4 grid overflow-hidden rounded-lg border md:grid-cols-2 xl:grid-cols-7 ${isDark ? "border-white/10 bg-red-950/25" : "border-[#b6caff] bg-[#eef4ff]/80"}`}>
+        <div className={`mt-4 grid overflow-hidden rounded-lg border md:grid-cols-2 xl:grid-cols-7 ${isDark ? "border-slate-700 bg-slate-900/60" : "border-[#bfd0e8] bg-white/72"}`}>
           {timingMetrics.map(({ label, value, unit }) => (
-            <div key={label} className={`min-w-0 border-b border-r px-4 py-3 last:border-r-0 ${isDark ? "border-white/10" : "border-[#dce8ff]"}`}>
-              <p className={`text-[11px] font-black uppercase tracking-wide ${isDark ? "text-red-100/60" : "text-[#667092]"}`}>{label}</p>
-              <p className={`mt-1 break-words text-base font-black ${isDark ? "text-white" : "text-[#20224a]"}`}>{formatValue(value, unit || "")}</p>
+            <div key={label} className={`min-w-0 border-b border-r px-4 py-3 last:border-r-0 ${isDark ? "border-slate-700" : "border-[#dce8f5]"}`}>
+              <p className={`text-[11px] font-black uppercase tracking-wide ${isDark ? "text-slate-400" : "text-[#667092]"}`}>{label}</p>
+              <p className={`mt-1 break-words text-base font-black ${isDark ? "text-white" : "text-[#0b2f68]"}`}>{formatValue(value, unit || "")}</p>
             </div>
           ))}
         </div>
 
-        <div className={`mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-3 text-xs font-bold ${isDark ? "border-white/10 text-red-100/70" : "border-red-100 text-slate-500"}`}>
-          <span>Shot No: {formatValue(reading?.shot_number)}</span>
-          <span>OK: {formatValue(reading?.ok_shot)}</span>
+        <details className={`mt-4 rounded-lg border ${isDark ? "border-slate-700 bg-slate-950/40" : "border-[#dce8f5] bg-white/60"}`}>
+          <summary className={`cursor-pointer px-4 py-3 text-xs font-black uppercase tracking-[0.14em] ${isDark ? "text-slate-300" : "text-[#0b2f68]"}`}>
+            Diagnostics
+          </summary>
+          <div className={`grid overflow-hidden border-t md:grid-cols-2 xl:grid-cols-5 ${isDark ? "border-slate-700" : "border-[#dce8f5]"}`}>
+            {[
+              ["Line", lineInfo?.line_name],
+              ["Machine Code", machineInfo?.machine_code],
+              ["Protocol", machineInfo?.protocol],
+              ["Configured IP", machineInfo?.ip_address || reading?.plc_ip],
+              ["Port", machineInfo?.port || reading?.plc_port],
+            ].map(([label, value]) => (
+              <div key={label} className={`min-w-0 border-b border-r px-4 py-3 last:border-r-0 ${isDark ? "border-slate-700" : "border-[#dce8f5]"}`}>
+                <p className={`text-[11px] font-black uppercase tracking-wide ${isDark ? "text-slate-400" : "text-[#667092]"}`}>{label}</p>
+                <p className={`mt-1 min-w-0 break-words text-sm font-black ${isDark ? "text-white" : "text-[#0b2f68]"}`}>{formatValue(value)}</p>
+              </div>
+            ))}
+          </div>
+        </details>
+
+        <div className={`mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-3 text-xs font-bold ${isDark ? "border-slate-700 text-slate-400" : "border-[#dce8f5] text-slate-500"}`}>
           <span>Last record: {formatDateTime(reading?.recorded_at)}</span>
         </div>
       </div>
@@ -590,7 +582,7 @@ const PlcTableModal = ({ reading, theme = "dark", onClose }) => {
 };
 
 const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
-  const [theme, setTheme] = useState("light");
+  const theme = "dark";
   const [selectedPlant, setSelectedPlant] = useState(PLANTS[0]);
   const [divisionFilter, setDivisionFilter] = useState("HPDC");
   const [selectedLine, setSelectedLine] = useState("");
@@ -718,39 +710,21 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
     <main className={`min-h-screen transition-colors ${
       isDark
         ? "bg-black text-white"
-        : "bg-[radial-gradient(circle_at_16%_0%,rgba(152,189,255,0.36),transparent_28rem),radial-gradient(circle_at_88%_10%,rgba(121,120,233,0.15),transparent_24rem),linear-gradient(180deg,#f7f9ff_0%,#eef3ff_54%,#e8efff_100%)] text-slate-950"
+        : "bg-[radial-gradient(circle_at_16%_0%,rgba(159,208,245,0.34),transparent_28rem),radial-gradient(circle_at_88%_10%,rgba(0,124,186,0.12),transparent_24rem),linear-gradient(180deg,#f8fbff_0%,#eef4fb_54%,#e7eff8_100%)] text-slate-950"
     }`}>
       <header className={`sticky top-0 z-20 border-b px-7 py-3 shadow-[0_10px_35px_rgba(0,0,0,0.18)] ${
         isDark ? "border-white/5 bg-black/95" : "border-[#c8d8ff] bg-[#f8fbff]/95"
       }`}>
         <div className="flex items-center justify-between gap-4">
-          <div className={`flex h-[56px] w-[230px] items-center justify-center rounded-lg border px-5 ${
-            isDark ? "border-white/10 bg-gradient-to-br from-zinc-950 to-zinc-900 shadow-[0_0_0_1px_rgba(255,255,255,0.08)]" : "border-[#c8d8ff] bg-gradient-to-br from-[#f8fbff] to-[#edf4ff] shadow-[0_8px_22px_rgba(75,73,172,0.12)]"
+          <div className={`flex h-[56px] w-[156px] items-center justify-center rounded-lg border px-5 ${
+            isDark ? "border-white/10 bg-gradient-to-br from-zinc-950 to-zinc-900 shadow-[0_0_0_1px_rgba(255,255,255,0.08)]" : "border-[#c9d8ea] bg-white shadow-[0_8px_22px_rgba(19,75,143,0.10)]"
           }`}>
-            <div className="text-center leading-none">
-              <div className={`text-2xl font-black tracking-[0.2em] ${isDark ? "text-white" : "text-[#134b8f]"}`}>RICO</div>
-              <div className={`mt-1 text-[10px] font-extrabold uppercase tracking-[0.14em] ${isDark ? "text-cyan-300" : "text-slate-600"}`}>
-                Auto Industries Limited
-              </div>
+            <div className="scale-[0.76]">
+              <BrandLogo wordmark className="justify-center" />
             </div>
           </div>
           <div className="hidden lg:block" />
           <div className="flex items-center gap-4">
-            <ClipboardList className={`h-5 w-5 ${isDark ? "text-zinc-200" : "text-slate-600"}`} />
-            <Languages className={`h-5 w-5 ${isDark ? "text-zinc-200" : "text-slate-600"}`} />
-            <Wrench className={`h-5 w-5 ${isDark ? "text-zinc-200" : "text-slate-600"}`} />
-            <button
-              type="button"
-              onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
-              className={`flex h-9 w-9 items-center justify-center rounded-lg border transition ${
-                isDark
-                  ? "border-zinc-800 bg-white/5 text-zinc-100 hover:bg-white/10"
-                  : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100"
-              }`}
-              title={isDark ? "Switch to light theme" : "Switch to dark theme"}
-            >
-              {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-            </button>
             <div className="relative">
               <button
                 type="button"
@@ -790,28 +764,17 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
       <section className="px-7 pb-8 pt-4">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-3">
-            <h1 className={`text-2xl font-bold ${isDark ? "text-zinc-200" : "text-slate-950"}`}>Operator</h1>
-            <span className={`h-8 border-l ${isDark ? "border-zinc-700" : "border-slate-300"}`} />
-            <nav className={`flex flex-wrap items-center gap-2 text-sm ${isDark ? "text-zinc-400" : "text-slate-500"}`}>
-              <span>{selectedPlant.location}</span>
-              <span>&gt;</span>
-              <span>{selectedPlant.name}</span>
-              <span>&gt;</span>
-              <span>{divisionFilter || "All Divisions"}</span>
-              <span>&gt;</span>
-              <span>{selectedLineData?.line_name || "Select Line"}</span>
-            </nav>
+            <div>
+              <p className={`text-xs font-black uppercase tracking-[0.18em] ${isDark ? "text-cyan-300" : "text-[#1474b8]"}`}>Digital Workstation</p>
+              <h1 className={`mt-1 text-2xl font-bold ${isDark ? "text-zinc-200" : "text-slate-950"}`}>Live Production</h1>
+            </div>
           </div>
-          <Settings className={`h-8 w-8 ${isDark ? "text-white" : "text-slate-700"}`} />
+          <div className={`rounded-lg border px-3 py-2 text-sm font-bold ${isDark ? "border-zinc-800 bg-white/5 text-zinc-300" : "border-[#c9d8ea] bg-white/80 text-slate-600"}`}>
+            {selectedPlant.name} | {divisionFilter || "All Divisions"} | {selectedLineData?.line_name || "Select Line"}
+          </div>
         </div>
 
-        <div className="mb-6 grid gap-5 md:grid-cols-2 xl:grid-cols-[280px_280px_280px_280px_280px_280px]">
-          <SelectField theme={theme} label="Select Location" value={selectedPlant.code} onChange={(value) => {
-            setSelectedPlant(getPlantByCode(value));
-            setSelectedLine("");
-          }}>
-            {PLANTS.map((plant) => <option key={plant.code} value={plant.code}>{plant.location}</option>)}
-          </SelectField>
+        <div className="mb-6 grid gap-5 md:grid-cols-2 xl:grid-cols-[280px_280px_280px_280px_280px]">
           <SelectField theme={theme} label="Select Plant" value={selectedPlant.code} onChange={(value) => {
             setSelectedPlant(getPlantByCode(value));
             setSelectedLine("");
@@ -833,12 +796,6 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
             <option value="cell-1">Cell 1</option>
             <option value="cell-2">Cell 2</option>
           </SelectField>
-          <div className="flex items-end">
-            <button type="button" className={`flex h-[38px] w-full items-center justify-center gap-2 rounded-lg text-sm font-extrabold text-white transition ${isDark ? "bg-[#242222] hover:bg-[#343030]" : "bg-[#4b49ac] shadow-[0_10px_22px_rgba(75,73,172,0.24)] hover:bg-[#3f3d9b]"}`}>
-              <Save className="h-4 w-4" />
-              Save Configuration
-            </button>
-          </div>
         </div>
 
         {error && (
@@ -850,9 +807,9 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
         <section>
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className={`text-xs font-black uppercase tracking-[0.12em] ${isDark ? "text-cyan-400" : "text-[#4b49ac]"}`}>Live PLC Production</p>
+              <p className={`text-xs font-black uppercase tracking-[0.12em] ${isDark ? "text-cyan-400" : "text-[#1474b8]"}`}>Live Production</p>
               <h2 className={`mt-1 text-xl font-black ${isDark ? "text-white" : "text-slate-950"}`}>
-                Machine-wise Latest Cycle Data
+                Latest Cycle Data
               </h2>
             </div>
             <button

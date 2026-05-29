@@ -132,12 +132,12 @@ const REGISTER_GROUPS = [
     keys: [
       { name: "cooling_water_mov", unit: "L/min" },
       { name: "cooling_water_sta", unit: "L/min" },
-      { name: "furnace_metal_temp", unit: "C" },
-      { name: "fixed_die_temp_f1", unit: "C" },
-      { name: "fixed_die_temp_f2", unit: "C" },
-      { name: "moving_die_temp_m1", unit: "C" },
-      { name: "moving_die_temp_m2", unit: "C" },
-      { name: "slide_temp_s1", unit: "C" },
+      { name: "furnace_metal_temp", unit: "°C" },
+      { name: "fixed_die_temp_f1", unit: "°C" },
+      { name: "fixed_die_temp_f2", unit: "°C" },
+      { name: "moving_die_temp_m1", unit: "°C" },
+      { name: "moving_die_temp_m2", unit: "°C" },
+      { name: "slide_temp_s1", unit: "°C" },
     ],
   },
   {
@@ -472,6 +472,16 @@ function formatDuration(seconds) {
 
 const todayInput = () => new Date().toISOString().slice(0, 10);
 
+function getNumericShotNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function getReadingShotNumber(readings = {}) {
+  return getNumericShotNumber(readings.shot_number?.value);
+}
+
 function buildShotTimeFromRow(row = {}) {
   if (row.shot_time) return formatTimeOnly(row.shot_time);
   const parts = [row.shot_hour, row.shot_minute, row.shot_second].map((value) => pad2(value));
@@ -547,16 +557,20 @@ function getRowTimestamp(row = {}) {
 }
 
 function Spark({ data, color = "#22d3ee" }) {
-  if (!data || data.length < 2) return <div className="spark-empty" />;
+  if (!data) return null;
 
-  const min = Math.min(...data);
-  const max = Math.max(...data);
+  const values = data.map(Number).filter(Number.isFinite);
+  if (values.length === 0) return null;
+  if (values.length < 2) return <div className="spark-empty" />;
+
+  const min = Math.min(...values);
+  const max = Math.max(...values);
   const range = max - min || 1;
   const w = 76;
   const h = 28;
-  const pts = data
+  const pts = values
     .map((v, i) => {
-      const x = (i / (data.length - 1)) * w;
+      const x = (i / (values.length - 1)) * w;
       const y = h - ((v - min) / range) * h;
       return `${x},${y}`;
     })
@@ -588,6 +602,11 @@ function formatValue(value, fallback = "-") {
   }
 
   return value;
+}
+
+function hasReadableValue(value) {
+  if (value === null || value === undefined) return false;
+  return String(value).trim() !== "" && String(value).trim() !== "-";
 }
 
 function ValueCard({ name, label, unit, value, history, accentColor }) {
@@ -654,7 +673,6 @@ function MachineStatusCard({
 
   const detailItems = isLeakTest
     ? [
-        ["PLC", `${plcConfig.ip}:${plcConfig.port}`],
         ["Monitor", monitoringRunning ? "RUNNING" : "STOPPED"],
         ["Part QR", formatValue(partQrCode)],
         ["Result", formatValue(leakResult)],
@@ -664,10 +682,7 @@ function MachineStatusCard({
         ["Manual", formatValue(manualMode)],
       ]
     : [
-        ["PLC", `${plcConfig.ip}:${plcConfig.port}`],
         ["Monitor", monitoringRunning ? "RUNNING" : "STOPPED"],
-        ["Shot Number", formatValue(counter)],
-        ["OK Shot", formatValue(highShot)],
         ["E-Stop", formatValue(emergencyStop)],
         ["Hyd. Oil Low", formatValue(oilLevelLow)],
       ];
@@ -960,7 +975,7 @@ function PlcReportModal({ reading, readings, onClose }) {
 }
 
 function PLCDashboard() {
-  const [theme, setTheme] = useState("light");
+  const [theme] = useState("light");
   const [plcConnected, setPlcConnected] = useState(false);
   const [socketConnected, setSocketConnected] = useState(false);
   const [cycleStatus, setCycleStatus] = useState("idle");
@@ -972,21 +987,41 @@ function PLCDashboard() {
   const [cycleCount, setCycleCount] = useState(0);
   const [sparklines, setSparklines] = useState({});
   const [activeGroup, setActiveGroup] = useState(null);
-  const [viewMode, setViewMode] = useState("cards");
   const [machines, setMachines] = useState(DEFAULT_MACHINES);
   const [machineStatuses, setMachineStatuses] = useState({});
   const [monitoringRunning, setMonitoringRunning] = useState(true);
   const [plcConfig, setPlcConfig] = useState({ key: "ube-850t-2", ip: "192.168.117.201", port: 5002,kind: "ube" });
   const [draftConfig, setDraftConfig] = useState({ ip: "192.168.117.201", port: "5002" });
   const [configMessage, setConfigMessage] = useState("");
-  const [savingConfig, setSavingConfig] = useState(false);
   const [readingsByIp, setReadingsByIp] = useState({});
   const [historyByIp, setHistoryByIp] = useState({});
   const [sparkByIp, setSparkByIp] = useState({});
   const [metaByIp, setMetaByIp] = useState({});
   const socketRef = useRef(null);
   const selectedKeyRef = useRef(plcConfig.key || plcConfig.ip);
+  const selectedSnapshotRef = useRef({ shotNumber: null, observedAtMs: 0, source: "" });
   const disconnectTimerRef = useRef(null);
+
+  const rememberSelectedSnapshot = useCallback((readingsSnapshot = {}, { observedAt, source } = {}) => {
+    const shotNumber = getReadingShotNumber(readingsSnapshot);
+    if (shotNumber === null) return;
+    const observedAtMs = observedAt ? new Date(observedAt).getTime() : Date.now();
+    selectedSnapshotRef.current = {
+      shotNumber,
+      observedAtMs: Number.isNaN(observedAtMs) ? Date.now() : observedAtMs,
+      source: source || selectedSnapshotRef.current.source,
+    };
+  }, []);
+
+  const isOlderDbSnapshotForSelectedMachine = useCallback((row = {}) => {
+    const dbShotNumber = getNumericShotNumber(row.shot_number);
+    const current = selectedSnapshotRef.current;
+    if (dbShotNumber === null || current.shotNumber === null) return false;
+    if (dbShotNumber >= current.shotNumber) return false;
+
+    const liveAgeMs = Date.now() - (current.observedAtMs || 0);
+    return current.source === "live" && liveAgeMs < Math.max(PLC_LATEST_POLL_MS * 3, 10000);
+  }, []);
 
   useEffect(() => {
     selectedKeyRef.current = plcConfig.key || plcConfig.ip;
@@ -1056,6 +1091,7 @@ function PLCDashboard() {
         const cycleTime = row.cycle_time ?? null;
         const historyItem = { id: `db-${row.id || timestamp}`, timestamp: new Date(timestamp), cycleTime };
         setReadings(nextReadings);
+        rememberSelectedSnapshot(nextReadings, { observedAt: timestamp, source: "db" });
         setCycleHistory([historyItem]);
         setCycleCount(1);
         setLastTimestamp(new Date(timestamp));
@@ -1071,7 +1107,7 @@ function PLCDashboard() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [rememberSelectedSnapshot]);
 
   const pushSpark = useCallback((name, value) => {
     setSparklines(prev => {
@@ -1176,7 +1212,10 @@ function PLCDashboard() {
         const cycleTime = selectedRow.cycle_time ?? null;
         const historyItem = { id: `db-${selectedRow.id || timestamp}`, timestamp: new Date(timestamp), cycleTime };
 
+        if (isOlderDbSnapshotForSelectedMachine(selectedRow)) return;
+
         setReadings(nextReadings);
+        rememberSelectedSnapshot(nextReadings, { observedAt: timestamp, source: "db" });
         setLastTimestamp(new Date(timestamp));
         setPartName(selectedRow.part_qr_code || selectedRow.scan_data || selectedRow.part_name || "");
         setShotTime(buildShotTimeFromRow(selectedRow));
@@ -1205,7 +1244,7 @@ function PLCDashboard() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [plcConfig.ip, plcConfig.key, pushSpark]);
+  }, [isOlderDbSnapshotForSelectedMachine, plcConfig.ip, plcConfig.key, pushSpark, rememberSelectedSnapshot]);
 
   const loadMachineSnapshot = useCallback((machineOrKey) => {
     const lookupKeys = typeof machineOrKey === "object"
@@ -1340,6 +1379,7 @@ function PLCDashboard() {
       setPlcConfig({ key, ip, port, kind: config?.kind });
       setDraftConfig({ ip, port: String(port) });
       setReadings(r);
+      rememberSelectedSnapshot(r, { observedAt: observedTimestamp, source: "live" });
       if (!liveOnly && eventTimestamp) {
         setLastTimestamp(new Date(eventTimestamp));
       }
@@ -1386,6 +1426,7 @@ function PLCDashboard() {
       setDraftConfig({ ip, port: String(port) });
       setCycleStatus("complete");
       setReadings(r);
+      rememberSelectedSnapshot(r, { observedAt: eventTimestamp, source: "live" });
       setLastTimestamp(new Date(eventTimestamp));
       setPartName(eventPartName);
       setShotTime(nextShotTime || "");
@@ -1405,7 +1446,7 @@ function PLCDashboard() {
       }
       socket.disconnect();
     };
-  }, [normalizeConfig, pushSpark]);
+  }, [normalizeConfig, pushSpark, rememberSelectedSnapshot]);
 
   const st = STATUS_CFG[cycleStatus] || STATUS_CFG.idle;
   const shotNumber = readings.shot_number?.value ?? null;
@@ -1426,12 +1467,53 @@ function PLCDashboard() {
   const selectedMachineStatus = machineStatuses[selectedMachineKey] || machineStatuses[plcConfig.ip] || {};
   const selectedMachineOnline = Boolean(selectedMachineStatus.connected);
   const selectedPlcConnected = Boolean(selectedMachineStatus.connected || selectedMachineStatus.hasRecentData || readings.plc_ip?.value);
-  const themeLabel = theme === "dark" ? "Dark" : "White";
-  const availableGroups = REGISTER_GROUPS.filter((group) => group.kind === selectedMachineKind);
+  const availableGroups = REGISTER_GROUPS
+    .filter((group) => group.kind === selectedMachineKind)
+    .filter((group) => {
+      if (group.id !== "machine_bits") return true;
+      return group.keys.some(({ name }) => {
+        const value = readings[name]?.value;
+        if (!hasReadableValue(value)) return false;
+        if (name === "cycle_end" && Number(value) === 0) return false;
+        return true;
+      });
+    });
   const validActiveGroup = availableGroups.some((group) => group.id === activeGroup) ? activeGroup : null;
-  const displayGroups = validActiveGroup
+  const baseDisplayGroups = validActiveGroup
     ? availableGroups.filter(g => g.id === validActiveGroup)
     : availableGroups;
+  const displayGroups = baseDisplayGroups
+    .map((group) => (
+      group.id === "machine_bits"
+        ? {
+            ...group,
+            keys: group.keys.filter(({ name }) => {
+              const value = readings[name]?.value;
+              if (!hasReadableValue(value)) return false;
+              if (name === "cycle_end" && Number(value) === 0) return false;
+              return true;
+            }),
+          }
+        : group
+    ))
+    .filter((group) => group.keys.length > 0);
+  const compactCardHiddenFields = new Set([
+    "machine_name",
+    "plc_ip",
+    "shot_datetime",
+    "shot_year",
+    "shot_month",
+    "shot_day",
+    "shot_hour",
+    "shot_minute",
+    "shot_second",
+  ]);
+  const cardGroups = displayGroups
+    .map((group) => ({
+      ...group,
+      keys: group.keys.filter(({ name }) => !compactCardHiddenFields.has(name)),
+    }))
+    .filter((group) => group.keys.length > 0);
   const reportReading = {
     ...Object.fromEntries(Object.entries(readings).map(([name, item]) => [name, item?.value ?? null])),
     machine_name: readings.machine_name?.value || machineName,
@@ -1458,53 +1540,6 @@ function PLCDashboard() {
     setSparklines({});
   };
 
-  const updateDraftConfig = (key, value) => {
-    setDraftConfig(prev => ({ ...prev, [key]: value }));
-    setConfigMessage("");
-  };
-
-  const togglePlcProgram = () => {
-    const socket = socketRef.current;
-    if (!socket || !socketConnected) {
-      setConfigMessage("Server is not connected.");
-      return;
-    }
-
-    if (monitoringRunning) {
-      socket.emit("set_monitoring", { running: false }, (res) => {
-        if (res?.ok) {
-          setMonitoringRunning(false);
-          setConfigMessage("PLC monitoring stopped.");
-        }
-      });
-      return;
-    }
-
-    setSavingConfig(true);
-    setConfigMessage("Starting PLC monitoring...");
-    socket.emit("update_plc_config", {
-      key: plcConfig.key,
-      ip: draftConfig.ip.trim(),
-      port: Number(draftConfig.port),
-      kind: plcConfig.kind,
-    }, (res) => {
-      setSavingConfig(false);
-
-      if (!res?.ok) {
-        setConfigMessage(res?.error || "PLC config update failed.");
-        return;
-      }
-
-      setPlcConfig(res.config);
-      setDraftConfig({ ip: res.config.ip, port: String(res.config.port) });
-      resetDashboardData();
-      socket.emit("set_monitoring", { running: true }, (runRes) => {
-        setMonitoringRunning(Boolean(runRes?.running));
-      });
-      setConfigMessage("PLC monitoring started.");
-    });
-  };
-
   const selectMachine = (key) => {
     const machine = DEFAULT_MACHINES.find(item => getMachineKey(item) === key)
       || machines.find(item => getMachineKey(item) === key)
@@ -1519,15 +1554,6 @@ function PLCDashboard() {
     socketRef.current?.emit("update_plc_config", config);
   };
 
-  const setMonitoring = (running) => {
-    socketRef.current?.emit("set_monitoring", { running }, (res) => {
-      if (res?.ok) {
-        setMonitoringRunning(res.running);
-        setConfigMessage(res.running ? "PLC monitoring started." : "PLC monitoring stopped.");
-      }
-    });
-  };
-
   return (
     <>
       <style>{`
@@ -1538,20 +1564,20 @@ function PLCDashboard() {
 
         :root {
           --bg: #eef3ff;
-          --panel: #f8fbff;
-          --panel-2: #edf4ff;
+          --panel: #f9fbfe;
+          --panel-2: #eef4fb;
           --panel-3: #20224a;
-          --line: rgba(75, 73, 172, 0.16);
-          --line-strong: rgba(75, 73, 172, 0.3);
-          --text: #20224a;
-          --muted: #667092;
+          --line: rgba(28, 63, 104, 0.13);
+          --line-strong: rgba(28, 63, 104, 0.24);
+          --text: #102b46;
+          --muted: #5f7288;
           --faint: #8a98ad;
           --green: #22c55e;
           --red: #f3797e;
           --amber: #e17a00;
-          --cyan: #4b49ac;
-          --overview-card-height: 122px;
-          --mono: 'Inter', 'Consolas', monospace;
+          --cyan: #1474b8;
+          --overview-card-height: 112px;
+          --mono: 'Inter', system-ui, sans-serif;
           --sans: 'Inter', system-ui, sans-serif;
         }
 
@@ -1561,13 +1587,9 @@ function PLCDashboard() {
         }
 
         .dash {
-          min-height: 100vh;
-          background:
-            radial-gradient(circle at 16% 0%, rgba(152,189,255,0.36), transparent 28rem),
-            radial-gradient(circle at 88% 10%, rgba(121,120,233,0.15), transparent 24rem),
-            linear-gradient(180deg, #f7f9ff 0%, #eef3ff 54%, #e8efff 100%);
+          min-height: 0;
+          background: transparent;
           font-family: var(--sans);
-          padding: 18px 20px 34px;
         }
 
         .theme-dark {
@@ -1590,8 +1612,8 @@ function PLCDashboard() {
         }
 
         .shell {
-          width: min(1560px, 100%);
-          margin: 0 auto;
+          width: 100%;
+          margin: 0;
         }
 
         .header {
@@ -1599,7 +1621,7 @@ function PLCDashboard() {
           grid-template-columns: 1fr auto;
           gap: 16px;
           align-items: center;
-          padding: 16px 17px;
+          padding: 14px 16px;
           border: 1px solid var(--line-strong);
           border-radius: 14px;
           background: linear-gradient(135deg, #f8fbff 0%, #edf4ff 100%);
@@ -1646,26 +1668,20 @@ function PLCDashboard() {
           margin-top: 6px;
         }
 
-        .badges {
-          display: flex;
-          gap: 10px;
-          flex-wrap: wrap;
-          justify-content: flex-end;
-        }
-
         .header-controls {
           display: grid;
-          grid-template-columns: 1fr auto;
+          grid-template-columns: 1fr;
           gap: 10px 14px;
           align-items: center;
-          min-width: min(760px, 52vw);
+          min-width: min(520px, 42vw);
         }
 
         .plc-form {
           display: grid;
-          grid-template-columns: minmax(230px, 1.25fr) minmax(150px, 1fr) 90px 90px;
+          grid-template-columns: minmax(180px, 280px);
           gap: 8px;
           align-items: end;
+          justify-content: end;
         }
 
         .field {
@@ -1715,7 +1731,6 @@ function PLCDashboard() {
         }
 
         .apply-btn,
-        .theme-toggle,
         .run-btn {
           height: 36px;
           border-radius: 8px;
@@ -1732,7 +1747,6 @@ function PLCDashboard() {
         }
 
         .apply-btn:hover,
-        .theme-toggle:hover,
         .run-btn:hover {
           transform: translateY(-1px);
           border-color: rgba(75,73,172,0.38);
@@ -1756,51 +1770,6 @@ function PLCDashboard() {
           transform: none;
         }
 
-        .right-tools {
-          display: flex;
-          align-items: end;
-          justify-content: flex-end;
-          gap: 10px;
-        }
-
-        .theme-toggle {
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
-          background: #edf4ff;
-          color: var(--text);
-          white-space: nowrap;
-        }
-
-        .toggle-track {
-          width: 34px;
-          height: 18px;
-          border-radius: 999px;
-          background: #dce8ff;
-          border: 1px solid var(--line-strong);
-          padding: 2px;
-          display: inline-flex;
-          align-items: center;
-        }
-
-        .toggle-knob {
-          width: 12px;
-          height: 12px;
-          border-radius: 50%;
-          background: var(--cyan);
-          transition: transform 0.18s ease, background 0.18s ease;
-        }
-
-        .toggle-track.is-light {
-          background: #ffffff;
-          border-color: #ffffff;
-        }
-
-        .toggle-track.is-light .toggle-knob {
-          background: var(--cyan);
-          transform: translateX(14px);
-        }
-
         .config-line {
           grid-column: 1 / -1;
           color: #aab3c0;
@@ -1816,54 +1785,25 @@ function PLCDashboard() {
           color: var(--cyan);
         }
 
-        .badge {
-          min-width: 112px;
-          border: 1px solid rgba(255,255,255,0.22);
-          border-radius: 6px;
-          background: rgba(255,255,255,0.06);
-          padding: 9px 12px;
-          font-family: var(--mono);
-          font-size: 12px;
-          font-weight: 700;
-          color: var(--muted);
-          display: inline-flex;
-          justify-content: space-between;
-          align-items: center;
-          letter-spacing: 0.5px;
-        }
-
-        .badge::after {
-          content: '';
-          width: 8px;
-          height: 8px;
-          border-radius: 50%;
-          background: currentColor;
-          box-shadow: none;
-        }
-
-        .badge-green { color: var(--green); }
-        .badge-blue { color: var(--cyan); }
-        .badge-red { color: var(--red); }
-
         .overview {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
+          grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
           grid-auto-rows: minmax(var(--overview-card-height), auto);
           gap: 10px;
-          margin: 14px 0 10px;
+          margin: 10px 0;
         }
 
         .process-state {
           border: 1px solid var(--line-strong);
           border-radius: 10px;
-          background: linear-gradient(180deg, #f8fbff, #edf4ff);
-          padding: 12px 13px;
+          background: linear-gradient(180deg, #ffffff, #f2f6fb);
+          padding: 12px 14px;
           min-height: var(--overview-card-height);
           min-width: 0;
           display: flex;
           flex-direction: column;
           justify-content: space-between;
-          box-shadow: 0 10px 22px rgba(75,73,172,0.08);
+          box-shadow: 0 10px 22px rgba(19,75,143,0.06);
           overflow: hidden;
         }
 
@@ -1885,11 +1825,12 @@ function PLCDashboard() {
 
         .state-value {
           margin-top: 8px;
-          font-size: clamp(17px, 1.15vw, 21px);
-          font-weight: 800;
+          font-size: clamp(16px, 1.05vw, 19px);
+          font-weight: 600;
           font-family: var(--mono);
-          color: #111111;
+          color: var(--text);
           line-height: 1.12;
+          font-variant-numeric: tabular-nums;
           overflow-wrap: anywhere;
           word-break: break-word;
           display: -webkit-box;
@@ -1927,27 +1868,30 @@ function PLCDashboard() {
         }
 
         .status-complete .status-chip {
-          color: var(--green);
-          border-color: rgba(34,197,94,0.35);
-          background: rgba(34,197,94,0.09);
+          color: #16a34a;
+          border-color: rgba(34,197,94,0.46);
+          background: rgba(34,197,94,0.13);
         }
 
         .status-idle .status-chip {
-          color: var(--amber);
-          border-color: rgba(245,158,11,0.34);
-          background: rgba(245,158,11,0.08);
+          color: var(--red);
+          border-color: rgba(243,121,126,0.42);
+          background: rgba(243,121,126,0.1);
         }
 
         .metric {
           border: 1px solid var(--line-strong);
           border-radius: 10px;
-          background: linear-gradient(180deg, #f8fbff, #edf4ff);
-          padding: 12px 13px;
+          background: linear-gradient(180deg, #ffffff, #f2f6fb);
+          padding: 12px 14px;
           min-height: var(--overview-card-height);
           min-width: 0;
           position: relative;
           overflow: hidden;
-          box-shadow: 0 10px 22px rgba(75,73,172,0.08);
+          box-shadow: 0 10px 22px rgba(19,75,143,0.06);
+          display: flex;
+          flex-direction: column;
+          justify-content: space-between;
         }
 
         .metric::before {
@@ -1967,21 +1911,28 @@ function PLCDashboard() {
           color: var(--muted);
           font-family: var(--mono);
           font-size: 10px;
-          letter-spacing: 1.2px;
+          font-weight: 600;
+          letter-spacing: 0.12em;
           text-transform: uppercase;
         }
 
         .metric-value {
-          margin-top: 10px;
-          color: #111111;
+          margin-top: 12px;
+          color: var(--text);
           font-family: var(--mono);
-          font-size: clamp(19px, 1.45vw, 25px);
-          font-weight: 850;
-          line-height: 1.08;
-          white-space: nowrap;
+          font-size: clamp(17px, 1.15vw, 22px);
+          font-weight: 600;
+          line-height: 1.12;
+          font-variant-numeric: tabular-nums;
+          white-space: normal;
           overflow: hidden;
           text-overflow: ellipsis;
+          overflow-wrap: anywhere;
+          word-break: break-word;
           max-width: 100%;
+          display: -webkit-box;
+          -webkit-box-orient: vertical;
+          -webkit-line-clamp: 2;
         }
 
         .metric-unit {
@@ -1992,7 +1943,7 @@ function PLCDashboard() {
         }
 
         .metric-machine .metric-value {
-          font-size: clamp(15px, 1.05vw, 19px);
+          font-size: clamp(15px, 1vw, 18px);
           line-height: 1.15;
           overflow-wrap: anywhere;
           white-space: normal;
@@ -2003,12 +1954,8 @@ function PLCDashboard() {
         }
 
         .dashboard-content {
-          display: grid;
-          grid-template-columns: minmax(0, 1fr) 360px;
-          gap: 14px;
-          align-items: start;
           width: 100%;
-          margin-top: 8px;
+          margin-top: 6px;
         }
 
         .content-main {
@@ -2018,14 +1965,6 @@ function PLCDashboard() {
           background: linear-gradient(180deg, #f8fbff, #edf4ff);
           overflow: hidden;
           box-shadow: 0 14px 30px rgba(28,48,90,0.08);
-        }
-
-        .side-stack {
-          display: grid;
-          gap: 10px;
-          align-self: start;
-          position: sticky;
-          top: 12px;
         }
 
         .info-card {
@@ -2047,9 +1986,10 @@ function PLCDashboard() {
 
         .info-time {
           font-family: var(--mono);
-          font-size: 21px;
+          font-size: 20px;
           font-weight: 700;
-          color: #111111;
+          color: var(--text);
+          font-variant-numeric: tabular-nums;
         }
 
         .info-date {
@@ -2157,7 +2097,7 @@ function PLCDashboard() {
           color: var(--text);
           font-family: var(--mono);
           font-size: 17px;
-          font-weight: 800;
+          font-weight: 700;
           line-height: 1.15;
         }
 
@@ -2205,6 +2145,8 @@ function PLCDashboard() {
           margin-top: 4px;
           color: var(--text);
           font-size: 12px;
+          font-weight: 700;
+          font-variant-numeric: tabular-nums;
           overflow-wrap: anywhere;
         }
 
@@ -2251,27 +2193,6 @@ function PLCDashboard() {
           margin: 0;
         }
 
-        .table-layout {
-          width: 100%;
-        }
-
-        .view-toggle {
-          display: inline-grid;
-          grid-template-columns: 1fr 1fr;
-          border: 1px solid var(--line);
-          border-radius: 7px;
-          overflow: hidden;
-          background: var(--panel);
-          flex: 0 0 auto;
-        }
-
-        .view-actions {
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
-          flex: 0 0 auto;
-        }
-
         .report-btn {
           height: 34px;
           min-width: 86px;
@@ -2292,28 +2213,6 @@ function PLCDashboard() {
         .report-btn:disabled {
           cursor: not-allowed;
           opacity: 0.45;
-        }
-
-        .view-btn {
-          min-width: 76px;
-          height: 34px;
-          border: 0;
-          border-right: 1px solid var(--line);
-          background: transparent;
-          color: var(--muted);
-          cursor: pointer;
-          font-family: var(--mono);
-          font-size: 11px;
-          font-weight: 800;
-        }
-
-        .view-btn:last-child {
-          border-right: 0;
-        }
-
-        .view-btn.active {
-          background: #111111;
-          color: #ffffff;
         }
 
         .report-backdrop {
@@ -2595,7 +2494,8 @@ function PLCDashboard() {
         }
 
         .group-section {
-          margin-bottom: 20px;
+          margin: 14px 0 24px;
+          padding: 0 14px;
         }
 
         .group-header {
@@ -2640,8 +2540,8 @@ function PLCDashboard() {
 
         .cards-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(205px, 1fr));
-          gap: 9px;
+          grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+          gap: 12px;
         }
 
         .param-table-wrap {
@@ -2702,9 +2602,10 @@ function PLCDashboard() {
         }
 
         .table-value {
-          color: #111111;
-          font-size: 14px;
-          font-weight: 800;
+          color: var(--text);
+          font-size: 13px;
+          font-weight: 600;
+          font-variant-numeric: tabular-nums;
         }
 
         .table-unit {
@@ -2724,14 +2625,17 @@ function PLCDashboard() {
 
         .vcard {
           background:
-            linear-gradient(180deg, #f8fbff, #edf4ff);
-          border: 1px solid var(--line);
+            linear-gradient(180deg, #ffffff, #f3f7fb);
+          border: 1px solid var(--line-strong);
           border-left: 3px solid var(--accent);
           border-radius: 10px;
-          min-height: 70px;
-          padding: 8px 10px;
-          box-shadow: 0 8px 18px rgba(75,73,172,0.07);
+          min-height: 86px;
+          padding: 10px 12px;
+          box-shadow: 0 8px 18px rgba(19,75,143,0.055);
           transition: border-color 0.16s ease, transform 0.16s ease, background 0.16s ease;
+          display: flex;
+          flex-direction: column;
+          justify-content: space-between;
         }
 
         .vcard:hover {
@@ -2751,7 +2655,8 @@ function PLCDashboard() {
         .vcard-name {
           color: var(--muted);
           font-family: var(--mono);
-          font-size: 9px;
+          font-size: 10px;
+          font-weight: 600;
           letter-spacing: 0.08em;
           line-height: 1.25;
           min-width: 0;
@@ -2773,29 +2678,31 @@ function PLCDashboard() {
 
         .vcard-bottom {
           display: flex;
-          align-items: flex-end;
+          align-items: end;
           justify-content: space-between;
-          gap: 8px;
+          gap: 10px;
         }
 
         .vcard-readout {
+          flex: 1 1 auto;
           min-width: 0;
-          white-space: normal;
+          white-space: nowrap;
           overflow: hidden;
-          overflow-wrap: anywhere;
         }
 
         .vcard-val {
-          color: #111111;
+          color: var(--text);
           font-family: var(--mono);
-          font-size: clamp(17px, 1.2vw, 20px);
-          font-weight: 850;
-          line-height: 1.08;
-          display: block;
+          font-size: clamp(14px, 0.95vw, 18px);
+          font-weight: 600;
+          line-height: 1.16;
+          font-variant-numeric: tabular-nums;
+          display: inline-block;
           max-width: 100%;
           overflow: hidden;
           text-overflow: ellipsis;
-          overflow-wrap: anywhere;
+          vertical-align: bottom;
+          white-space: nowrap;
         }
 
         .vcard-unit {
@@ -2808,13 +2715,13 @@ function PLCDashboard() {
 
         .spark {
           flex: 0 0 auto;
-          opacity: 0.88;
+          opacity: 0.72;
         }
 
         .spark-empty {
-          width: 76px;
-          height: 28px;
-          border-bottom: 1px solid rgba(17,17,17,0.16);
+          width: 54px;
+          height: 24px;
+          border-bottom: 1px solid rgba(16,43,70,0.16);
           flex: 0 0 auto;
         }
 
@@ -2869,8 +2776,7 @@ function PLCDashboard() {
         }
 
         .theme-dark .field input,
-        .theme-dark .field select,
-        .theme-dark .theme-toggle {
+        .theme-dark .field select {
           background: rgba(11,17,27,0.92);
           border-color: rgba(148,163,184,0.22);
           color: #dbe7f6;
@@ -2879,16 +2785,6 @@ function PLCDashboard() {
         .theme-dark .field select option {
           background: #101722;
           color: #dbe7f6;
-        }
-
-        .theme-dark .toggle-track {
-          background: rgba(34,211,238,0.12);
-          border-color: rgba(34,211,238,0.3);
-        }
-
-        .theme-dark .badge {
-          background: rgba(10,15,23,0.76);
-          border-color: rgba(148,163,184,0.18);
         }
 
         .theme-dark .config-line {
@@ -2937,10 +2833,6 @@ function PLCDashboard() {
           background: rgba(10,15,23,0.72);
         }
 
-        .theme-dark .view-btn.active {
-          background: rgba(20,29,42,0.98);
-        }
-
         .theme-dark .tab {
           background: rgba(10,15,23,0.8);
         }
@@ -2974,8 +2866,6 @@ function PLCDashboard() {
         }
 
         @media (max-width: 720px) {
-          .dash { padding: 14px 12px 36px; }
-
           .header {
             grid-template-columns: 1fr;
           }
@@ -2990,27 +2880,8 @@ function PLCDashboard() {
           }
 
           .field:first-child,
-          .apply-btn,
           .run-btn {
             grid-column: 1 / -1;
-          }
-
-          .right-tools {
-            align-items: stretch;
-            flex-wrap: wrap;
-          }
-
-          .theme-toggle {
-            flex: 1 1 130px;
-            justify-content: center;
-          }
-
-          .badges {
-            justify-content: stretch;
-          }
-
-          .badge {
-            flex: 1 1 140px;
           }
 
           .overview,
@@ -3019,16 +2890,6 @@ function PLCDashboard() {
           }
 
           .view-bar {
-            align-items: stretch;
-            flex-direction: column;
-          }
-
-          .view-toggle {
-            width: 100%;
-          }
-
-          .view-actions {
-            width: 100%;
             align-items: stretch;
             flex-direction: column;
           }
@@ -3066,7 +2927,8 @@ function PLCDashboard() {
           }
 
           .cards-grid {
-            grid-template-columns: repeat(auto-fill, minmax(156px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
           }
         }
       `}</style>
@@ -3075,13 +2937,13 @@ function PLCDashboard() {
         <div className="shell">
           <header className="header">
             <div>
-              <div className="plant-tag">Live Production Dashboard</div>
+              <div className="plant-tag">Production Monitor</div>
               <div className="header-title">
                 <span className={`status-dot ${socketConnected ? "" : "off"}`} />
-                PLC MONITOR
+                {machineName} Live Production
               </div>
               <div className="header-sub">
-                Mitsubishi MC Protocol | Type3E Binary | 1s Polling
+                Real-time machine parameters and latest cycle status
               </div>
             </div>
 
@@ -3101,55 +2963,10 @@ function PLCDashboard() {
                     })}
                   </select>
                 </label>
-                <label className="field">
-                  <span>PLC IP</span>
-                  <input
-                    value={draftConfig.ip}
-                    onChange={(e) => updateDraftConfig("ip", e.target.value)}
-                    placeholder="192.168.117.201"
-                  />
-                </label>
-                <label className="field field-port">
-                  <span>Port</span>
-                  <input
-                    value={draftConfig.port}
-                    onChange={(e) => updateDraftConfig("port", e.target.value)}
-                    placeholder="5002"
-                    inputMode="numeric"
-                  />
-                </label>
-                <button
-                  className={`run-btn ${monitoringRunning ? "is-running" : ""}`}
-                  type="button"
-                  onClick={togglePlcProgram}
-                  disabled={savingConfig}
-                >
-                  {savingConfig ? "..." : monitoringRunning ? "STOP" : "START"}
-                </button>
               </div>
 
-              <div className="right-tools">
-                <button
-                  className="theme-toggle"
-                  onClick={() => setTheme(prev => prev === "dark" ? "light" : "dark")}
-                  aria-label="Toggle dashboard theme"
-                >
-                  <span className={`toggle-track ${theme === "light" ? "is-light" : ""}`}>
-                    <span className="toggle-knob" />
-                  </span>
-                  {themeLabel}
-                </button>
-                <div className="badges">
-                  <span className={`badge ${socketConnected ? "badge-green" : "badge-red"}`}>
-                    SERVER
-                  </span>
-                  <span className={`badge ${selectedPlcConnected ? "badge-blue" : "badge-red"}`}>
-                    PLC
-                  </span>
-                </div>
-              </div>
               <div className="config-line">
-                Target: {plcConfig.ip}:{plcConfig.port} | {machineName}
+                Last update: {lastTimestamp ? lastTimestamp.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) : "Waiting for cycle"}
                 {selectedMachineStatus.error && <span>{selectedMachineStatus.error}</span>}
                 {configMessage && <span>{configMessage}</span>}
               </div>
@@ -3166,11 +2983,10 @@ function PLCDashboard() {
                 {selectedMachineOnline ? "ONLINE" : socketConnected ? "SERVER READY" : "OFFLINE"}
               </div>
               <div className="state-sub">
-                {machineName} | {plcConfig.ip}:{plcConfig.port} | {monitoringRunning ? "RUNNING" : "STOPPED"}
+                {machineName} | {monitoringRunning ? "RUNNING" : "STOPPED"}
               </div>
             </div>
 
-            <MetricTile label="Machine" value={machineName} tone="slate" />
             <MetricTile label={isLeakTestMachine ? "Part QR Code" : "Part Name"} value={partName || "-"} tone="cyan" />
             <MetricTile
               label={isLeakTestMachine ? "Result" : "Shot Number"}
@@ -3228,23 +3044,6 @@ function PLCDashboard() {
                     </button>
                   ))}
                 </div>
-
-                <div className="view-actions">
-                  <div className="view-toggle" aria-label="Change parameter view">
-                    <button
-                      className={`view-btn ${viewMode === "cards" ? "active" : ""}`}
-                      onClick={() => setViewMode("cards")}
-                    >
-                      CARDS
-                    </button>
-                    <button
-                      className={`view-btn ${viewMode === "table" ? "active" : ""}`}
-                      onClick={() => setViewMode("table")}
-                    >
-                      TABLE
-                    </button>
-                  </div>
-                </div>
               </div>
 
               {Object.keys(readings).length === 0 && (
@@ -3258,13 +3057,7 @@ function PLCDashboard() {
                 </div>
               )}
 
-              {Object.keys(readings).length > 0 && viewMode === "table" && (
-                <div className="table-layout">
-                  <ParameterTable groups={displayGroups} readings={readings} />
-                </div>
-              )}
-
-              {Object.keys(readings).length > 0 && viewMode === "cards" && displayGroups.map(group => (
+              {Object.keys(readings).length > 0 && cardGroups.map(group => (
                   <section
                     key={group.id}
                     className="group-section"
@@ -3296,60 +3089,8 @@ function PLCDashboard() {
                   </section>
                 ))}
             </div>
-
-            <aside className="side-stack">
-              <MachineStatusCard
-                machineName={machineName}
-                machineKind={selectedMachineKind}
-                plcConfig={plcConfig}
-                socketConnected={socketConnected}
-                monitoringRunning={monitoringRunning}
-                selectedMachineStatus={selectedMachineStatus}
-                readings={readings}
-                lastTimestamp={lastTimestamp}
-              />
-
-              <div className="info-card">
-                <div className="info-card-title">Last Cycle Detail</div>
-                {lastTimestamp ? (
-                  <>
-                    <div className="info-time">{lastTimestamp.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}</div>
-                    <div className="info-date">{formatDateOnly(lastTimestamp)}</div>
-                    <div className="info-ct">
-                      {isLeakTestMachine ? "Result" : "Shot"} {formatValue(isLeakTestMachine ? readings.result?.value ?? null : shotNumber)} | CT {formatValue(cycleTime)} sec
-                    </div>
-                    {partName && (
-                      <div className="info-ct">
-                        {isLeakTestMachine ? "Part QR" : "Part"} {partName}
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div className="info-none">No cycle completed yet</div>
-                )}
-              </div>
-
-              <div className="info-card history-card">
-                <div className="info-card-title">Recent History</div>
-                {cycleHistory.length === 0 ? (
-                  <div className="info-none">No history yet</div>
-                ) : (
-                  <div className="history-scroll">
-                    {cycleHistory.map((h, i) => (
-                      <div key={h.id} className="hist-row">
-                        <span className="hist-time">{h.timestamp.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}</span>
-                        <span className={`hist-ct ${i > 0 ? "old" : ""}`}>{h.cycleTime}s</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </aside>
           </section>
 
-          <footer className="footer">
-            {machineName} | PLC: {plcConfig.ip}:{plcConfig.port} | SERVER: {SOCKET_URL} | POLL: 1s
-          </footer>
         </div>
       </div>
     </>
@@ -3358,7 +3099,7 @@ function PLCDashboard() {
 
 export default function PlcMonitorPage({ onLogout, currentUser }) {
   return (
-    <AppLayout onLogout={onLogout} currentUser={currentUser}>
+    <AppLayout onLogout={onLogout} currentUser={currentUser} hideFooter>
       <PLCDashboard />
     </AppLayout>
   );

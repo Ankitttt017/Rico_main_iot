@@ -3,7 +3,7 @@ import Navbar from "./Navbar";
 import Sidebar from "./Sidebar";
 import { useSidebar } from "../../context/SidebarContext";
 
-const AppLayout = ({ onLogout, currentUser, children }) => {
+const AppLayout = ({ onLogout, currentUser, children, hideFooter = false }) => {
   const { collapsed } = useSidebar();
 
   return (
@@ -16,9 +16,11 @@ const AppLayout = ({ onLogout, currentUser, children }) => {
         }`}
       >
         <div className="flex-1 p-4 sm:p-6">{children}</div>
-        <footer className="border-t border-[#cfdded]/80 bg-white/75 px-4 py-3 text-center text-xs font-medium text-slate-500 backdrop-blur sm:px-6">
-          Rico Auto Industries Limited - IoT Master Data
-        </footer>
+        {!hideFooter && (
+          <footer className="border-t border-[#cfdded]/80 bg-white/75 px-4 py-3 text-center text-xs font-medium text-slate-500 backdrop-blur sm:px-6">
+            Rico Auto Industries Limited - IoT Master Data
+          </footer>
+        )}
       </main>
     </div>
   );

@@ -182,22 +182,27 @@ const Sidebar = () => {
         <div
           className={
             "flex h-[78px] items-center border-b border-white/10 " +
-            (collapsed ? "justify-center px-3" : "justify-between px-4")
+            (collapsed ? "justify-center px-3" : "justify-between gap-3 px-4")
           }
         >
           {!collapsed && (
-            <div className="flex h-14 w-[200px] items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-white px-5 shadow-lg shadow-black/10">
-              <BrandLogo compact />
+            <div className="flex h-14 min-w-0 flex-1 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-white px-4 shadow-lg shadow-black/10">
+              <BrandLogo wordmark />
             </div>
           )}
           <button
             type="button"
             title={collapsed ? "Expand" : "Collapse"}
             onClick={() => setCollapsed(!collapsed)}
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#9ec7ec] transition-colors hover:bg-white/10 hover:text-white"
           >
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2.2}
+                d={collapsed ? "M9 5l7 7-7 7" : "M15 19l-7-7 7-7"}
+              />
             </svg>
           </button>
         </div>

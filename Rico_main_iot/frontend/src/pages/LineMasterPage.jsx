@@ -776,14 +776,25 @@ const LineMasterPage = ({ onLogout, currentUser }) => {
   const loadLines = useCallback(() => {
     setLoading(true);
     setError("");
-    getLines({
+    const params = {
       plant: selectedPlant.code,
       division: divisionFilter || undefined,
       status: statusFilter || undefined,
       protocol: protocolFilter || undefined,
-    })
+      _: Date.now(),
+    };
+    const request = () => getLines(params);
+
+    request()
+      .catch((err) => {
+        console.warn("Line load failed, retrying once:", err?.message || err);
+        return new Promise((resolve) => setTimeout(resolve, 600)).then(request);
+      })
       .then((res) => setLines(Array.isArray(res.data?.data) ? res.data.data : []))
-      .catch(() => setError("Unable to load lines. Please check backend connection."))
+      .catch((err) => {
+        console.error("Unable to load lines:", err);
+        setError("Unable to load lines. Please check backend connection.");
+      })
       .finally(() => setLoading(false));
   }, [divisionFilter, protocolFilter, selectedPlant.code, statusFilter]);
 
@@ -1020,7 +1031,7 @@ const LineMasterPage = ({ onLogout, currentUser }) => {
           <p className="mt-1 text-sm">Use the Add Line button at the top-right to create a new line.</p>
         </div>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+          <div className="auto-fit-wide-cards">
           {pagedLines.map((line) => (
             <LineCard key={line.line_id} line={line} onEdit={openWorkspace} onDelete={confirmDeleteLine} />
           ))}

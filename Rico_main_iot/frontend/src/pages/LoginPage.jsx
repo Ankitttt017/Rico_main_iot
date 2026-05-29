@@ -31,22 +31,22 @@ const LoginPage = ({ onLogin }) => {
   };
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#edf4fb] px-4 py-8">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#eaf2fa] px-4 py-8">
 
 
 
       {/* ── Gradient overlay on top of image ── */}
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_16%_18%,rgba(19,75,143,0.18),transparent_28rem),radial-gradient(circle_at_86%_16%,rgba(0,124,186,0.14),transparent_24rem),linear-gradient(135deg,#f0f6fd_0%,#edf4fb_48%,#e7eff8_100%)]" />
+      <div className="absolute inset-0 bg-[linear-gradient(135deg,#f6f9fd_0%,#eaf2fa_48%,#dcebf6_100%)]" />
+      <div className="absolute inset-0 opacity-[0.32] [background-image:linear-gradient(rgba(19,75,143,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(19,75,143,0.08)_1px,transparent_1px)] [background-size:48px_48px]" />
 
       {/* ── Decorative blobs ── */}
-      <div className="pointer-events-none absolute -left-24 bottom-[-180px] h-[420px] w-[420px] rounded-full bg-[#134b8f]/10 blur-3xl" />
-      <div className="pointer-events-none absolute -right-20 top-[-150px] h-[360px] w-[360px] rounded-full bg-[#007cba]/10 blur-3xl" />
+      
 
-      <div className="relative w-full max-w-5xl overflow-hidden rounded-2xl bg-white/96 shadow-[0_28px_80px_rgba(15,36,56,0.20)] ring-1 ring-[#c9d8ea] backdrop-blur lg:grid lg:grid-cols-[1.04fr_0.96fr]">
+      <div className="relative w-full max-w-[920px] overflow-hidden rounded-xl bg-white/95 shadow-[0_22px_64px_rgba(15,36,56,0.16)] ring-1 ring-[#c9d8ea] backdrop-blur lg:grid lg:grid-cols-[0.98fr_1.02fr]">
 
         {/* ── Left Panel ── */}
-        <section className="relative hidden min-h-[620px] overflow-hidden bg-[#092641] px-10 py-12 text-white lg:flex lg:flex-col lg:justify-between">
-          <div className="absolute inset-0 bg-[linear-gradient(145deg,_rgba(0,124,186,0.72)_0%,_rgba(19,75,143,0.92)_42%,_rgba(8,31,53,0.98)_100%)]" />
+        <section className="relative hidden min-h-[540px] overflow-hidden bg-[#092641] px-8 py-9 text-white lg:flex lg:flex-col lg:justify-between">
+          <div className="absolute inset-0 bg-[linear-gradient(150deg,_#09699a_0%,_#134b8f_44%,_#082641_100%)]" />
 
 
 
@@ -56,56 +56,57 @@ const LoginPage = ({ onLogin }) => {
             aria-hidden="true"
             className="pointer-events-none absolute -right-24 top-20 w-[520px] select-none opacity-[0.08] mix-blend-screen"
           /> */}
-          <div className="absolute inset-x-0 bottom-0 h-56 bg-[linear-gradient(0deg,_rgba(1,16,31,0.42),_transparent)]" />
-          <div className="absolute left-10 right-10 top-10 h-px bg-white/15" />
+          <div className="absolute inset-x-0 bottom-0 h-44 bg-[linear-gradient(0deg,_rgba(1,16,31,0.36),_transparent)]" />
+          <div className="absolute left-8 right-8 top-8 h-px bg-white/15" />
 
           <div className="relative">
-            <div className="inline-flex rounded-xl bg-white p-4 shadow-xl shadow-black/10 ring-1 ring-white/50">
-              <BrandLogo className="justify-center" />
+            <div className="inline-flex h-20 w-28 items-center justify-center rounded-lg bg-white shadow-xl shadow-black/10 ring-1 ring-white/60">
+              <div className="scale-[0.72]">
+                <BrandLogo wordmark className="justify-center" />
+              </div>
             </div>
-            <div className="mt-12 max-w-md">
-              <p className="text-sm font-semibold uppercase tracking-[0.22em] text-[#bfe8ff]">
-                {t("companyName")}
-              </p>
-              <h1 className="mt-4 text-4xl font-bold leading-tight text-white">
+            <div className="mt-10 max-w-sm">
+              <h1 className="text-[34px] font-bold leading-tight text-white">
                 {t("IOT DEVICE MANAGEMENT")}
               </h1>
-              <p className="mt-5 text-base leading-7 text-white/78">
-                Secure access for part data, machine profiles, and production-ready master records.
+              <p className="mt-5 text-[15px] font-medium leading-7 text-white/78">
+                Secure access for master data, PLC monitoring, traceability, and production reports.
               </p>
             </div>
           </div>
 
-          <div className="relative grid grid-cols-3 gap-3 border-t border-white/15 pt-6 text-sm text-white/75">
+          <div className="relative grid grid-cols-3 gap-4 border-t border-white/15 pt-5 text-sm text-white/72">
             <div>
-              <div className="text-2xl font-bold text-white">24/7</div>
-              <div>Operations</div>
+              <div className="text-base font-bold text-white">Master</div>
+              <div className="mt-1 leading-5">Part data</div>
             </div>
             <div>
-              <div className="text-2xl font-bold text-white">ISO</div>
-              <div>Ready data</div>
+              <div className="text-base font-bold text-white">PLC</div>
+              <div className="mt-1 leading-5">Live data</div>
             </div>
             <div>
-              <div className="text-2xl font-bold text-white">RICO</div>
-              <div>Industrial system</div>
+              <div className="text-base font-bold text-white">Reports</div>
+              <div className="mt-1 leading-5">Records</div>
             </div>
           </div>
         </section>
 
         {/* ── Right Panel (Login Form) ── */}
-        <section className="px-6 py-8 sm:px-10 lg:px-12 lg:py-12">
+        <section className="flex min-h-[540px] flex-col px-6 py-8 sm:px-10 lg:px-12 lg:py-10">
           <div className="mb-8 flex justify-center lg:hidden">
-            <div className="rounded-xl bg-white px-5 py-4 shadow-lg ring-1 ring-slate-200">
-              <BrandLogo className="justify-center" />
+            <div className="flex h-20 w-28 items-center justify-center rounded-xl bg-white shadow-lg ring-1 ring-slate-200">
+              <div className="scale-[0.72]">
+                <BrandLogo wordmark className="justify-center" />
+              </div>
             </div>
           </div>
 
-          <div className="mx-auto max-w-md">
-            <div className="mb-8">
-              <p className="mb-3 text-sm font-semibold uppercase tracking-[0.16em] text-[#007cba]">
+          <div className="mx-auto w-full max-w-[340px] pt-1 lg:pt-5">
+            <div className="mb-7">
+              <p className="mb-3 text-xs font-bold uppercase tracking-[0.2em] text-[#007cba]">
                 Secure sign in
               </p>
-              <h2 className="text-3xl font-bold text-[#092641]">{t("welcomeBack")}</h2>
+              <h2 className="text-[28px] font-bold leading-tight text-[#092641]">{t("welcomeBack")}</h2>
               <p className="mt-2 text-sm leading-6 text-slate-500">{t("signInContinue")}</p>
             </div>
 
@@ -196,7 +197,7 @@ const LoginPage = ({ onLogin }) => {
               </button>
             </form>
 
-            <p className="mt-8 text-center text-xs text-slate-400">
+            <p className="mt-7 text-center text-xs font-medium text-[#8aa0b8]">
               (c) 2026 {t("companyName")}. {t("allRightsReserved")}
             </p>
           </div>

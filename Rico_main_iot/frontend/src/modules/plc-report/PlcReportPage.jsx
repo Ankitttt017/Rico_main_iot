@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import AppLayout from "../../components/common/AppLayout";
 import ricoLogo from "../../assets/rico-logo.png";
 import {
+  getLineMachines,
+  getLines,
   getPlcLatestReadings,
   getPlcReadingHistory,
 } from "../../services/api";
@@ -12,6 +14,8 @@ const DEFAULT_MACHINE = {
   plc_ip: "192.168.117.201",
   plc_port: 5002,
 };
+
+const REPORT_AUTO_REFRESH_MS = Number(import.meta.env.VITE_PLC_REPORT_REFRESH_MS || 5000);
 
 const HIDDEN_COLUMNS = new Set([
   "recorded_at",
@@ -369,8 +373,8 @@ function formatValue(value, key) {
   return String(value);
 }
 
-function formatReportCell(row, key, rowIndex = 0) {
-  if (key === SERIAL_COLUMN) return rowIndex + 1;
+function formatReportCell(row, key, rowIndex = 0, rowCount = 0) {
+  if (key === SERIAL_COLUMN) return Math.max(1, rowCount - rowIndex);
   if (key === SHIFT_COLUMN) return getRowShift(row);
   return formatValue(row[key], key);
 }
@@ -396,11 +400,23 @@ function downloadHtmlFile(filename, html) {
 }
 
 function getMachineId(machine) {
-  return machine?.machine_key || machine?.plc_ip || DEFAULT_MACHINE.machine_key;
+  return machine?.machine_key || machine?.plc_ip || machine?.ip_address || machine?.id || DEFAULT_MACHINE.machine_key;
 }
 
 function getMachineReportIp(machine) {
-  return machine?.plc_ip || machine?.ip || machine?.machine_key || DEFAULT_MACHINE.plc_ip;
+  return machine?.plc_ip || machine?.ip_address || machine?.ip || machine?.machine_key || DEFAULT_MACHINE.plc_ip;
+}
+
+function getMachineLabel(machine) {
+  return machine?.machine_name || machine?.name || machine?.plc_ip || machine?.ip_address || getMachineId(machine);
+}
+
+function getLineId(line) {
+  return line?.line_id ? String(line.line_id) : "";
+}
+
+function getLineLabel(line) {
+  return line?.line_name || line?.line_code || `Line ${getLineId(line)}`;
 }
 
 function getNumericId(row = {}) {
@@ -429,10 +445,12 @@ function getRowSortTime(row = {}) {
 
 function sortRowsLatestFirst(nextRows) {
   return [...nextRows].sort((a, b) => {
+    const timeDiff = getRowSortTime(b) - getRowSortTime(a);
+    if (timeDiff !== 0) return timeDiff;
     const aId = getNumericId(a);
     const bId = getNumericId(b);
     if (aId !== null && bId !== null && aId !== bId) return bId - aId;
-    return getRowSortTime(b) - getRowSortTime(a);
+    return 0;
   });
 }
 
@@ -487,26 +505,53 @@ function KpiCard({ title, value, tone }) {
 
 export default function PlcReportPage({ onLogout, currentUser }) {
   const [machines, setMachines] = useState([DEFAULT_MACHINE]);
+  const [lines, setLines] = useState([]);
+  const [machinesByLine, setMachinesByLine] = useState({});
+  const [selectedLineId, setSelectedLineId] = useState("all");
   const [selectedMachineId, setSelectedMachineId] = useState(getMachineId(DEFAULT_MACHINE));
+  const [draftLineId, setDraftLineId] = useState("all");
+  const [draftMachineId, setDraftMachineId] = useState(getMachineId(DEFAULT_MACHINE));
   const [fromDate, setFromDate] = useState(todayInput());
   const [toDate, setToDate] = useState(todayInput());
   const [activeQuickFilter, setActiveQuickFilter] = useState("today");
   const [shiftFilter, setShiftFilter] = useState("all");
+  const [draftFromDate, setDraftFromDate] = useState(fromDate);
+  const [draftToDate, setDraftToDate] = useState(toDate);
+  const [draftQuickFilter, setDraftQuickFilter] = useState(activeQuickFilter);
+  const [draftShiftFilter, setDraftShiftFilter] = useState(shiftFilter);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const tableScrollRef = useRef(null);
 
   useEffect(() => {
     let active = true;
-    getPlcLatestReadings()
-      .then((response) => {
+    Promise.allSettled([
+      getPlcLatestReadings(),
+      getLines(),
+    ])
+      .then(async ([latestResult, linesResult]) => {
         if (!active) return;
-        const next = Array.isArray(response.data?.data) && response.data.data.length
-          ? response.data.data
+        const latestResponse = latestResult.status === "fulfilled" ? latestResult.value : null;
+        const next = Array.isArray(latestResponse?.data?.data) && latestResponse.data.data.length
+          ? latestResponse.data.data
           : [DEFAULT_MACHINE];
         setMachines(next);
-        setSelectedMachineId((current) => current || getMachineId(next[0]));
+        const lineRows = linesResult.status === "fulfilled" && Array.isArray(linesResult.value.data?.data)
+          ? linesResult.value.data.data
+          : [];
+        setLines(lineRows);
+        const machineEntries = await Promise.all(lineRows.map(async (line) => {
+          try {
+            const machineResponse = await getLineMachines(line.line_id);
+            return [getLineId(line), Array.isArray(machineResponse.data?.data) ? machineResponse.data.data : []];
+          } catch {
+            return [getLineId(line), []];
+          }
+        }));
+        if (!active) return;
+        setMachinesByLine(Object.fromEntries(machineEntries));
       })
       .catch(() => {
         if (active) setMachines([DEFAULT_MACHINE]);
@@ -514,30 +559,106 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     return () => { active = false; };
   }, []);
 
+  const allReportMachines = useMemo(() => {
+    const byId = new Map();
+    machines.forEach((machine) => {
+      byId.set(String(getMachineId(machine)), machine);
+    });
+    Object.values(machinesByLine).flat().forEach((machine) => {
+      const ip = machine.ip_address || machine.plc_ip || machine.ip;
+      if (!ip) return;
+      const id = String(getMachineId({ ...machine, machine_key: machine.machine_key || ip, plc_ip: ip }));
+      if (!byId.has(id)) {
+        byId.set(id, {
+          machine_key: machine.machine_key || ip,
+          machine_name: machine.machine_name || machine.name || ip,
+          plc_ip: ip,
+          plc_port: machine.port || machine.plc_port || 5002,
+          line_id: machine.line_id,
+        });
+      }
+    });
+    return Array.from(byId.values());
+  }, [machines, machinesByLine]);
+
+  const getMachinesForLine = useCallback((lineId) => {
+    if (!lineId || lineId === "all") return allReportMachines;
+    const lineMachines = machinesByLine[lineId] || [];
+    const lineIps = new Set(lineMachines.map((machine) => String(machine.ip_address || machine.plc_ip || machine.ip || "").trim()).filter(Boolean));
+    const matched = allReportMachines.filter((machine) => lineIps.has(String(getMachineReportIp(machine) || "").trim()));
+    if (matched.length) return matched;
+    return lineMachines
+      .map((machine) => {
+        const ip = machine.ip_address || machine.plc_ip || machine.ip;
+        if (!ip) return null;
+        return {
+          machine_key: machine.machine_key || ip,
+          machine_name: machine.machine_name || machine.name || ip,
+          plc_ip: ip,
+          plc_port: machine.port || machine.plc_port || 5002,
+          line_id: machine.line_id || lineId,
+        };
+      })
+      .filter(Boolean);
+  }, [allReportMachines, machinesByLine]);
+
+  const activeMachineOptions = useMemo(
+    () => getMachinesForLine(selectedLineId),
+    [getMachinesForLine, selectedLineId]
+  );
+
+  const draftMachineOptions = useMemo(
+    () => getMachinesForLine(draftLineId),
+    [draftLineId, getMachinesForLine]
+  );
+
+  useEffect(() => {
+    if (!activeMachineOptions.length) return;
+    if (activeMachineOptions.some((machine) => String(getMachineId(machine)) === String(selectedMachineId))) return;
+    const nextId = getMachineId(activeMachineOptions[0]);
+    setSelectedMachineId(nextId);
+    setDraftMachineId(nextId);
+  }, [activeMachineOptions, selectedMachineId]);
+
+  useEffect(() => {
+    if (!draftMachineOptions.length) return;
+    if (draftMachineOptions.some((machine) => String(getMachineId(machine)) === String(draftMachineId))) return;
+    setDraftMachineId(getMachineId(draftMachineOptions[0]));
+  }, [draftMachineId, draftMachineOptions]);
+
   const selectedMachine = useMemo(
-    () => machines.find((machine) => getMachineId(machine) === selectedMachineId) || machines[0] || DEFAULT_MACHINE,
-    [machines, selectedMachineId]
+    () => activeMachineOptions.find((machine) => getMachineId(machine) === selectedMachineId) || activeMachineOptions[0] || DEFAULT_MACHINE,
+    [activeMachineOptions, selectedMachineId]
   );
 
   const applyQuickDateFilter = useCallback((key) => {
     const range = getQuickDateRange(key);
-    setActiveQuickFilter(key);
-    setFromDate(range.from);
-    setToDate(range.to);
+    setDraftQuickFilter(key);
+    setDraftFromDate(range.from);
+    setDraftToDate(range.to);
   }, []);
 
   const handleFromDateChange = useCallback((event) => {
-    setActiveQuickFilter("custom");
-    setFromDate(event.target.value);
+    setDraftQuickFilter("custom");
+    setDraftFromDate(event.target.value);
   }, []);
 
   const handleToDateChange = useCallback((event) => {
-    setActiveQuickFilter("custom");
-    setToDate(event.target.value);
+    setDraftQuickFilter("custom");
+    setDraftToDate(event.target.value);
   }, []);
 
-  const loadReport = useCallback(async () => {
-    setLoading(true);
+  const applyReportFilters = useCallback(() => {
+    setSelectedLineId(draftLineId);
+    setSelectedMachineId(draftMachineId);
+    setActiveQuickFilter(draftQuickFilter);
+    setFromDate(draftFromDate);
+    setToDate(draftToDate);
+    setShiftFilter(draftShiftFilter);
+  }, [draftFromDate, draftLineId, draftMachineId, draftQuickFilter, draftShiftFilter, draftToDate]);
+
+  const loadReport = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true);
     setError("");
     try {
       const response = await getPlcReadingHistory({
@@ -549,30 +670,39 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       const nextRows = Array.isArray(response.data?.data) ? response.data.data : [];
       setRows(sortRowsLatestFirst(nextRows));
     } catch (err) {
-      setRows([]);
+      if (!silent) setRows([]);
       setError(err.response?.data?.error || err.response?.data?.message || "Unable to load PLC report.");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [fromDate, selectedMachine, toDate]);
 
   useEffect(() => {
     loadReport();
+    const timer = window.setInterval(() => {
+      loadReport({ silent: true });
+    }, REPORT_AUTO_REFRESH_MS);
+    return () => window.clearInterval(timer);
   }, [loadReport]);
 
-  const reportRows = useMemo(
-    () => sortRowsLatestFirst(rows.filter((row) => isRowInProductionFilter(row, fromDate, toDate, shiftFilter))),
+  const filteredRows = useMemo(
+    () => rows.filter((row) => isRowInProductionFilter(row, fromDate, toDate, shiftFilter)),
     [fromDate, rows, shiftFilter, toDate]
   );
 
-  const columns = useMemo(() => buildColumns(reportRows), [reportRows]);
+  const columns = useMemo(() => buildColumns(filteredRows), [filteredRows]);
+
+  const reportRows = useMemo(
+    () => sortRowsLatestFirst(filteredRows),
+    [filteredRows]
+  );
 
   useEffect(() => {
     if (tableScrollRef.current) {
       tableScrollRef.current.scrollLeft = 0;
       tableScrollRef.current.scrollTop = 0;
     }
-  }, [columns.length, fromDate, reportRows, selectedMachineId, shiftFilter, toDate]);
+  }, [columns.length, fromDate, selectedMachineId, shiftFilter, toDate]);
   const kpis = useMemo(() => {
     const counts = { ok: 0, warm: 0, off: 0, shift: shiftFilter === "all" ? "All" : shiftFilter };
     reportRows.forEach((row) => {
@@ -588,6 +718,9 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   const reportRangeLabel = `${formatDisplayDate(fromDate)} to ${formatDisplayDate(toDate)}`;
   const reportFilterLabel = getQuickFilterLabel(activeQuickFilter);
   const reportShiftLabel = getShiftFilterLabel(shiftFilter);
+  const activeLineLabel = selectedLineId === "all"
+    ? "All Lines"
+    : getLineLabel(lines.find((line) => getLineId(line) === String(selectedLineId)) || { line_name: "Selected Line" });
   const machineLabel = selectedMachine?.machine_name || selectedMachine?.plc_ip || "Machine";
   const reportFileBaseName = [
     "rico-production-report",
@@ -603,7 +736,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     const generatedAt = formatDateTime(new Date());
     const header = columns.map((key) => `<th>${escapeHtml(labelize(key))}</th>`).join("");
     const body = reportRows.map((row, index) => (
-      `<tr>${columns.map((key) => `<td>${escapeHtml(formatReportCell(row, key, index))}</td>`).join("")}</tr>`
+      `<tr>${columns.map((key) => `<td>${escapeHtml(formatReportCell(row, key, index, reportRows.length))}</td>`).join("")}</tr>`
     )).join("");
     const popup = window.open("", "_blank", "width=1200,height=800");
     if (!popup) return;
@@ -684,26 +817,72 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   };
 
   const downloadExcel = () => {
+    const colSpan = Math.max(columns.length || 1, 8);
+    const generatedAt = formatDateTime(new Date());
     const header = columns.map((key) => `<th>${escapeHtml(labelize(key))}</th>`).join("");
     const body = reportRows.map((row, index) => (
-      `<tr>${columns.map((key) => `<td>${escapeHtml(formatReportCell(row, key, index))}</td>`).join("")}</tr>`
+      `<tr>${columns.map((key) => `<td>${escapeHtml(formatReportCell(row, key, index, reportRows.length))}</td>`).join("")}</tr>`
     )).join("");
     downloadHtmlFile(`${reportFileBaseName}.xls`, `<!doctype html>
 <html>
 <head>
   <meta charset="utf-8">
   <style>
-    table{border-collapse:collapse;font-family:Arial,sans-serif;font-size:11px}
-    th,td{border:1px solid #94a3b8;padding:6px;white-space:nowrap}
-    th{background:#dbeafe;font-weight:800;text-transform:uppercase}
-    .title{font-size:18px;font-weight:800}
-    .meta{font-size:12px;font-weight:700;color:#475569}
+    table{border-collapse:collapse;font-family:Calibri,Arial,sans-serif;font-size:11px;color:#0f172a}
+    th,td{border:1px solid #b7c4d6;padding:6px;white-space:nowrap;vertical-align:middle}
+    .section{background:#eef3f8;color:#173f78;font-size:12px;font-weight:800;text-transform:uppercase}
+    .label{background:#f8fafc;color:#173f78;font-weight:800}
+    .value{background:#ffffff;font-weight:700}
+    .summary-label{background:#f8fafc;color:#475569;font-weight:800;text-align:center}
+    .summary-ok{color:#008060;font-size:16px;font-weight:900;text-align:center}
+    .summary-warm{color:#b45309;font-size:16px;font-weight:900;text-align:center}
+    .summary-off{color:#be123c;font-size:16px;font-weight:900;text-align:center}
+    .summary-total{color:#1d4ed8;font-size:16px;font-weight:900;text-align:center}
+    .summary-shift{color:#4338ca;font-size:16px;font-weight:900;text-align:center}
+    th{background:#173f78;color:#ffffff;font-weight:800;text-transform:uppercase;text-align:center}
+    tbody td{mso-number-format:"\\@";font-weight:600}
+    tbody tr:nth-child(even) td{background:#f8fbff}
   </style>
 </head>
 <body>
   <table>
-    <tr><td colspan="${columns.length || 1}" class="title">Rico Auto Industries Limited - ${escapeHtml(machineLabel)} Production Report</td></tr>
-    <tr><td colspan="${columns.length || 1}" class="meta">Filter: ${escapeHtml(reportFilterLabel)} | Shift: ${escapeHtml(reportShiftLabel)} | Production Date: ${escapeHtml(reportRangeLabel)} | Records: ${reportRows.length}</td></tr>
+    <tr><td colspan="${colSpan}" class="section">Report Details</td></tr>
+    <tr>
+      <td class="label">Report Type</td><td class="value" colspan="2">Production Report</td>
+      <td class="label">Generated At</td><td class="value" colspan="3">${escapeHtml(generatedAt)}</td>
+    </tr>
+    <tr>
+      <td class="label">Line</td><td class="value" colspan="2">${escapeHtml(activeLineLabel)}</td>
+      <td class="label">Date From</td><td class="value" colspan="3">${escapeHtml(formatDisplayDate(fromDate))}</td>
+    </tr>
+    <tr>
+      <td class="label">Machine</td><td class="value" colspan="2">${escapeHtml(machineLabel)}</td>
+      <td class="label">Date To</td><td class="value" colspan="3">${escapeHtml(formatDisplayDate(toDate))}</td>
+    </tr>
+    <tr>
+      <td class="label">Shift</td><td class="value" colspan="2">${escapeHtml(reportShiftLabel)}</td>
+      <td class="label">Records</td><td class="value" colspan="3">${reportRows.length}</td>
+    </tr>
+    <tr>
+      <td class="label">Date Range</td><td class="value" colspan="2">${escapeHtml(reportFilterLabel)}</td>
+      <td class="label">Prepared By</td><td class="value" colspan="3">-</td>
+    </tr>
+    <tr><td colspan="${colSpan}" class="section">Production Summary</td></tr>
+    <tr>
+      <td class="summary-label">OK Shot</td>
+      <td class="summary-label">Warm Up Shot</td>
+      <td class="summary-label">Off Shot</td>
+      <td class="summary-label">Total Shot</td>
+      <td class="summary-label">Shift</td>
+    </tr>
+    <tr>
+      <td class="summary-ok">${kpis.ok}</td>
+      <td class="summary-warm">${kpis.warm}</td>
+      <td class="summary-off">${kpis.off}</td>
+      <td class="summary-total">${reportRows.length}</td>
+      <td class="summary-shift">${escapeHtml(kpis.shift)}</td>
+    </tr>
+    <tr><td colspan="${colSpan}" class="section">Detailed Production Records</td></tr>
     <tr>${header}</tr>
     ${body || `<tr><td colspan="${columns.length || 1}">No records</td></tr>`}
   </table>
@@ -712,105 +891,128 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   };
 
   return (
-    <AppLayout onLogout={onLogout} currentUser={currentUser}>
+    <AppLayout onLogout={onLogout} currentUser={currentUser} hideFooter>
       <div className="space-y-5">
         <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex items-center gap-4">
-              <div className="flex h-16 w-52 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white px-5 shadow-sm">
-                <img src={ricoLogo} alt="RICO Auto Industries Limited" className="block max-h-11 w-auto object-contain" />
-              </div>
-              <div>
-                <p className="text-xs font-black uppercase tracking-[0.22em] text-blue-600">Rico Auto Industries Limited</p>
-                <h1 className="mt-1 text-2xl font-black text-slate-950">PLC Machine Production Report</h1>
-                <p className="text-sm font-semibold text-slate-500">
-                  {selectedMachine?.machine_name || selectedMachine?.plc_ip || "Machine"} | {fromDate} to {toDate}
-                </p>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-2 text-sm lg:text-right">
-              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">PLC IP</p>
-                <p className="font-black text-slate-900">{selectedMachine?.plc_ip || "-"}</p>
-              </div>
-              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Records</p>
-                <p className="font-black text-slate-900">{reportRows.length}</p>
-              </div>
+            <div>
+              <h1 className="text-2xl font-black text-slate-950">{machineLabel} Production Report</h1>
+              <p className="text-sm font-semibold text-slate-500">
+                Machine production history | {fromDate} to {toDate}
+              </p>
             </div>
           </div>
         </section>
 
-        <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-            <div className="flex flex-wrap items-center gap-2">
-              {QUICK_DATE_FILTERS.map((filter) => {
-                const isActive = activeQuickFilter === filter.key;
-                return (
-                  <button
-                    key={filter.key}
-                    type="button"
-                    onClick={() => applyQuickDateFilter(filter.key)}
-                    className={`h-9 rounded-lg border px-3 text-xs font-black uppercase tracking-[0.08em] transition ${
-                      isActive
-                        ? "border-blue-600 bg-blue-600 text-white shadow-sm"
-                        : "border-slate-300 bg-white text-slate-700 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
-                    }`}
+        <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+          <button
+            type="button"
+            onClick={() => setFiltersOpen((open) => !open)}
+            className="flex w-full flex-col gap-3 px-4 py-3 text-left transition hover:bg-slate-50 lg:flex-row lg:items-center lg:justify-between"
+          >
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-blue-600">Filters</p>
+              <p className="mt-1 text-sm font-bold text-slate-600">
+                {reportFilterLabel} | {reportShiftLabel} | {reportRangeLabel}
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-600">
+                <svg className={`h-4 w-4 transition-transform ${filtersOpen ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </span>
+            </div>
+          </button>
+
+          {filtersOpen && (
+            <div className="border-t border-slate-200 p-4">
+              <div className="grid gap-3 lg:grid-cols-[190px_190px_170px_150px_170px_170px_120px_132px] lg:items-end">
+                <label className="block">
+                  <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">Line</span>
+                  <select
+                    value={draftLineId}
+                    onChange={(event) => {
+                      const nextLine = event.target.value;
+                      setDraftLineId(nextLine);
+                      const nextMachines = getMachinesForLine(nextLine);
+                      if (nextMachines.length) setDraftMachineId(getMachineId(nextMachines[0]));
+                    }}
+                    className="mt-1 h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
                   >
-                    {filter.label}
-                  </button>
-                );
-              })}
+                    <option value="all">All Lines</option>
+                    {lines.map((line) => (
+                      <option key={getLineId(line)} value={getLineId(line)}>
+                        {getLineLabel(line)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">Machine</span>
+                  <select
+                    value={draftMachineId}
+                    onChange={(event) => setDraftMachineId(event.target.value)}
+                    className="mt-1 h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                  >
+                    {draftMachineOptions.map((machine) => (
+                      <option key={getMachineId(machine)} value={getMachineId(machine)}>
+                        {getMachineLabel(machine)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">Date Range</span>
+                  <select
+                    value={draftQuickFilter}
+                    onChange={(event) => {
+                      if (event.target.value === "custom") {
+                        setDraftQuickFilter("custom");
+                        return;
+                      }
+                      applyQuickDateFilter(event.target.value);
+                    }}
+                    className="mt-1 h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                  >
+                    {QUICK_DATE_FILTERS.map((filter) => (
+                      <option key={filter.key} value={filter.key}>{filter.label}</option>
+                    ))}
+                    <option value="custom">Custom Range</option>
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">Shift</span>
+                  <select
+                    value={draftShiftFilter}
+                    onChange={(event) => setDraftShiftFilter(event.target.value)}
+                    className="mt-1 h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                  >
+                    {SHIFT_FILTERS.map((filter) => (
+                      <option key={filter.key} value={filter.key}>{filter.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">From</span>
+                  <input type="date" value={draftFromDate} onChange={handleFromDateChange} className="mt-1 h-11 w-full rounded-lg border border-slate-300 px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">To</span>
+                  <input type="date" value={draftToDate} onChange={handleToDateChange} className="mt-1 h-11 w-full rounded-lg border border-slate-300 px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" />
+                </label>
+                <button type="button" onClick={applyReportFilters} className="h-11 rounded-lg bg-blue-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-blue-700">
+                  Apply
+                </button>
+                <button type="button" onClick={downloadExcel} className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-emerald-700">
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v12m0 0l4-4m-4 4l-4-4M5 21h14" />
+                  </svg>
+                  Excel
+                </button>
+              </div>
             </div>
-            <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-black uppercase tracking-[0.08em] text-blue-700">
-              Report Filter: {reportFilterLabel} | {reportShiftLabel} | {reportRangeLabel}
-            </div>
-          </div>
-          <div className="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_160px_170px_170px_auto_auto_auto] lg:items-end">
-            <label className="block">
-              <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">Machine</span>
-              <select
-                value={selectedMachineId}
-                onChange={(event) => setSelectedMachineId(event.target.value)}
-                className="mt-1 h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-              >
-                {machines.map((machine) => (
-                  <option key={getMachineId(machine)} value={getMachineId(machine)}>
-                    {machine.machine_name || machine.name || machine.plc_ip || getMachineId(machine)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="block">
-              <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">Shift</span>
-              <select
-                value={shiftFilter}
-                onChange={(event) => setShiftFilter(event.target.value)}
-                className="mt-1 h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-              >
-                {SHIFT_FILTERS.map((filter) => (
-                  <option key={filter.key} value={filter.key}>{filter.label}</option>
-                ))}
-              </select>
-            </label>
-            <label className="block">
-              <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">From</span>
-              <input type="date" value={fromDate} onChange={handleFromDateChange} className="mt-1 h-11 w-full rounded-lg border border-slate-300 px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" />
-            </label>
-            <label className="block">
-              <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">To</span>
-              <input type="date" value={toDate} onChange={handleToDateChange} className="mt-1 h-11 w-full rounded-lg border border-slate-300 px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" />
-            </label>
-            <button type="button" onClick={loadReport} className="h-11 rounded-lg bg-blue-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-blue-700">
-              View
-            </button>
-            <button type="button" onClick={downloadExcel} className="h-11 rounded-lg bg-emerald-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-emerald-700">
-              Excel
-            </button>
-            <button type="button" onClick={downloadPdf} className="h-11 rounded-lg bg-slate-900 px-4 text-sm font-black text-white shadow-sm transition hover:bg-slate-800">
-              PDF
-            </button>
-          </div>
+          )}
         </section>
 
         <section className="grid gap-4 md:grid-cols-5">
@@ -825,14 +1027,9 @@ export default function PlcReportPage({ onLogout, currentUser }) {
           <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
             <div>
               <h2 className="text-sm font-black uppercase tracking-[0.14em] text-slate-800">Overall Machine Report</h2>
-              <p className="text-xs font-semibold text-slate-500">
-                {selectedMachine?.machine_name || selectedMachine?.plc_ip || "Machine"} | {fromDate} to {toDate}
-              </p>
+              <p className="text-xs font-semibold text-slate-500">Latest records first</p>
             </div>
             {loading && <span className="text-xs font-bold text-blue-600">Loading...</span>}
-          </div>
-          <div className="border-b border-slate-200 bg-slate-50 px-4 py-2 text-xs font-black uppercase tracking-[0.08em] text-slate-600">
-            Active Filter: {reportFilterLabel} | {reportShiftLabel} | {reportRangeLabel} | Latest records first
           </div>
           {error && <div className="m-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-bold text-red-700">{error}</div>}
           <div ref={tableScrollRef} className="max-h-[62vh] overflow-auto">
@@ -856,7 +1053,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                   <tr key={row.id || `${row.recorded_at}-${index}`} className="border-b border-slate-100 hover:bg-slate-50">
                     {columns.map((key) => (
                       <td key={key} className="border-r border-slate-100 px-4 py-2.5 text-center align-middle font-semibold leading-tight text-slate-800 last:border-r-0">
-                        {formatReportCell(row, key, index)}
+                        {formatReportCell(row, key, index, reportRows.length)}
                       </td>
                     ))}
                   </tr>

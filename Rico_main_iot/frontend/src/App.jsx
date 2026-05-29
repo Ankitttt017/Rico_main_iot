@@ -1,21 +1,27 @@
-import React, { useState } from "react";
+import React, { Suspense, lazy, useState } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 import { I18nProvider } from "./context/I18nContext";
 import { SidebarProvider } from "./context/SidebarContext";
 
 // ─── Rico IoT Pages ────────────────────────────────────────────────
-import LoginPage from "./pages/LoginPage";
-import LineMasterPage from "./pages/LineMasterPage";
-import OperatorWorkstationLoginPage from "./pages/OperatorWorkstationLoginPage";
-import OperatorWorkstationPage from "./pages/OperatorWorkstationPage";
-import PartMasterPage from "./pages/PartMasterPage";
-import PartProfilePage from "./pages/PartProfilePage";
-import OperationsMasterPage from "./pages/OperationsMasterPage";
-import MachineDashboard from "./modules/machine/MachineDashboard";
-import MachineProfilePage from "./modules/machine/MachineProfilePage";
-import PlcMonitorPage from "./modules/plc-monitor/PlcMonitorPage";
-import PlcReportPage from "./modules/plc-report/PlcReportPage";
+const LoginPage = lazy(() => import("./pages/LoginPage"));
+const LineMasterPage = lazy(() => import("./pages/LineMasterPage"));
+const OperatorWorkstationLoginPage = lazy(() => import("./pages/OperatorWorkstationLoginPage"));
+const OperatorWorkstationPage = lazy(() => import("./pages/OperatorWorkstationPage"));
+const PartMasterPage = lazy(() => import("./pages/PartMasterPage"));
+const PartProfilePage = lazy(() => import("./pages/PartProfilePage"));
+const OperationsMasterPage = lazy(() => import("./pages/OperationsMasterPage"));
+const MachineDashboard = lazy(() => import("./modules/machine/MachineDashboard"));
+const MachineProfilePage = lazy(() => import("./modules/machine/MachineProfilePage"));
+const PlcMonitorPage = lazy(() => import("./modules/plc-monitor/PlcMonitorPage"));
+const PlcReportPage = lazy(() => import("./modules/plc-report/PlcReportPage"));
+
+const PageLoader = () => (
+  <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm font-bold text-slate-600">
+    Loading...
+  </div>
+);
 
 // ─── Auth Helpers ──────────────────────────────────────────────────
 function getSavedUser() {
@@ -98,10 +104,11 @@ const App = () => {
     <I18nProvider>
       <SidebarProvider>
         <Toaster position="top-right" />
-        {!isLoggedIn && !isWorkstationRoute ? (
-          <LoginPage onLogin={handleLogin} />
-        ) : (
-          <Routes>
+        <Suspense fallback={<PageLoader />}>
+          {!isLoggedIn && !isWorkstationRoute ? (
+            <LoginPage onLogin={handleLogin} />
+          ) : (
+            <Routes>
             {/* ── Default redirect ── */}
             <Route path="/" element={<Navigate to="/parts" />} />
 
@@ -187,8 +194,9 @@ const App = () => {
             <Route path="/part-operations/part-master" element={<Navigate to="/parts" />} />
 
             <Route path="*" element={<Navigate to="/" />} />
-          </Routes>
-        )}
+            </Routes>
+          )}
+        </Suspense>
       </SidebarProvider>
     </I18nProvider>
   );

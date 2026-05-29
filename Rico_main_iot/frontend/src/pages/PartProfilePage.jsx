@@ -61,7 +61,7 @@ const EditableInfoRow = ({ label, value, editable, onSave, saveLabel, cancelLabe
           <button onClick={() => { setDraft(value || ""); setEditing(false); }} className="text-[10px] text-gray-500 hover:text-gray-700">{cancelLabel}</button>
         </div>
       ) : (
-        <p className={`text-sm mt-0.5 font-medium ${value ? "app-part-title" : "text-gray-300 italic"}`}>{value || "-"}</p>
+        <p className={`text-sm mt-0.5 font-semibold ${value ? "app-part-title" : "text-gray-300 italic"}`}>{value || "-"}</p>
       )}
     </div>
   );
@@ -166,11 +166,11 @@ const PartProfilePage = ({ onLogout, currentUser }) => {
             <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
             </svg>
-            <span className="text-gray-500 font-mono truncate max-w-xs">{id}</span>
+            <span className="text-gray-500 font-medium truncate max-w-xs">{id}</span>
           </div>
 
-          <div className="grid gap-6 xl:grid-cols-[340px_minmax(0,1fr)]">
-            <div className="w-full lg:w-72 xl:w-80 flex-shrink-0">
+          <div className="grid gap-5 xl:grid-cols-[minmax(280px,340px)_minmax(0,1fr)]">
+            <div className="w-full flex-shrink-0">
               <div className="rounded-md border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="flex items-start justify-between">
                   <div className="h-20 w-20 rounded-md border border-slate-100 bg-slate-50 p-3">
@@ -179,7 +179,7 @@ const PartProfilePage = ({ onLogout, currentUser }) => {
                 </div>
 
                 <div className="mt-5 text-center">
-                  <h2 className="text-lg font-bold leading-tight text-[#5f5b7b]">{part.description}</h2>
+                  <h2 className="text-lg font-bold leading-tight text-[#0b2f68]">{part.description}</h2>
                   {part.material_group && (
                     <span className="mt-2 inline-block rounded bg-slate-100 px-2 py-1 text-xs font-bold text-slate-500">
                       {part.material_group}
@@ -235,14 +235,14 @@ const PartProfilePage = ({ onLogout, currentUser }) => {
 
             <div className="flex-1 min-w-0">
               <div className="overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
-                <div className="overflow-x-auto border-b border-slate-100">
-                  <div className="grid min-w-[820px] grid-cols-4">
+                <div className="responsive-scroll border-b border-slate-100">
+                  <div className="grid min-w-[660px] grid-cols-4 sm:min-w-[760px] lg:min-w-0">
                     {tabs.map((tab) => (
                       <button
                         key={tab.key}
                         onClick={() => setActiveTab(tab.key)}
                         className={`flex items-center justify-center gap-2 border-b-2 px-5 py-4 text-sm font-semibold transition-colors whitespace-nowrap ${
-                          activeTab === tab.key ? "border-[#7667ff] text-[#7667ff]" : "border-transparent text-slate-500 hover:text-slate-700"
+                          activeTab === tab.key ? "border-[#173b78] text-[#173b78]" : "border-transparent text-[#8291ad] hover:text-[#0b2f68]"
                         }`}
                       >
                         <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -280,14 +280,14 @@ const PartProfilePage = ({ onLogout, currentUser }) => {
 const InfoBlock = ({ label, value, editable }) => (
   <div className="group mb-4">
     <div className="flex items-center justify-between gap-3">
-      <p className="text-[15px] font-semibold text-[#5f5b7b]">{label}</p>
+      <p className="text-[15px] font-semibold text-[#0b2f68]">{label}</p>
       {editable && (
-        <svg className="h-4 w-4 shrink-0 text-[#7667ff] opacity-100" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className="h-4 w-4 shrink-0 text-[#173b78] opacity-100" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
         </svg>
       )}
     </div>
-    <p className={`mt-2 text-sm leading-5 ${value ? "text-[#7667ff]" : "text-slate-400"}`}>
+    <p className={`mt-2 text-sm font-semibold leading-5 ${value ? "text-[#173b78]" : "text-slate-400"}`}>
       {value || "-"}
     </p>
   </div>

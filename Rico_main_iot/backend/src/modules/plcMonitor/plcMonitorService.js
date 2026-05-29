@@ -1,6 +1,8 @@
 ﻿"use strict";
 
 const net = require("net");
+const fs = require("fs");
+const path = require("path");
 const db = require("../../config/db");
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -96,6 +98,9 @@ const UBE_LIVE_READ_MS = Number(process.env.PLC_UBE_LIVE_READ_MS || 1000);
 const PLC_MAX_CONSECUTIVE_READ_FAILURES = Number(process.env.PLC_MAX_CONSECUTIVE_READ_FAILURES || 5);
 const PLC_DB_RETRY_MS = Number(process.env.PLC_DB_RETRY_MS || 5000);
 const PLC_DB_RETRY_MAX = Number(process.env.PLC_DB_RETRY_MAX || 500);
+const PLC_PENDING_SAVE_FILE =
+  process.env.PLC_PENDING_SAVE_FILE ||
+  path.resolve(__dirname, "../../../plc-pending-ube-saves.json");
 
 const LEAK_TEST_CONTROL = {
   cycleStartDevice: process.env.PLC_LEAK_CYCLE_START_DEVICE || "M110",
@@ -293,6 +298,23 @@ const DROPPED_READING_COLUMNS = new Set([
   "AUTO/ROBOT/OK-step value (sec)",
   ...EXCEL_PARAMETERS.filter((p) => p.device?.startsWith("M")).map((p) => `${p.name} duration (sec)`),
   ...LEAK_TEST_PARAMETERS.filter((p) => p.device?.startsWith("M")).map((p) => `${p.name} duration (sec)`),
+]);
+
+const LIVE_READING_METADATA_COLUMNS = new Set([
+  "id",
+  "rn",
+  "recorded_at",
+  "created_at",
+  "machine_key",
+  "machine_name",
+  "machine_type",
+  "plc_ip",
+  "plc_port",
+  "part_name",
+  "raw_readings_json",
+  "is_online",
+  "has_data",
+  "error",
 ]);
 
 const REPORT_COLUMNS = [
@@ -903,6 +925,72 @@ function formatDbReading(row, machineFallback = {}) {
   };
 }
 
+function formatLiveReadingSnapshot(machine, partName, readings = {}, timestamp = new Date().toISOString()) {
+  return formatDbReading(
+    {
+      ...readings,
+      id: `live-${machine.key || machine.ip}`,
+      recorded_at: timestamp || new Date().toISOString(),
+      created_at: new Date().toISOString(),
+      machine_key: machine.key || machine.ip,
+      machine_name: machine.name,
+      plc_ip: machine.ip,
+      plc_port: machine.port,
+      part_name: partName,
+    },
+    { ...machine, connected: true }
+  );
+}
+
+function getComparableShotNumber(row = {}) {
+  const value = row.shot_number ?? row.lastShotNumber;
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function chooseFreshestReading(dbReading, machine = {}) {
+  const liveReading = machine.latestReading;
+  if (!liveReading?.has_data) return dbReading;
+  if (!dbReading?.has_data) return liveReading;
+
+  const liveShot = getComparableShotNumber(liveReading);
+  const dbShot = getComparableShotNumber(dbReading);
+  if (liveShot !== null && dbShot !== null && liveShot > dbShot) return liveReading;
+
+  const liveTime = new Date(liveReading.recorded_at || liveReading.created_at || 0).getTime();
+  const dbTime = new Date(dbReading.recorded_at || dbReading.created_at || 0).getTime();
+  if (Number.isFinite(liveTime) && Number.isFinite(dbTime) && liveTime > dbTime) return liveReading;
+
+  return dbReading;
+}
+
+function buildReadingsForDBFromLiveSnapshot(liveReading = {}) {
+  return Object.fromEntries(
+    Object.entries(liveReading).filter(([name]) => !LIVE_READING_METADATA_COLUMNS.has(name))
+  );
+}
+
+async function persistLiveSnapshotIfAhead(machine = {}, dbReading = {}) {
+  if (!isUbeMachine(machine) || !machine.latestReading?.has_data) return null;
+
+  const liveShot = getComparableShotNumber(machine.latestReading);
+  const dbShot = getComparableShotNumber(dbReading);
+  if (liveShot === null || (dbShot !== null && liveShot <= dbShot)) return null;
+  if (machine.lastCatchupSavedShot === liveShot) return null;
+
+  const readings = buildReadingsForDBFromLiveSnapshot(machine.latestReading);
+  if (!Object.keys(readings).length) return null;
+
+  const result = await saveToDB(
+    machine,
+    machine.latestReading.part_name || machine.partName || "",
+    readings
+  );
+  if (!result?.queued && !result?.skipped) machine.lastCatchupSavedShot = liveShot;
+  return result;
+}
+
 function formatReadingsForClient(readings, machineKind = "ube") {
   const allowedNames =
     machineKind === "leaktest" ? LEAK_CLIENT_READING_NAMES : UBE_CLIENT_READING_NAMES;
@@ -1195,78 +1283,92 @@ async function getLatestReadingsForMachines(machineSnapshots = getMachines()) {
   const rowByKey = new Map();
 
   if (ubeMachines.length) {
-    const machineKeys = ubeMachines.map((m) => m.key || m.ip);
-    const machineIps = Array.from(new Set(ubeMachines.map((m) => m.ip).filter(Boolean)));
-    const keyPlaceholders = machineKeys.map(() => "?").join(", ");
-    const ipPlaceholders = machineIps.map(() => "?").join(", ");
+    const targets = ubeMachines.map((m) => ({
+      key: m.key || m.ip,
+      ip: m.ip || m.key,
+    }));
+    const valuesSql = targets.map(() => "(?, ?)").join(", ");
+    const params = targets.flatMap((target) => [target.key, target.ip]);
 
     const { rows } = await db.query(
-      `WITH ranked_readings AS (
-        SELECT *,
-          ROW_NUMBER() OVER (
-            PARTITION BY COALESCE(machine_key, plc_ip)
-            ORDER BY recorded_at DESC, id DESC
-          ) AS rn
-        FROM ${TABLE}
-        WHERE COALESCE(machine_key, plc_ip) IN (${keyPlaceholders})
-          OR plc_ip IN (${ipPlaceholders})
+      `WITH target_machines(machine_key, plc_ip) AS (
+        SELECT * FROM (VALUES ${valuesSql}) AS target(machine_key, plc_ip)
       )
-      SELECT * FROM ranked_readings WHERE rn = 1
-      ORDER BY COALESCE(machine_key, plc_ip)`,
-      [...machineKeys, ...machineIps]
+      SELECT latest.*
+      FROM target_machines target
+      OUTER APPLY (
+        SELECT TOP 1 *
+        FROM ${TABLE} reading
+        WHERE reading.machine_key = target.machine_key
+           OR reading.plc_ip = target.plc_ip
+           OR reading.plc_ip = target.machine_key
+        ORDER BY reading.recorded_at DESC, reading.id DESC
+      ) latest
+      WHERE latest.id IS NOT NULL
+      ORDER BY COALESCE(latest.machine_key, latest.plc_ip)`,
+      params
     );
     rows.forEach((row) => rowByKey.set(String(row.machine_key || row.plc_ip), row));
   }
 
   if (leakMachines.length) {
     const machineIps = Array.from(new Set(leakMachines.map((m) => m.ip).filter(Boolean)));
-    const ipPlaceholders = machineIps.map(() => "?").join(", ");
+    const valuesSql = machineIps.map(() => "(?)").join(", ");
 
     const { rows } = await db.query(
-      `WITH ranked_readings AS (
-        SELECT
-          [Id] AS id,
-          CAST([Cycle_End_Time] AS DATETIME2(3)) AS recorded_at,
-          CAST([Cycle_End_Time] AS DATETIME2(3)) AS cycle_end_time,
-          [Machine] AS machine_name,
-          [PLC_IP] AS plc_ip,
-          1027 AS plc_port,
-          [Machine] AS machine,
-          [PLC_IP] AS ip,
-          [Status] AS status,
-          [Part_QR_Code] AS part_name,
-          [Part_QR_Code] AS part_qr_code,
-          [Part_QR_Code] AS scan_data,
-          [Body_Leak_Value] AS body_leak_value,
-          [Gall_1] AS gall_1,
-          [Gall_2] AS gall_2,
-          [Result] AS result,
-          [Running_Mode] AS running_mode,
-          [Manual] AS manual,
-          [Dry] AS dry,
-          [Wey] AS wey,
-          [Both] AS both,
-          [Cycle_Time] AS cycle_time,
-          ROW_NUMBER() OVER (
-            PARTITION BY [PLC_IP]
-            ORDER BY [Cycle_End_Time] DESC, [Id] DESC
-          ) AS rn
-        FROM ${LEAK_TEST_TABLE}
-        WHERE [PLC_IP] IN (${ipPlaceholders})
+      `WITH target_machines(plc_ip) AS (
+        SELECT * FROM (VALUES ${valuesSql}) AS target(plc_ip)
       )
-      SELECT * FROM ranked_readings WHERE rn = 1
-      ORDER BY plc_ip`,
+      SELECT latest.*
+      FROM target_machines target
+      OUTER APPLY (
+        SELECT
+          leak.[Id] AS id,
+          CAST(leak.[Cycle_End_Time] AS DATETIME2(3)) AS recorded_at,
+          CAST(leak.[Cycle_End_Time] AS DATETIME2(3)) AS cycle_end_time,
+          leak.[Machine] AS machine_name,
+          leak.[PLC_IP] AS plc_ip,
+          1027 AS plc_port,
+          leak.[Machine] AS machine,
+          leak.[PLC_IP] AS ip,
+          leak.[Status] AS status,
+          leak.[Part_QR_Code] AS part_name,
+          leak.[Part_QR_Code] AS part_qr_code,
+          leak.[Part_QR_Code] AS scan_data,
+          leak.[Body_Leak_Value] AS body_leak_value,
+          leak.[Gall_1] AS gall_1,
+          leak.[Gall_2] AS gall_2,
+          leak.[Result] AS result,
+          leak.[Running_Mode] AS running_mode,
+          leak.[Manual] AS manual,
+          leak.[Dry] AS dry,
+          leak.[Wey] AS wey,
+          leak.[Both] AS both,
+          leak.[Cycle_Time] AS cycle_time
+        FROM ${LEAK_TEST_TABLE}
+        WHERE leak.[PLC_IP] = target.plc_ip
+        ORDER BY leak.[Cycle_End_Time] DESC, leak.[Id] DESC
+      ) latest
+      WHERE latest.id IS NOT NULL
+      ORDER BY latest.plc_ip`,
       machineIps
     );
     rows.forEach((row) => rowByKey.set(String(row.plc_ip), row));
   }
 
-  return machines.map((machine) =>
-    formatDbReading(
+  const results = [];
+  for (const machine of machines) {
+    const dbReading = formatDbReading(
       rowByKey.get(machine.key || machine.ip) || rowByKey.get(machine.ip),
       machine
-    )
-  );
+    );
+    persistLiveSnapshotIfAhead(machine, dbReading).catch((error) => {
+      console.error(`PLC live catch-up save failed for ${machine.ip}:`, error.message);
+    });
+    results.push(chooseFreshestReading(dbReading, machine));
+  }
+
+  return results;
 }
 
 async function getReadingHistory({ ip, limit = 200, from, to } = {}) {
@@ -1358,24 +1460,58 @@ async function getConnectionEvents({ ip, limit = 200, from, to } = {}) {
 // DB SAVE â€” UBE
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+const inFlightUbeSaveKeys = new Set();
+
+function buildUbeTimestampSaveKey(machine, readings = {}) {
+  const machineKey = machine.key || machine.ip;
+  const shotDate = normalizeReadingForDB("shot_date", readings.shot_date);
+  const shotTime = normalizeReadingForDB("shot_time", readings.shot_time);
+  if (shotDate && shotTime) return `${machineKey}:${shotDate}:${shotTime}`;
+
+  const shotDateTime = readings.shot_datetime ? new Date(readings.shot_datetime) : null;
+  if (shotDateTime && !Number.isNaN(shotDateTime.getTime())) {
+    return `${machineKey}:${shotDateTime.toISOString()}`;
+  }
+
+  return null;
+}
+
 async function saveToDB(machine, partName, readings) {
+  const saveKey = buildUbeTimestampSaveKey(machine, readings);
+  if (saveKey) {
+    if (inFlightUbeSaveKeys.has(saveKey)) {
+      return { skipped: true, reason: "duplicate-cycle-in-flight" };
+    }
+    inFlightUbeSaveKeys.add(saveKey);
+  }
+
+  try {
+    return await saveToDBUnlocked(machine, partName, readings);
+  } finally {
+    if (saveKey) inFlightUbeSaveKeys.delete(saveKey);
+  }
+}
+
+async function saveToDBUnlocked(machine, partName, readings) {
   const columns = ["recorded_at", "machine_key", "machine_name", "plc_ip", "plc_port", "part_name"];
   const plcRecordedAt = readings.shot_datetime ? new Date(readings.shot_datetime) : null;
-  const shotNumber = normalizeReadingForDB("shot_number", readings.shot_number ?? readings["SHOT NO."]);
   const shotDate = normalizeReadingForDB("shot_date", readings.shot_date);
+  const shotTime = normalizeReadingForDB("shot_time", readings.shot_time);
+  const hasPlcRecordedAt = plcRecordedAt && !Number.isNaN(plcRecordedAt.getTime());
 
-  if (shotNumber !== null && shotNumber !== undefined) {
+  if ((shotDate && shotTime) || hasPlcRecordedAt) {
     const duplicateFilters = [
       "(machine_key = ? OR plc_ip = ?)",
-      "shot_number = ?",
     ];
-    const duplicateValues = [machine.key || machine.ip, machine.ip, shotNumber];
+    const duplicateValues = [machine.key || machine.ip, machine.ip];
 
-    if (shotDate) {
+    if (shotDate && shotTime) {
       duplicateFilters.push("shot_date = ?");
-      duplicateValues.push(shotDate);
-    } else {
-      duplicateFilters.push("recorded_at >= DATEADD(day, -1, SYSDATETIME())");
+      duplicateFilters.push("shot_time = ?");
+      duplicateValues.push(shotDate, shotTime);
+    } else if (hasPlcRecordedAt) {
+      duplicateFilters.push("ABS(DATEDIFF(second, recorded_at, ?)) <= ?");
+      duplicateValues.push(plcRecordedAt, Number(process.env.PLC_DUPLICATE_SHOT_WINDOW_SEC || 15));
     }
 
     const { rows: duplicateRows } = await db.query(
@@ -1384,7 +1520,7 @@ async function saveToDB(machine, partName, readings) {
        ORDER BY recorded_at DESC, id DESC`,
       duplicateValues
     );
-    if (duplicateRows.length) return { skipped: true, reason: "duplicate-shot-number" };
+    if (duplicateRows.length) return { skipped: true, reason: "duplicate-cycle-timestamp" };
   }
 
   const values = [
@@ -1917,6 +2053,26 @@ BEGIN
   CREATE INDEX [IX_PlcCycleReadings_id_desc] ON ${TABLE} ([id] DESC)
 END
 
+IF NOT EXISTS (
+  SELECT 1 FROM sys.indexes
+  WHERE [name] = N'IX_PlcCycleReadings_machine_key_recorded_desc'
+    AND [object_id] = OBJECT_ID(N'${TABLE}')
+)
+BEGIN
+  CREATE INDEX [IX_PlcCycleReadings_machine_key_recorded_desc]
+    ON ${TABLE} ([machine_key], [recorded_at] DESC, [id] DESC)
+END
+
+IF NOT EXISTS (
+  SELECT 1 FROM sys.indexes
+  WHERE [name] = N'IX_PlcCycleReadings_plc_ip_recorded_desc'
+    AND [object_id] = OBJECT_ID(N'${TABLE}')
+)
+BEGIN
+  CREATE INDEX [IX_PlcCycleReadings_plc_ip_recorded_desc]
+    ON ${TABLE} ([plc_ip], [recorded_at] DESC, [id] DESC)
+END
+
 IF EXISTS (
   SELECT 1 FROM sys.indexes
   WHERE [name] = N'UX_MachineShot'
@@ -1973,9 +2129,50 @@ END
 `);
 }
 
+async function hasUsablePlcSchema() {
+  const { rows } = await db.query(`
+    SELECT
+      CASE WHEN OBJECT_ID(N'${TABLE}', N'U') IS NOT NULL THEN 1 ELSE 0 END AS has_plc_table,
+      CASE WHEN OBJECT_ID(N'${LEAK_TEST_TABLE}', N'U') IS NOT NULL THEN 1 ELSE 0 END AS has_leak_table,
+      CASE WHEN COL_LENGTH('${TABLE}', 'recorded_at') IS NOT NULL THEN 1 ELSE 0 END AS has_recorded_at,
+      CASE WHEN COL_LENGTH('${TABLE}', 'machine_key') IS NOT NULL THEN 1 ELSE 0 END AS has_machine_key,
+      CASE WHEN COL_LENGTH('${TABLE}', 'plc_ip') IS NOT NULL THEN 1 ELSE 0 END AS has_plc_ip,
+      CASE WHEN EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE [name] = N'IX_PlcCycleReadings_machine_key_recorded_desc'
+          AND [object_id] = OBJECT_ID(N'${TABLE}')
+      ) THEN 1 ELSE 0 END AS has_machine_key_index,
+      CASE WHEN EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE [name] = N'IX_PlcCycleReadings_plc_ip_recorded_desc'
+          AND [object_id] = OBJECT_ID(N'${TABLE}')
+      ) THEN 1 ELSE 0 END AS has_plc_ip_index,
+      CASE WHEN EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE [name] = N'IX_Leaktest_ip_cycle_end_desc'
+          AND [object_id] = OBJECT_ID(N'${LEAK_TEST_TABLE}')
+      ) THEN 1 ELSE 0 END AS has_leak_index
+  `);
+
+  const schema = rows[0] || {};
+  return [
+    "has_plc_table",
+    "has_leak_table",
+    "has_recorded_at",
+    "has_machine_key",
+    "has_plc_ip",
+    "has_machine_key_index",
+    "has_plc_ip_index",
+    "has_leak_index",
+  ].every((key) => Number(schema[key]) === 1);
+}
+
 function ensureTableOnce() {
   if (!schemaReadyPromise) {
-    schemaReadyPromise = ensureTable().catch((err) => {
+    schemaReadyPromise = (async () => {
+      if (await hasUsablePlcSchema()) return;
+      await ensureTable();
+    })().catch((err) => {
       schemaReadyPromise = null;
       throw err;
     });
@@ -2018,6 +2215,42 @@ function startPlcMonitor(io) {
   let monitoringRunning =
     String(process.env.PLC_MONITOR_ENABLED || "true").toLowerCase() !== "false";
   let lastPlcConnected = null;
+
+  const persistPendingUbeSaves = () => {
+    try {
+      if (!pendingUbeSaves.size) {
+        fs.rmSync(PLC_PENDING_SAVE_FILE, { force: true });
+        return;
+      }
+      fs.mkdirSync(path.dirname(PLC_PENDING_SAVE_FILE), { recursive: true });
+      fs.writeFileSync(
+        PLC_PENDING_SAVE_FILE,
+        JSON.stringify(Array.from(pendingUbeSaves.entries()), null, 2)
+      );
+    } catch (error) {
+      console.error("PLC pending save queue persist failed:", error.message);
+    }
+  };
+
+  const loadPendingUbeSaves = () => {
+    try {
+      if (!fs.existsSync(PLC_PENDING_SAVE_FILE)) return;
+      const parsed = JSON.parse(fs.readFileSync(PLC_PENDING_SAVE_FILE, "utf8"));
+      if (!Array.isArray(parsed)) return;
+      parsed.forEach(([key, item]) => {
+        if (key && item?.machine && item?.readings) {
+          pendingUbeSaves.set(key, item);
+        }
+      });
+      if (pendingUbeSaves.size) {
+        console.log(`PLC pending save queue restored: ${pendingUbeSaves.size} items`);
+      }
+    } catch (error) {
+      console.error("PLC pending save queue restore failed:", error.message);
+    }
+  };
+
+  loadPendingUbeSaves();
 
   // â”€â”€ UPDATED: emitMachineState â€” per-machine events â”€â”€
   const emitMachineState = () => {
@@ -2112,6 +2345,7 @@ function startPlcMonitor(io) {
       queuedAt: existing?.queuedAt || new Date().toISOString(),
       lastAttemptAt: new Date().toISOString(),
     });
+    persistPendingUbeSaves();
 
     updateMachineState(machine, {
       connected: true,
@@ -2123,6 +2357,7 @@ function startPlcMonitor(io) {
     try {
       const result = await saveToDB(machine, partName, readings);
       pendingUbeSaves.delete(buildUbeSaveKey(machine, readings));
+      persistPendingUbeSaves();
       return result;
     } catch (error) {
       queueUbeSave(machine, partName, readings, error);
@@ -2138,6 +2373,7 @@ function startPlcMonitor(io) {
       try {
         await saveToDB(item.machine, item.partName, item.readings);
         pendingUbeSaves.delete(key);
+        persistPendingUbeSaves();
         updateMachineState(item.machine, {
           connected: true,
           error: pendingUbeSaves.size
@@ -2151,6 +2387,7 @@ function startPlcMonitor(io) {
           lastError: error.message,
           lastAttemptAt: new Date().toISOString(),
         });
+        persistPendingUbeSaves();
         console.error(`PLC DB retry failed for ${item.machine.ip}:`, error.message);
       }
     }
@@ -2336,6 +2573,7 @@ function startPlcMonitor(io) {
           ? machineState.get(machineKey)?.lastCycleAt
           : payload.timestamp,
         lastShotNumber: readings.shot_number,
+        latestReading: formatLiveReadingSnapshot(machine, partName, readings, payload.timestamp),
         partName,
         cycleTime: readings.cycle_time,
         shotStatus: liveOnly ? "Live registers updated." : "Cycle complete.",
@@ -2409,6 +2647,7 @@ function startPlcMonitor(io) {
       error: null,
       lastCycleAt: lastPayload.timestamp,
       lastShotNumber: finalReadings.shot_number,
+      latestReading: formatLiveReadingSnapshot(machine, lastPayload.partName, finalReadings, lastPayload.timestamp),
       partName: lastPayload.partName,
       cycleTime: finalReadings.cycle_time,
     });
@@ -2535,6 +2774,7 @@ function startPlcMonitor(io) {
           ? machineState.get(machineKey)?.lastCycleAt
           : payload.timestamp,
         lastShotNumber: readings.part_qr_code,
+        latestReading: formatLiveReadingSnapshot(machine, partName, readings, payload.timestamp),
         partName,
         cycleTime: readings.cycle_time,
         shotStatus: liveOnly ? "Live registers updated." : "Cycle complete.",
@@ -3062,7 +3302,18 @@ function startPlcMonitor(io) {
     }),
     getLatestReadings: () =>
       getLatestReadingsForMachines(Array.from(machineState.values())),
-    getReadingHistory,
+    getReadingHistory: async (args = {}) => {
+      const machinesForCatchup = Array.from(machineState.values()).filter((machine) => {
+        const key = machine.key || machine.ip;
+        return !args.ip || key === args.ip || machine.ip === args.ip;
+      });
+      if (machinesForCatchup.length) {
+        getLatestReadingsForMachines(machinesForCatchup).catch((error) => {
+          console.error("PLC report background catch-up failed:", error.message);
+        });
+      }
+      return getReadingHistory(args);
+    },
     getConnectionEvents,
     buildReadingsCsv,
     buildReadingsExcelXml,

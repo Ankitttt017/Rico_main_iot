@@ -2,9 +2,15 @@ name: Rico IoT CI
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - master
   pull_request:
     branches:
       - master
+
+permissions:
+  contents: read
 
 jobs:
   build-and-check:
@@ -17,9 +23,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            Rico_main_iot/frontend/package-lock.json
+            Rico_main_iot/backend/package-lock.json
+
       - name: Install Rico IoT frontend dependencies
         working-directory: ${{ github.workspace }}\Rico_main_iot\frontend
-        run: npm install
+        run: npm ci
 
       - name: Build Rico IoT frontend
         working-directory: ${{ github.workspace }}\Rico_main_iot\frontend
@@ -27,7 +42,7 @@ jobs:
 
       - name: Install Rico IoT backend dependencies
         working-directory: ${{ github.workspace }}\Rico_main_iot\backend
-        run: npm install
+        run: npm ci
 
       - name: Check Rico IoT backend syntax
         working-directory: ${{ github.workspace }}\Rico_main_iot\backend

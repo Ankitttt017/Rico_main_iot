@@ -135,7 +135,7 @@ function prepareSql(sql, params, { inlineParams = false } = {}) {
 async function execute(sql, params = []) {
   const connection = await getPool();
   const request = connection.request();
-  request.timeout = Number(process.env.DB_QUERY_TIMEOUT || 60000);
+  request.timeout = Number(process.env.DB_QUERY_TIMEOUT || 120000);
   const inlineParams = isTrustedConnection();
   if (!inlineParams) {
     bindParams(request, params);

@@ -1,9 +1,17 @@
 name: Rico IoT - Auto Deploy
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rico-main-iot-deploy
+  cancel-in-progress: true
 
 jobs:
   deploy:
@@ -16,23 +24,32 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            Rico_main_iot/frontend/package-lock.json
+            Rico_main_iot/backend/package-lock.json
+
       - name: Install Rico IoT Frontend Dependencies
         working-directory: ${{ github.workspace }}\Rico_main_iot\frontend
-        run: npm install
+        run: npm ci
 
       - name: Build Rico IoT Frontend
         working-directory: ${{ github.workspace }}\Rico_main_iot\frontend
         run: npm run build
 
       - name: Copy Rico IoT Frontend Build
-        run: robocopy "${{ github.workspace }}\Rico_main_iot\frontend\dist" "C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\frontend\dist" /E & exit 0
+        run: robocopy "${{ github.workspace }}\Rico_main_iot\frontend\dist" "C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\frontend\dist" /E & if %ERRORLEVEL% LEQ 7 exit /B 0 else exit /B %ERRORLEVEL%
 
       - name: Install Rico IoT Backend Dependencies
         working-directory: ${{ github.workspace }}\Rico_main_iot\backend
-        run: npm install
+        run: npm ci
 
       - name: Copy Rico IoT Backend
-        run: robocopy "${{ github.workspace }}\Rico_main_iot\backend" "C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\backend" /E /XD node_modules .git /XF *.log .env & exit 0
+        run: robocopy "${{ github.workspace }}\Rico_main_iot\backend" "C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\backend" /E /XD node_modules .git /XF *.log .env & if %ERRORLEVEL% LEQ 7 exit /B 0 else exit /B %ERRORLEVEL%
 
       - name: Restart Rico IoT Backend
         working-directory: C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot
