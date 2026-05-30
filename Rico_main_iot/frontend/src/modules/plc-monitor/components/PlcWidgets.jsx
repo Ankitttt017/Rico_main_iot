@@ -1,16 +1,19 @@
 import { getDisplayLabel } from "../utils/plcFormatters";
 
 export function Spark({ data, color = "#22d3ee" }) {
-  if (!data || data.length < 2) return <div className="spark-empty" />;
+  const pointsData = Array.isArray(data)
+    ? data.map(Number).filter((value) => Number.isFinite(value))
+    : [];
+  if (pointsData.length < 2) return <div className="spark-empty" />;
 
-  const min = Math.min(...data);
-  const max = Math.max(...data);
+  const min = Math.min(...pointsData);
+  const max = Math.max(...pointsData);
   const range = max - min || 1;
   const w = 76;
   const h = 28;
-  const pts = data
+  const pts = pointsData
     .map((v, i) => {
-      const x = (i / (data.length - 1)) * w;
+      const x = (i / (pointsData.length - 1)) * w;
       const y = h - ((v - min) / range) * h;
       return `${x},${y}`;
     })
@@ -37,8 +40,16 @@ export const STATUS_CFG = {
 
 export function formatValue(value, fallback = "-") {
   if (value === null || value === undefined) return fallback;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? fallback : value.toLocaleString("en-IN");
   if (typeof value === "number" && !Number.isInteger(value)) {
     return Number(value.toFixed(2));
+  }
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
   }
 
   return value;
@@ -46,6 +57,7 @@ export function formatValue(value, fallback = "-") {
 
 export function ValueCard({ name, label, unit, value, history, accentColor }) {
   const hasValue = value !== null && value !== undefined;
+  const displayValue = formatValue(value);
 
   return (
     <div className="vcard" style={{ "--accent": accentColor }}>
@@ -57,7 +69,7 @@ export function ValueCard({ name, label, unit, value, history, accentColor }) {
       </div>
       <div className="vcard-bottom">
         <div className="vcard-readout">
-          <span className="vcard-val">{hasValue ? value : "-"}</span>
+          <span className="vcard-val">{hasValue ? displayValue : "-"}</span>
           {hasValue && unit && <span className="vcard-unit">{unit}</span>}
         </div>
         <Spark data={history} color={accentColor} />

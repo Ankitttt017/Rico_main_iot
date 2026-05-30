@@ -17,6 +17,39 @@ import {
   getRowTimestamp,
   rowToReadings,
 } from "../utils/plcFormatters";
+
+function normalizeReadingMap(readingMap) {
+  if (!readingMap || typeof readingMap !== "object" || Array.isArray(readingMap)) return {};
+
+  return Object.fromEntries(
+    Object.entries(readingMap).map(([name, item]) => {
+      if (item && typeof item === "object" && !Array.isArray(item) && "value" in item) {
+        return [name, item];
+      }
+      return [name, { value: item ?? null, column: name }];
+    })
+  );
+}
+
+function getReadingValue(readingMap, name) {
+  const item = readingMap?.[name];
+  if (item && typeof item === "object" && !Array.isArray(item) && "value" in item) return item.value;
+  return item ?? null;
+}
+
+function toValidDate(value) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatHistoryTime(value) {
+  const date = toValidDate(value);
+  return date
+    ? date.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })
+    : "--:--:--";
+}
+
 function PLCDashboard() {
   const [theme, setTheme] = useState("light");
   const [plcConnected, setPlcConnected] = useState(false);
@@ -139,15 +172,16 @@ function PLCDashboard() {
   }, []);
 
   const applyReadings = useCallback((newReadings, timestamp, cycleTime) => {
-    setReadings(newReadings);
-    setLastTimestamp(new Date(timestamp));
+    const safeReadings = normalizeReadingMap(newReadings);
+    setReadings(safeReadings);
+    setLastTimestamp(toValidDate(timestamp));
     setCycleCount(c => c + 1);
     setCycleHistory(prev => [
-      { id: Date.now(), timestamp: new Date(timestamp), cycleTime },
+      { id: Date.now(), timestamp: toValidDate(timestamp) || new Date(), cycleTime },
       ...prev,
     ].slice(0, 100));
 
-    Object.entries(newReadings).forEach(([k, v]) => {
+    Object.entries(safeReadings).forEach(([k, v]) => {
       if (v?.value !== undefined && v.value !== null) pushSpark(k, v.value);
     });
   }, [pushSpark]);
@@ -270,7 +304,7 @@ function PLCDashboard() {
       ? [getMachineKey(machineOrKey), machineOrKey.ip].filter(Boolean)
       : [machineOrKey].filter(Boolean);
     const snapshotKey = lookupKeys.find((key) => readingsByIp[key]) || lookupKeys[0];
-    const nextReadings = snapshotKey ? readingsByIp[snapshotKey] || {} : {};
+    const nextReadings = normalizeReadingMap(snapshotKey ? readingsByIp[snapshotKey] || {} : {});
     const nextMeta = snapshotKey ? metaByIp[snapshotKey] || {} : {};
     const nextHistory = snapshotKey ? historyByIp[snapshotKey] || [] : [];
     const nextSparks = snapshotKey ? sparkByIp[snapshotKey] || {} : {};
@@ -279,7 +313,7 @@ function PLCDashboard() {
     setCycleHistory(nextHistory);
     setCycleCount(nextHistory.length);
     setSparklines(nextSparks);
-    setLastTimestamp(nextMeta.timestamp ? new Date(nextMeta.timestamp) : null);
+    setLastTimestamp(toValidDate(nextMeta.timestamp));
     setPartName(nextMeta.partName || "");
     setShotTime(nextMeta.shotTime || "");
     setCycleStatus("idle");
@@ -355,15 +389,16 @@ function PLCDashboard() {
       });
     });
 
-    socket.on("plc_data", ({ timestamp, observedAt, liveOnly = false, cycleTime, readings: r = {}, config, partName: nextPartName, shotTime: nextShotTime }) => {
+    socket.on("plc_data", ({ timestamp, observedAt, liveOnly = false, cycleTime, readings: r = {}, config, partName: nextPartName, shotTime: nextShotTime } = {}) => {
+      const safeReadings = normalizeReadingMap(r);
       const key = config?.key || config?.ip || selectedKeyRef.current;
       const ip = config?.ip || key;
       const port = Number(config?.port || 5002);
-      const eventTimestamp = r?.cycle_end_time?.value || r?.shot_datetime?.value || timestamp || null;
+      const eventTimestamp = getReadingValue(safeReadings, "cycle_end_time") || getReadingValue(safeReadings, "shot_datetime") || timestamp || null;
       const observedTimestamp = observedAt || new Date().toISOString();
-      const eventPartName = r?.part_qr_code?.value || r?.scan_data?.value || nextPartName || "";
+      const eventPartName = getReadingValue(safeReadings, "part_qr_code") || getReadingValue(safeReadings, "scan_data") || nextPartName || "";
 
-      setReadingsByIp(prev => ({ ...prev, [key]: r, [ip]: r }));
+      setReadingsByIp(prev => ({ ...prev, [key]: safeReadings, [ip]: safeReadings }));
       setMetaByIp(prev => ({
         ...prev,
         [key]: {
@@ -385,7 +420,7 @@ function PLCDashboard() {
       }));
       setSparkByIp(prev => {
         const next = { ...(prev[key] || {}) };
-        Object.entries(r).forEach(([name, item]) => {
+        Object.entries(safeReadings).forEach(([name, item]) => {
           if (item?.value !== undefined && item.value !== null) {
             next[name] = [...(next[name] || []), item.value].slice(-20);
           }
@@ -397,26 +432,27 @@ function PLCDashboard() {
 
       setPlcConfig({ key, ip, port, kind: config?.kind });
       setDraftConfig({ ip, port: String(port) });
-      setReadings(r);
+      setReadings(safeReadings);
       if (!liveOnly && eventTimestamp) {
-        setLastTimestamp(new Date(eventTimestamp));
+        setLastTimestamp(toValidDate(eventTimestamp));
       }
       setPartName(eventPartName);
       setShotTime(nextShotTime || "");
-      Object.entries(r).forEach(([name, item]) => {
+      Object.entries(safeReadings).forEach(([name, item]) => {
         if (item?.value !== undefined && item.value !== null) pushSpark(name, item.value);
       });
     });
 
-    socket.on("cycle_complete", ({ timestamp, cycleTime, readings: r, config, partName: nextPartName, shotTime: nextShotTime }) => {
+    socket.on("cycle_complete", ({ timestamp, cycleTime, readings: r = {}, config, partName: nextPartName, shotTime: nextShotTime } = {}) => {
+      const safeReadings = normalizeReadingMap(r);
       const key = config?.key || config?.ip || selectedKeyRef.current;
       const ip = config?.ip || key;
       const port = Number(config?.port || 5002);
-      const eventTimestamp = r?.cycle_end_time?.value || r?.shot_datetime?.value || timestamp;
-      const eventPartName = r?.part_qr_code?.value || r?.scan_data?.value || nextPartName || "";
-      const historyItem = { id: `${key}-${eventTimestamp}`, timestamp: new Date(eventTimestamp), cycleTime };
+      const eventTimestamp = getReadingValue(safeReadings, "cycle_end_time") || getReadingValue(safeReadings, "shot_datetime") || timestamp || new Date().toISOString();
+      const eventPartName = getReadingValue(safeReadings, "part_qr_code") || getReadingValue(safeReadings, "scan_data") || nextPartName || "";
+      const historyItem = { id: `${key}-${eventTimestamp}`, timestamp: toValidDate(eventTimestamp) || new Date(), cycleTime };
 
-      setReadingsByIp(prev => ({ ...prev, [key]: r, [ip]: r }));
+      setReadingsByIp(prev => ({ ...prev, [key]: safeReadings, [ip]: safeReadings }));
       setMetaByIp(prev => ({
         ...prev,
         [key]: { timestamp: eventTimestamp, cycleTime, partName: eventPartName, shotTime: nextShotTime },
@@ -429,7 +465,7 @@ function PLCDashboard() {
       }));
       setSparkByIp(prev => {
         const next = { ...(prev[key] || {}) };
-        Object.entries(r).forEach(([k, v]) => {
+        Object.entries(safeReadings).forEach(([k, v]) => {
           if (v?.value !== undefined && v.value !== null) {
             next[k] = [...(next[k] || []), v.value].slice(-20);
           }
@@ -443,13 +479,13 @@ function PLCDashboard() {
       setPlcConfig({ key, ip, port, kind: config?.kind });
       setDraftConfig({ ip, port: String(port) });
       setCycleStatus("complete");
-      setReadings(r);
-      setLastTimestamp(new Date(eventTimestamp));
+      setReadings(safeReadings);
+      setLastTimestamp(toValidDate(eventTimestamp));
       setPartName(eventPartName);
       setShotTime(nextShotTime || "");
       setCycleHistory(prev => [historyItem, ...prev].slice(0, 100));
       setCycleCount(c => c + 1);
-      Object.entries(r).forEach(([k, v]) => {
+      Object.entries(safeReadings).forEach(([k, v]) => {
         if (v?.value !== undefined && v.value !== null) pushSpark(k, v.value);
       });
       setConfigMessage(`${machines.find((machine) => getMachineKey(machine) === key)?.name || MACHINE_NAMES[ip] || ip} live data received.`);
@@ -466,14 +502,16 @@ function PLCDashboard() {
   }, [normalizeConfig, pushSpark]);
 
   const st = STATUS_CFG[cycleStatus] || STATUS_CFG.idle;
-  const shotNumber = readings.shot_number?.value ?? null;
-  const highShot = readings.ok_shot?.value ?? null;
-  const cycleTime = readings.cycle_time?.value ?? null;
-  const shotDate = readings.shot_date?.value || buildShotDateFromRow(
-    Object.fromEntries(Object.entries(readings).map(([name, item]) => [name, item?.value ?? null]))
+  const safeReadings = normalizeReadingMap(readings);
+  const flatReadings = Object.fromEntries(Object.entries(safeReadings).map(([name, item]) => [name, item?.value ?? null]));
+  const shotNumber = getReadingValue(safeReadings, "shot_number");
+  const highShot = getReadingValue(safeReadings, "ok_shot");
+  const cycleTime = getReadingValue(safeReadings, "cycle_time");
+  const shotDate = getReadingValue(safeReadings, "shot_date") || buildShotDateFromRow(
+    flatReadings
   );
-  const plcShotTime = readings.shot_time?.value || shotTime || buildShotTimeFromRow(
-    Object.fromEntries(Object.entries(readings).map(([name, item]) => [name, item?.value ?? null]))
+  const plcShotTime = getReadingValue(safeReadings, "shot_time") || shotTime || buildShotTimeFromRow(
+    flatReadings
   );
   const selectedMachineKey = plcConfig.key || plcConfig.ip;
   const selectedMachine = DEFAULT_MACHINES.find((machine) => getMachineKey(machine) === selectedMachineKey || machine.ip === plcConfig.ip)
@@ -483,26 +521,27 @@ function PLCDashboard() {
   const isLeakTestMachine = selectedMachineKind === "leaktest";
   const selectedMachineStatus = machineStatuses[selectedMachineKey] || machineStatuses[plcConfig.ip] || {};
   const selectedMachineOnline = Boolean(selectedMachineStatus.connected);
-  const selectedPlcConnected = Boolean(selectedMachineStatus.connected || selectedMachineStatus.hasRecentData || readings.plc_ip?.value);
+  const selectedPlcConnected = Boolean(selectedMachineStatus.connected || selectedMachineStatus.hasRecentData || getReadingValue(safeReadings, "plc_ip"));
   const themeLabel = theme === "dark" ? "Dark" : "White";
   const availableGroups = REGISTER_GROUPS.filter((group) => group.kind === selectedMachineKind);
   const validActiveGroup = availableGroups.some((group) => group.id === activeGroup) ? activeGroup : null;
   const displayGroups = validActiveGroup
     ? availableGroups.filter(g => g.id === validActiveGroup)
     : availableGroups;
+  const hasReadings = Object.keys(safeReadings).length > 0;
   const reportReading = {
-    ...Object.fromEntries(Object.entries(readings).map(([name, item]) => [name, item?.value ?? null])),
-    machine_name: readings.machine_name?.value || machineName,
-    machine_key: readings.machine_key?.value || selectedMachineKey,
+    ...flatReadings,
+    machine_name: getReadingValue(safeReadings, "machine_name") || machineName,
+    machine_key: getReadingValue(safeReadings, "machine_key") || selectedMachineKey,
     kind: selectedMachineKind,
-    plc_ip: readings.plc_ip?.value || readings.ip?.value || plcConfig.ip,
-    plc_port: readings.plc_port?.value || plcConfig.port,
-    part_name: readings.part_name?.value || readings.part_qr_code?.value || partName,
-    shot_date: readings.shot_date?.value || shotDate,
-    shot_time: readings.shot_time?.value || plcShotTime,
-    shot_datetime: readings.shot_datetime?.value || readings.recorded_at?.value || lastTimestamp?.toISOString(),
-    cycle_end_time: readings.cycle_end_time?.value || lastTimestamp?.toISOString(),
-    recorded_at: readings.shot_datetime?.value || lastTimestamp?.toISOString(),
+    plc_ip: getReadingValue(safeReadings, "plc_ip") || getReadingValue(safeReadings, "ip") || plcConfig.ip,
+    plc_port: getReadingValue(safeReadings, "plc_port") || plcConfig.port,
+    part_name: getReadingValue(safeReadings, "part_name") || getReadingValue(safeReadings, "part_qr_code") || partName,
+    shot_date: getReadingValue(safeReadings, "shot_date") || shotDate,
+    shot_time: getReadingValue(safeReadings, "shot_time") || plcShotTime,
+    shot_datetime: getReadingValue(safeReadings, "shot_datetime") || getReadingValue(safeReadings, "recorded_at") || lastTimestamp?.toISOString(),
+    cycle_end_time: getReadingValue(safeReadings, "cycle_end_time") || lastTimestamp?.toISOString(),
+    recorded_at: getReadingValue(safeReadings, "shot_datetime") || lastTimestamp?.toISOString(),
   };
 
   const resetDashboardData = () => {
@@ -693,18 +732,18 @@ function PLCDashboard() {
             <MetricTile label={isLeakTestMachine ? "Part QR Code" : "Part Name"} value={partName || "-"} tone="cyan" />
             <MetricTile
               label={isLeakTestMachine ? "Result" : "Shot Number"}
-              value={isLeakTestMachine ? readings.result?.value ?? null : shotNumber}
+              value={isLeakTestMachine ? getReadingValue(safeReadings, "result") : shotNumber}
               tone="cyan"
             />
             <MetricTile
               label={isLeakTestMachine ? "Body Leak" : "OK Shot"}
-              value={isLeakTestMachine ? readings.body_leak_value?.value ?? null : highShot}
+              value={isLeakTestMachine ? getReadingValue(safeReadings, "body_leak_value") : highShot}
               tone="green"
             />
             {isLeakTestMachine && (
               <MetricTile
                 label="GALL-1 / GALL-2"
-                value={[readings.gall_1?.value, readings.gall_2?.value].filter(value => value !== null && value !== undefined).join(" / ") || null}
+                value={[getReadingValue(safeReadings, "gall_1"), getReadingValue(safeReadings, "gall_2")].filter(value => value !== null && value !== undefined).join(" / ") || null}
                 tone="amber"
               />
             )}
@@ -766,7 +805,7 @@ function PLCDashboard() {
                 </div>
               </div>
 
-              {Object.keys(readings).length === 0 && (
+              {!hasReadings && (
                 <div className="no-data">
                   <div className="no-data-title">Waiting for first production cycle</div>
                   <div className="no-data-text">
@@ -777,13 +816,13 @@ function PLCDashboard() {
                 </div>
               )}
 
-              {Object.keys(readings).length > 0 && viewMode === "table" && (
+              {hasReadings && viewMode === "table" && (
                 <div className="table-layout">
-                  <ParameterTable groups={displayGroups} readings={readings} />
+                  <ParameterTable groups={displayGroups} readings={safeReadings} />
                 </div>
               )}
 
-              {Object.keys(readings).length > 0 && viewMode === "cards" && displayGroups.map(group => (
+              {hasReadings && viewMode === "cards" && displayGroups.map(group => (
                   <section
                     key={group.id}
                     className="group-section"
@@ -798,7 +837,7 @@ function PLCDashboard() {
 
                     <div className="cards-grid">
                       {group.keys.map(({ name, unit, label }) => {
-                        const reg = readings[name];
+                        const reg = safeReadings[name];
                         return (
                           <ValueCard
                             key={name}
@@ -824,7 +863,7 @@ function PLCDashboard() {
                 socketConnected={socketConnected}
                 monitoringRunning={monitoringRunning}
                 selectedMachineStatus={selectedMachineStatus}
-                readings={readings}
+                readings={safeReadings}
                 lastTimestamp={lastTimestamp}
               />
 
@@ -835,7 +874,7 @@ function PLCDashboard() {
                     <div className="info-time">{lastTimestamp.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}</div>
                     <div className="info-date">{formatDateOnly(lastTimestamp)}</div>
                     <div className="info-ct">
-                      {isLeakTestMachine ? "Result" : "Shot"} {formatValue(isLeakTestMachine ? readings.result?.value ?? null : shotNumber)} | CT {formatValue(cycleTime)} sec
+                      {isLeakTestMachine ? "Result" : "Shot"} {formatValue(isLeakTestMachine ? getReadingValue(safeReadings, "result") : shotNumber)} | CT {formatValue(cycleTime)} sec
                     </div>
                     {partName && (
                       <div className="info-ct">
@@ -856,7 +895,7 @@ function PLCDashboard() {
                   <div className="history-scroll">
                     {cycleHistory.map((h, i) => (
                       <div key={h.id} className="hist-row">
-                        <span className="hist-time">{h.timestamp.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}</span>
+                        <span className="hist-time">{formatHistoryTime(h.timestamp)}</span>
                         <span className={`hist-ct ${i > 0 ? "old" : ""}`}>{h.cycleTime}s</span>
                       </div>
                     ))}
