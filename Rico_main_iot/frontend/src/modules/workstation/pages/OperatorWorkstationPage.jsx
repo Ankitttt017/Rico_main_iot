@@ -1,22 +1,22 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { io } from "socket.io-client";
+import BrandLogo from "../../../components/common/BrandLogo";
 import {
   Activity,
   AlertTriangle,
+  BarChart3,
+  Bell,
+  ClipboardCheck,
   ClipboardList,
   Download,
+  FileText,
   Gauge,
-  Languages,
   LogOut,
-  Moon,
   Monitor,
   Package,
   RefreshCw,
-  Save,
-  Settings,
-  Sun,
   Timer,
   User,
-  Wrench,
   X,
 } from "lucide-react";
 import {
@@ -26,6 +26,7 @@ import {
   getPlcLatestReadings,
   getPlcReadingHistory,
 } from "../../../services/api";
+import { SOCKET_URL } from "../../../services/endpoints";
 
 const PLANTS = [
   { code: "1002", name: "Gurugram Plant", location: "Rico, Gurugram" },
@@ -39,6 +40,9 @@ const DIVISION_OPTIONS = [
   { value: "HPDC", label: "HPDC" },
   { value: "Machining", label: "Machining" },
 ];
+
+const LIVE_BREAKDOWN_TIMEOUT_MS = 120000;
+const BREAKDOWN_HISTORY_KEY = "rico_workstation_breakdown_history_v2";
 
 const PLC_REGISTER_GROUPS = [
   {
@@ -120,12 +124,12 @@ const PLC_REGISTER_GROUPS = [
     keys: [
       { name: "cooling_water_mov", label: "Cooling Water MOV", unit: "L/min" },
       { name: "cooling_water_sta", label: "Cooling Water STA", unit: "L/min" },
-      { name: "furnace_metal_temp", label: "Furnace Metal Temp", unit: "C" },
-      { name: "fixed_die_temp_f1", label: "Fixed Die Temp F1", unit: "C" },
-      { name: "fixed_die_temp_f2", label: "Fixed Die Temp F2", unit: "C" },
-      { name: "moving_die_temp_m1", label: "Moving Die Temp M1", unit: "C" },
-      { name: "moving_die_temp_m2", label: "Moving Die Temp M2", unit: "C" },
-      { name: "slide_temp_s1", label: "Slide Temp S1", unit: "C" },
+      { name: "furnace_metal_temp", label: "Furnace Metal Temp", unit: "°C" },
+      { name: "fixed_die_temp_f1", label: "Fixed Die Temp F1", unit: "°C" },
+      { name: "fixed_die_temp_f2", label: "Fixed Die Temp F2", unit: "°C" },
+      { name: "moving_die_temp_m1", label: "Moving Die Temp M1", unit: "°C" },
+      { name: "moving_die_temp_m2", label: "Moving Die Temp M2", unit: "°C" },
+      { name: "slide_temp_s1", label: "Slide Temp S1", unit: "°C" },
     ],
   },
   {
@@ -166,7 +170,7 @@ const SelectField = ({ label, value, onChange, children, theme = "light" }) => (
       className={`h-[38px] w-full rounded border px-3 text-sm font-semibold outline-none transition ${
         theme === "dark"
           ? "border-[#303848] bg-black text-zinc-300 focus:border-[#626b7b]"
-          : "border-[#c8d8ff] bg-[#f8fbff] text-slate-800 shadow-sm focus:border-[#4b49ac] focus:ring-2 focus:ring-[#98bdff]/40"
+          : "border-[#c9d8ea] bg-[#f8fbff] text-slate-800 shadow-sm focus:border-[#1474b8] focus:ring-2 focus:ring-[#1474b8]/15"
       }`}
     >
       {children}
@@ -265,12 +269,12 @@ const getPlcTableRows = (reading) => {
   return [...groupRows, ...extraRows];
 };
 
-const PlcMachineCard = ({ reading, machineInfo, lineInfo, theme = "light", currentUser, onOpenTable }) => {
+const OldPlcMachineCard = ({ reading, machineInfo, lineInfo, theme = "light", currentUser, onOpenTable }) => {
   const isDark = theme === "dark";
   const online = Boolean(reading?.is_online);
   const machineName = reading?.machine_name || machineInfo?.name || "PLC Machine";
-  const successTone = isDark ? "text-[#10ff00]" : "text-emerald-700";
-  const dangerTone = isDark ? "text-red-200" : "text-[#f3797e]";
+  const successTone = isDark ? "text-emerald-300" : "text-emerald-700";
+  const dangerTone = isDark ? "text-rose-200" : "text-rose-600";
   const productionMetrics = [
     { label: "Cycle Time", value: reading?.cycle_time, unit: "s", icon: Timer, tone: successTone },
     { label: "Shot Date", value: formatDateOnly(reading?.shot_date), icon: ClipboardList, tone: successTone },
@@ -278,8 +282,12 @@ const PlcMachineCard = ({ reading, machineInfo, lineInfo, theme = "light", curre
     { label: "Shot Number", value: reading?.shot_number, icon: Activity, tone: successTone },
     { label: "OK Shot", value: reading?.ok_shot, icon: Gauge, tone: successTone },
     { label: "Clamp Tonnage", value: reading?.clamp_tonnage, unit: "T", icon: Gauge, tone: dangerTone },
-    { label: "Metal Temp", value: reading?.furnace_metal_temp, unit: "C", icon: AlertTriangle, tone: dangerTone },
+    { label: "Metal Temp", value: reading?.furnace_metal_temp, unit: "°C", icon: AlertTriangle, tone: dangerTone },
   ];
+  const alertMetrics = [
+    { label: "Metal Temp", value: reading?.furnace_metal_temp, unit: "°C" },
+    { label: "Clamp Tonnage", value: reading?.clamp_tonnage, unit: "T" },
+  ].filter((item) => item.value !== null && item.value !== undefined && item.value !== "");
   const timingMetrics = [
     { label: "Die Close/Core In", value: reading?.die_close_core_in_time, unit: "s" },
     { label: "Pouring", value: reading?.pouring_time, unit: "s" },
@@ -293,57 +301,37 @@ const PlcMachineCard = ({ reading, machineInfo, lineInfo, theme = "light", curre
   return (
     <article className={`overflow-hidden rounded-xl border ${
       isDark
-        ? "border-red-950/50 bg-gradient-to-r from-[#720c16] via-[#4b080f] to-[#090909] shadow-[0_18px_42px_rgba(0,0,0,0.42)]"
-        : "border-[#b6caff] bg-gradient-to-br from-[#e4ecff] via-[#d9e6ff] to-[#cedcff] shadow-[0_24px_54px_rgba(75,73,172,0.26)] ring-1 ring-white/70"
+        ? "border-slate-800 bg-gradient-to-br from-[#111827] via-[#0f172a] to-[#020617] shadow-[0_18px_42px_rgba(0,0,0,0.42)]"
+        : "border-[#bfd0e8] bg-gradient-to-br from-white via-[#f4f8fd] to-[#e9f1fb] shadow-[0_20px_44px_rgba(19,75,143,0.14)] ring-1 ring-white/80"
     }`}>
       <div className="p-4">
-        <div className="grid items-start gap-5 xl:grid-cols-[1.25fr_0.9fr_auto]">
+        <div className="grid items-start gap-5 xl:grid-cols-[1.25fr_auto]">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <Monitor className={`h-5 w-5 ${isDark ? "text-white" : "text-[#20224a]"}`} />
-              <h2 className={`truncate text-lg font-black ${isDark ? "text-white" : "text-[#20224a]"}`}>{machineName}</h2>
+              <Monitor className={`h-5 w-5 ${isDark ? "text-white" : "text-[#0b2f68]"}`} />
+              <h2 className={`truncate text-lg font-black ${isDark ? "text-white" : "text-[#0b2f68]"}`}>{machineName}</h2>
             </div>
             <div className={`mt-2 flex items-center gap-2 text-sm font-bold ${isDark ? "text-zinc-200" : "text-slate-700"}`}>
               <Package className="h-4 w-4" />
               <span className="truncate">{reading?.part_name || "No part assigned"}</span>
             </div>
-            <p className={`mt-3 font-mono text-xs font-bold ${isDark ? "text-red-100/70" : "text-slate-500"}`}>
-              {reading?.plc_ip || "-"}:{reading?.plc_port || "-"}
-            </p>
-          </div>
-
-          <div className="min-w-0">
-            <div className="flex items-center gap-3">
-              <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-sm font-black ${isDark ? "bg-white/80 text-slate-700" : "bg-[#dce8ff] text-[#4b49ac] ring-1 ring-[#98bdff]"}`}>
-                {(currentUser?.name || "OP").slice(0, 2).toUpperCase()}
-              </div>
-              <div className="min-w-0">
-                <p className={`truncate text-sm font-black ${isDark ? "text-white" : "text-slate-900"}`}>{currentUser?.name || "Operator"}</p>
-                <p className={`flex items-center gap-1 text-sm font-bold ${isDark ? "text-[#10ff00]" : "text-[#4b49ac]"}`}>
-                  <Activity className="h-4 w-4" />
-                  Live from PlcCycleReadings
-                </p>
-              </div>
-            </div>
           </div>
 
           <div className="flex flex-wrap justify-start gap-3 xl:justify-end">
             <span className={`inline-flex h-10 min-w-[118px] items-center justify-center rounded-md px-4 text-sm font-black ${
-              online ? isDark ? "bg-[#2d2929] text-white" : "bg-emerald-50 text-emerald-700" : isDark ? "bg-red-500/15 text-red-100" : "bg-[#fff0f1] text-[#f3797e]"
+              online ? isDark ? "bg-emerald-500/15 text-emerald-200" : "bg-emerald-50 text-emerald-700" : isDark ? "bg-red-500/15 text-red-100" : "bg-rose-50 text-rose-600"
             }`}>
               {online ? "Complete" : "Offline"}
             </span>
             <button
               type="button"
               onClick={() => onOpenTable(reading)}
-              className="flex h-10 w-24 items-center justify-center rounded-md bg-[#4b49ac] text-white transition hover:bg-[#3f3d9b]"
-              title="See table and reports"
+              className="flex h-10 items-center justify-center gap-2 rounded-md bg-[#134b8f] px-4 text-sm font-black text-white transition hover:bg-[#0d3a70]"
+              title="Open detailed report"
             >
               <ClipboardList className="h-5 w-5" />
+              Details
             </button>
-            <span className={`flex h-10 w-20 items-center justify-center rounded-md ${isDark ? "bg-[#2b2929] text-white" : "bg-slate-100 text-slate-700"}`}>
-              <Timer className="h-5 w-5" />
-            </span>
           </div>
         </div>
 
@@ -356,34 +344,240 @@ const PlcMachineCard = ({ reading, machineInfo, lineInfo, theme = "light", curre
           ))}
         </div>
 
-        <div className={`mt-4 grid overflow-hidden rounded-lg border md:grid-cols-2 xl:grid-cols-5 ${isDark ? "border-white/10 bg-black/20" : "border-[#b6caff] bg-[#eef4ff]/80"}`}>
-          {[
-            ["Line", lineInfo?.line_name],
-            ["Machine Code", machineInfo?.machine_code],
-            ["Protocol", machineInfo?.protocol],
-            ["Configured IP", machineInfo?.ip_address || reading?.plc_ip],
-            ["Port", machineInfo?.port || reading?.plc_port],
-          ].map(([label, value]) => (
-            <div key={label} className={`min-w-0 border-b border-r px-4 py-3 last:border-r-0 ${isDark ? "border-white/10" : "border-[#dce8ff]"}`}>
-              <p className={`text-[11px] font-black uppercase tracking-wide ${isDark ? "text-red-100/60" : "text-[#667092]"}`}>{label}</p>
-              <p className={`mt-1 min-w-0 break-words text-sm font-black ${isDark ? "text-white" : "text-[#20224a]"}`}>{formatValue(value)}</p>
-            </div>
-          ))}
-        </div>
+        {alertMetrics.length > 0 && (
+          <div className={`mt-4 grid gap-3 rounded-lg border p-3 md:grid-cols-2 ${isDark ? "border-rose-500/20 bg-rose-500/10" : "border-rose-200 bg-rose-50"}`}>
+            {alertMetrics.map(({ label, value, unit }) => (
+              <div key={label} className={`flex items-center gap-2 text-sm font-black ${isDark ? "text-rose-100" : "text-rose-700"}`}>
+                <AlertTriangle className="h-4 w-4" />
+                {label}: {formatValue(value, unit || "")}
+              </div>
+            ))}
+          </div>
+        )}
 
-        <div className={`mt-4 grid overflow-hidden rounded-lg border md:grid-cols-2 xl:grid-cols-7 ${isDark ? "border-white/10 bg-red-950/25" : "border-[#b6caff] bg-[#eef4ff]/80"}`}>
+        <div className={`mt-4 grid overflow-hidden rounded-lg border md:grid-cols-2 xl:grid-cols-7 ${isDark ? "border-slate-700 bg-slate-900/60" : "border-[#bfd0e8] bg-white/72"}`}>
           {timingMetrics.map(({ label, value, unit }) => (
-            <div key={label} className={`min-w-0 border-b border-r px-4 py-3 last:border-r-0 ${isDark ? "border-white/10" : "border-[#dce8ff]"}`}>
-              <p className={`text-[11px] font-black uppercase tracking-wide ${isDark ? "text-red-100/60" : "text-[#667092]"}`}>{label}</p>
-              <p className={`mt-1 break-words text-base font-black ${isDark ? "text-white" : "text-[#20224a]"}`}>{formatValue(value, unit || "")}</p>
+            <div key={label} className={`min-w-0 border-b border-r px-4 py-3 last:border-r-0 ${isDark ? "border-slate-700" : "border-[#dce8f5]"}`}>
+              <p className={`text-[11px] font-black uppercase tracking-wide ${isDark ? "text-slate-400" : "text-[#667092]"}`}>{label}</p>
+              <p className={`mt-1 break-words text-base font-black ${isDark ? "text-white" : "text-[#0b2f68]"}`}>{formatValue(value, unit || "")}</p>
             </div>
           ))}
         </div>
 
-        <div className={`mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-3 text-xs font-bold ${isDark ? "border-white/10 text-red-100/70" : "border-red-100 text-slate-500"}`}>
-          <span>Shot No: {formatValue(reading?.shot_number)}</span>
-          <span>OK: {formatValue(reading?.ok_shot)}</span>
+        <details className={`mt-4 rounded-lg border ${isDark ? "border-slate-700 bg-slate-950/40" : "border-[#dce8f5] bg-white/60"}`}>
+          <summary className={`cursor-pointer px-4 py-3 text-xs font-black uppercase tracking-[0.14em] ${isDark ? "text-slate-300" : "text-[#0b2f68]"}`}>
+            Diagnostics
+          </summary>
+          <div className={`grid overflow-hidden border-t md:grid-cols-2 xl:grid-cols-5 ${isDark ? "border-slate-700" : "border-[#dce8f5]"}`}>
+            {[
+              ["Line", lineInfo?.line_name],
+              ["Machine Code", machineInfo?.machine_code],
+              ["Protocol", machineInfo?.protocol],
+              ["Configured IP", machineInfo?.ip_address || reading?.plc_ip],
+              ["Port", machineInfo?.port || reading?.plc_port],
+            ].map(([label, value]) => (
+              <div key={label} className={`min-w-0 border-b border-r px-4 py-3 last:border-r-0 ${isDark ? "border-slate-700" : "border-[#dce8f5]"}`}>
+                <p className={`text-[11px] font-black uppercase tracking-wide ${isDark ? "text-slate-400" : "text-[#667092]"}`}>{label}</p>
+                <p className={`mt-1 min-w-0 break-words text-sm font-black ${isDark ? "text-white" : "text-[#0b2f68]"}`}>{formatValue(value)}</p>
+              </div>
+            ))}
+          </div>
+        </details>
+
+        <div className={`mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-3 text-xs font-bold ${isDark ? "border-slate-700 text-slate-400" : "border-[#dce8f5] text-slate-500"}`}>
           <span>Last record: {formatDateTime(reading?.recorded_at)}</span>
+        </div>
+      </div>
+    </article>
+  );
+};
+
+const SHIFT_SLOTS = [
+  "14:30-15:30",
+  "15:30-16:30",
+  "16:30-17:30",
+  "17:30-18:30",
+  "18:30-19:30",
+  "19:30-20:30",
+  "20:30-21:30",
+  "21:30-22:30",
+  "22:30-23:00",
+];
+
+const getFirstValue = (...values) => values.find((value) => value !== null && value !== undefined && value !== "");
+
+const formatPercent = (value) => `${formatValue(getFirstValue(value, 0), "%")}`;
+
+const formatDurationLabel = (value) => {
+  const next = getFirstValue(value, "00:00");
+  if (typeof next === "string") {
+    return next.includes("HH:MM") ? next : `${next} (HH:MM)`;
+  }
+  const totalMinutes = Number(next) || 0;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")} (HH:MM)`;
+};
+
+const formatElapsed = (ms) => {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+};
+
+const getReadingKey = (reading = {}) => String(reading.machine_key || reading.plc_ip || reading.ip || "").trim();
+
+const flattenLivePayload = (payload = {}) => {
+  const readings = Object.fromEntries(
+    Object.entries(payload.readings || {}).map(([name, item]) => [name, item?.value ?? item])
+  );
+  return {
+    ...readings,
+    machine_key: payload.machineKey || payload.config?.key || readings.machine_key,
+    machine_name: payload.machine || readings.machine_name || readings.machine,
+    machine_type: payload.machineType || payload.config?.machineType,
+    plc_ip: payload.config?.ip || readings.plc_ip || readings.ip,
+    plc_port: payload.config?.port || readings.plc_port,
+    part_name: payload.partName || readings.part_name,
+    cycle_time: payload.cycleTime ?? readings.cycle_time,
+    recorded_at: payload.observedAt || payload.timestamp || new Date().toISOString(),
+    is_online: true,
+    has_data: true,
+  };
+};
+
+const PlcMachineCard = ({ reading, machineInfo, lineInfo, onOpenTable, liveState }) => {
+  const baseMachineName = reading?.machine_name || machineInfo?.name || "UBE 850T-2";
+  const machineName = /^rico\b/i.test(baseMachineName) ? baseMachineName : `RICO ${baseMachineName}`;
+  const partLabel = reading?.part_name || lineInfo?.part_name || machineInfo?.part_name || "No part assigned";
+  const isBreakdown = liveState?.status === "breakdown";
+  const elapsedMs = liveState?.elapsedMs || 0;
+  const cycleActual = getFirstValue(reading?.cycle_time, reading?.actual_cycle_time, 0);
+  const cycleTarget = getFirstValue(reading?.target_cycle_time, reading?.standard_cycle_time, reading?.ideal_cycle_time, 0);
+  const loadUnloadActual = getFirstValue(reading?.load_unload_time, reading?.load_unload_actual, 0);
+  const loadUnloadTarget = getFirstValue(reading?.load_unload_target, reading?.target_load_unload_time, 0);
+  const mu = getFirstValue(reading?.mu, reading?.machine_utilization, 0);
+  const pu = getFirstValue(reading?.pu, reading?.production_utilization, 0);
+  const averageEfficiency = getFirstValue(reading?.average_efficiency, reading?.efficiency, 0);
+  const progress = Math.max(0, Math.min(Number(getFirstValue(reading?.progress_pct, reading?.progress, pu, 0)) || 0, 100));
+  const actionButtons = [
+    { label: "Checklist", icon: ClipboardCheck, active: true },
+    { label: "Analytics", icon: BarChart3, active: true },
+    { label: "Report", icon: FileText, active: true, onClick: () => onOpenTable(reading) },
+  ];
+
+  return (
+    <article className="overflow-hidden rounded-md border border-zinc-900 bg-[linear-gradient(135deg,#2b2728_0%,#181616_52%,#090909_100%)] px-4 py-4 shadow-[0_18px_44px_rgba(0,0,0,0.42)]">
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(220px,1fr)_minmax(220px,0.9fr)] 2xl:grid-cols-[minmax(260px,1fr)_minmax(260px,0.8fr)_minmax(420px,1.2fr)]">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <Monitor className="h-5 w-5 shrink-0 text-white" />
+            <h2 className="truncate text-lg font-black text-white">{machineName}</h2>
+          </div>
+          <div className="mt-2 flex min-w-0 items-center gap-2 text-sm font-bold uppercase text-zinc-300">
+            <Package className="h-4 w-4 shrink-0" />
+            <span className="truncate">{partLabel}</span>
+          </div>
+        </div>
+
+        <div className="flex items-start gap-3">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-zinc-300">
+            <User className="h-9 w-9" />
+          </div>
+          <div className="min-w-0 pt-0.5">
+            <p className="truncate text-base font-bold text-zinc-300">No Operator Selected</p>
+            <p className="mt-1 flex items-center gap-1.5 text-sm font-bold text-[#00e20b]">
+              <BarChart3 className="h-4 w-4" />
+              Average Efficiency : {formatPercent(averageEfficiency)}
+            </p>
+          </div>
+        </div>
+
+        <div className="grid items-start gap-3 lg:col-span-2 lg:grid-cols-[1fr_auto] 2xl:col-span-1">
+          {isBreakdown && (
+            <div className="flex items-center justify-center gap-2 pt-2 text-base font-black text-red-500">
+              <span>Die Breakdown</span>
+              <Timer className="h-4 w-4" />
+              <span>{formatElapsed(elapsedMs)}</span>
+            </div>
+          )}
+          {!isBreakdown && <div />}
+          <div className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(64px,1fr))] sm:[grid-template-columns:repeat(5,minmax(72px,1fr))]">
+          {actionButtons.map(({ label, icon: Icon, active, onClick }) => (
+            <button
+              key={label}
+              type="button"
+              onClick={onClick}
+              className={`flex h-10 min-w-[64px] items-center justify-center rounded-md transition sm:min-w-[72px] ${
+                active
+                  ? "bg-[linear-gradient(90deg,#d93434,#351d1d)] text-white hover:brightness-110"
+                  : "bg-[linear-gradient(90deg,#2a2a2a,#111111)] text-white hover:bg-zinc-800"
+              }`}
+              title={label}
+            >
+              <Icon className="h-5 w-5" />
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => onOpenTable(reading)}
+            className="flex h-10 min-w-[64px] items-center justify-center rounded-md bg-emerald-700 text-white transition hover:bg-emerald-600 sm:min-w-[72px]"
+            title="Details"
+          >
+            <ClipboardList className="h-5 w-5" />
+          </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 text-sm font-bold [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))]">
+        <div className="flex items-center gap-1.5 text-[#00e20b]">
+          <Timer className="h-4 w-4" />
+          Cycletime:{formatValue(cycleActual, "s")} / {formatValue(cycleTarget, "s")}
+        </div>
+        <div className="flex items-center gap-1.5 text-[#00e20b]">
+          <Activity className="h-4 w-4" />
+          Load & Unload: {formatValue(loadUnloadActual, "s")} / {formatValue(loadUnloadTarget, "s")}
+        </div>
+        <div className="flex items-center gap-1.5 text-[#00e20b]">
+          <Gauge className="h-4 w-4" />
+          MU: {formatPercent(mu)}
+        </div>
+        <div className="flex items-center gap-1.5 text-white">
+          <span className="inline-flex h-6 items-center gap-1 rounded-full bg-red-600 px-3 font-black">
+            <Gauge className="h-4 w-4" />
+            PU: {formatPercent(pu)}
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5 text-red-400">
+          <AlertTriangle className="h-4 w-4" />
+          DT: {formatDurationLabel(reading?.dt || reading?.down_time)}
+        </div>
+        <div className="flex items-center gap-1.5 text-red-400">
+          <AlertTriangle className="h-4 w-4" />
+          Idle: {formatDurationLabel(reading?.idle_time)}
+        </div>
+        <div className="flex items-center gap-1.5 text-red-400">
+          <AlertTriangle className="h-4 w-4" />
+          LS: {formatDurationLabel(reading?.ls_time || reading?.line_stop_time)}
+        </div>
+        <div className="flex items-center gap-1.5 text-red-400">
+          <AlertTriangle className="h-4 w-4" />
+          ES: {formatDurationLabel(reading?.es_time || reading?.emergency_stop_time)}
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-2 text-center text-sm font-black text-zinc-300 [grid-template-columns:repeat(auto-fit,minmax(104px,1fr))]">
+        {SHIFT_SLOTS.map((slot) => (
+          <span key={slot}>{slot}</span>
+        ))}
+      </div>
+
+      <div className="mt-3 flex h-[42px] w-full max-w-[420px] overflow-hidden rounded-full bg-zinc-900">
+        <div className="flex h-full min-w-[56px] items-center justify-center rounded-full bg-red-600 px-5 text-base font-black text-white transition-[width] duration-500" style={{ width: `${progress}%` }}>
+          {formatPercent(progress)}
         </div>
       </div>
     </article>
@@ -590,7 +784,7 @@ const PlcTableModal = ({ reading, theme = "dark", onClose }) => {
 };
 
 const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
-  const [theme, setTheme] = useState("light");
+  const theme = "dark";
   const [selectedPlant, setSelectedPlant] = useState(PLANTS[0]);
   const [divisionFilter, setDivisionFilter] = useState("HPDC");
   const [selectedLine, setSelectedLine] = useState("");
@@ -604,6 +798,17 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
   const [plcLoading, setPlcLoading] = useState(true);
   const [plcError, setPlcError] = useState("");
   const [tableReading, setTableReading] = useState(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [lastLiveByMachine, setLastLiveByMachine] = useState({});
+  const [breakdownHistory, setBreakdownHistory] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem(BREAKDOWN_HISTORY_KEY) || "[]");
+    } catch {
+      return [];
+    }
+  });
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const lastStatusRef = useRef({});
 
   const loadWorkstation = useCallback(async () => {
     setLoading(true);
@@ -642,12 +847,38 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
     loadWorkstation();
   }, [loadWorkstation]);
 
+  useEffect(() => {
+    localStorage.removeItem("rico_workstation_breakdown_history");
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(BREAKDOWN_HISTORY_KEY, JSON.stringify(breakdownHistory.slice(-300)));
+  }, [breakdownHistory]);
+
   const loadPlcReadings = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setPlcLoading(true);
     setPlcError("");
     try {
       const response = await getPlcLatestReadings();
-      setPlcReadings(Array.isArray(response.data?.data) ? response.data.data : []);
+      const rows = Array.isArray(response.data?.data) ? response.data.data : [];
+      setPlcReadings(rows);
+      setLastLiveByMachine((current) => {
+        const next = { ...current };
+        const now = Date.now();
+        rows.forEach((row) => {
+          const key = getReadingKey(row);
+          const recordedAt = row.recorded_at ? new Date(row.recorded_at).getTime() : now;
+          if (key && row.has_data && row.is_online && now - recordedAt <= LIVE_BREAKDOWN_TIMEOUT_MS) {
+            next[key] = now;
+          }
+        });
+        return next;
+      });
     } catch {
       setPlcError("Unable to load live PLC readings.");
     } finally {
@@ -671,6 +902,37 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
       window.clearInterval(interval);
     };
   }, [loadPlcReadings]);
+
+  useEffect(() => {
+    const socket = io(SOCKET_URL, {
+      transports: ["websocket", "polling"],
+      reconnection: true,
+    });
+
+    const applyLivePayload = (payload = {}) => {
+      const row = flattenLivePayload(payload);
+      const key = getReadingKey(row);
+      if (!key) return;
+
+      setLastLiveByMachine((current) => ({ ...current, [key]: Date.now() }));
+      setPlcReadings((current) => {
+        const index = current.findIndex((item) => getReadingKey(item) === key || item.plc_ip === row.plc_ip);
+        if (index === -1) return [row, ...current];
+        const next = [...current];
+        next[index] = { ...next[index], ...row };
+        return next;
+      });
+    };
+
+    socket.on("plc_data", applyLivePayload);
+    socket.on("cycle_complete", applyLivePayload);
+
+    return () => {
+      socket.off("plc_data", applyLivePayload);
+      socket.off("cycle_complete", applyLivePayload);
+      socket.disconnect();
+    };
+  }, []);
 
   const openPlcTable = useCallback((reading) => {
     setTableReading(reading);
@@ -707,6 +969,91 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
     return plcReadings.length === 1 ? plcReadings : [];
   }, [plcReadings, selectedMachineIps]);
 
+  const visibleCardReadings = useMemo(() => {
+    if (visiblePlcReadings.length) return visiblePlcReadings;
+    return workstationRows
+      .filter((item) => item.machine)
+      .map((item) => ({
+        machine_key: item.machine?.machine_key || item.machine?.ip_address || item.machine?.id,
+        machine_name: item.machine?.name || item.machine?.machine_name,
+        plc_ip: item.machine?.ip_address,
+        plc_port: item.machine?.port,
+        part_name: item.line?.part_name,
+        has_data: false,
+        is_online: false,
+      }));
+  }, [visiblePlcReadings, workstationRows]);
+
+  const cardLiveStates = useMemo(() => {
+    return Object.fromEntries(visibleCardReadings.map((reading) => {
+      const key = getReadingKey(reading);
+      const lastSeen = lastLiveByMachine[key] || 0;
+      const elapsedMs = lastSeen ? nowMs - lastSeen : nowMs;
+      const isBreakdown = !lastSeen || elapsedMs > LIVE_BREAKDOWN_TIMEOUT_MS;
+      const startedAt = isBreakdown ? (lastSeen ? lastSeen + LIVE_BREAKDOWN_TIMEOUT_MS : nowMs - elapsedMs) : lastSeen;
+      return [key, {
+        status: isBreakdown ? "breakdown" : "running",
+        elapsedMs: isBreakdown ? nowMs - startedAt : elapsedMs,
+        startedAt,
+      }];
+    }));
+  }, [lastLiveByMachine, nowMs, visibleCardReadings]);
+
+  useEffect(() => {
+    const nextStatuses = {};
+    const events = [];
+
+    visibleCardReadings.forEach((reading) => {
+      const key = getReadingKey(reading);
+      if (!key) return;
+      const state = cardLiveStates[key];
+      const previous = lastStatusRef.current[key];
+      const machineName = reading.machine_name || reading.plc_ip || key;
+      nextStatuses[key] = { status: state.status, startedAt: state.startedAt };
+
+      if (!previous) {
+        return;
+      }
+
+      if (previous.status === "running" && state.status === "breakdown") {
+        events.push({
+          id: `${key}-breakdown-${state.startedAt}`,
+          machineKey: key,
+          machineName,
+          status: "breakdown",
+          startedAt: new Date(state.startedAt).toISOString(),
+          endedAt: null,
+          durationSec: null,
+          reason: "No live PLC data for 2 minutes",
+        });
+      } else if (previous.status === "breakdown" && state.status === "running") {
+        setBreakdownHistory((current) => current.map((event) => {
+          if (event.machineKey !== key || event.status !== "breakdown" || event.endedAt) return event;
+          return {
+            ...event,
+            endedAt: new Date(nowMs).toISOString(),
+            durationSec: Math.max(0, Math.floor((nowMs - new Date(event.startedAt).getTime()) / 1000)),
+            reason: "Machine running resumed",
+          };
+        }));
+      }
+    });
+
+    lastStatusRef.current = nextStatuses;
+    if (events.length) {
+      setBreakdownHistory((current) => [...current, ...events].slice(-300));
+    }
+  }, [cardLiveStates, nowMs, visibleCardReadings]);
+
+  const visibleBreakdownHistory = useMemo(() => {
+    const keys = new Set(visibleCardReadings.map((reading) => getReadingKey(reading)).filter(Boolean));
+    return breakdownHistory
+      .filter((event) => event.status === "breakdown")
+      .filter((event) => !keys.size || keys.has(event.machineKey))
+      .slice(-8)
+      .reverse();
+  }, [breakdownHistory, visibleCardReadings]);
+
   const getWorkstationRowForReading = useCallback((reading) => {
     const readingIp = String(reading?.plc_ip || "").trim();
     return workstationRows.find((item) => String(item.machine?.ip_address || "").trim() === readingIp) || workstationRows[0] || {};
@@ -718,39 +1065,19 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
     <main className={`min-h-screen transition-colors ${
       isDark
         ? "bg-black text-white"
-        : "bg-[radial-gradient(circle_at_16%_0%,rgba(152,189,255,0.36),transparent_28rem),radial-gradient(circle_at_88%_10%,rgba(121,120,233,0.15),transparent_24rem),linear-gradient(180deg,#f7f9ff_0%,#eef3ff_54%,#e8efff_100%)] text-slate-950"
+        : "bg-[radial-gradient(circle_at_16%_0%,rgba(159,208,245,0.34),transparent_28rem),radial-gradient(circle_at_88%_10%,rgba(0,124,186,0.12),transparent_24rem),linear-gradient(180deg,#f8fbff_0%,#eef4fb_54%,#e7eff8_100%)] text-slate-950"
     }`}>
-      <header className={`sticky top-0 z-20 border-b px-7 py-3 shadow-[0_10px_35px_rgba(0,0,0,0.18)] ${
+      <header className={`sticky top-0 z-20 border-b px-4 py-3 shadow-[0_10px_35px_rgba(0,0,0,0.18)] sm:px-7 ${
         isDark ? "border-white/5 bg-black/95" : "border-[#c8d8ff] bg-[#f8fbff]/95"
       }`}>
-        <div className="flex items-center justify-between gap-4">
-          <div className={`flex h-[56px] w-[230px] items-center justify-center rounded-lg border px-5 ${
-            isDark ? "border-white/10 bg-gradient-to-br from-zinc-950 to-zinc-900 shadow-[0_0_0_1px_rgba(255,255,255,0.08)]" : "border-[#c8d8ff] bg-gradient-to-br from-[#f8fbff] to-[#edf4ff] shadow-[0_8px_22px_rgba(75,73,172,0.12)]"
-          }`}>
-            <div className="text-center leading-none">
-              <div className={`text-2xl font-black tracking-[0.2em] ${isDark ? "text-white" : "text-[#134b8f]"}`}>RICO</div>
-              <div className={`mt-1 text-[10px] font-extrabold uppercase tracking-[0.14em] ${isDark ? "text-cyan-300" : "text-slate-600"}`}>
-                Auto Industries Limited
-              </div>
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex h-[52px] w-[176px] items-center justify-center rounded-lg border border-white/10 bg-white px-4 shadow-[0_8px_22px_rgba(255,255,255,0.08)] sm:h-[56px] sm:w-[206px] sm:px-5">
+            <div className="scale-[0.84]">
+              <BrandLogo wordmark className="justify-center" />
             </div>
           </div>
           <div className="hidden lg:block" />
           <div className="flex items-center gap-4">
-            <ClipboardList className={`h-5 w-5 ${isDark ? "text-zinc-200" : "text-slate-600"}`} />
-            <Languages className={`h-5 w-5 ${isDark ? "text-zinc-200" : "text-slate-600"}`} />
-            <Wrench className={`h-5 w-5 ${isDark ? "text-zinc-200" : "text-slate-600"}`} />
-            <button
-              type="button"
-              onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
-              className={`flex h-9 w-9 items-center justify-center rounded-lg border transition ${
-                isDark
-                  ? "border-zinc-800 bg-white/5 text-zinc-100 hover:bg-white/10"
-                  : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100"
-              }`}
-              title={isDark ? "Switch to light theme" : "Switch to dark theme"}
-            >
-              {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-            </button>
             <div className="relative">
               <button
                 type="button"
@@ -787,31 +1114,20 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
         </div>
       </header>
 
-      <section className="px-7 pb-8 pt-4">
+      <section className="px-4 pb-6 pt-4 sm:px-6">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-3">
-            <h1 className={`text-2xl font-bold ${isDark ? "text-zinc-200" : "text-slate-950"}`}>Operator</h1>
-            <span className={`h-8 border-l ${isDark ? "border-zinc-700" : "border-slate-300"}`} />
-            <nav className={`flex flex-wrap items-center gap-2 text-sm ${isDark ? "text-zinc-400" : "text-slate-500"}`}>
-              <span>{selectedPlant.location}</span>
-              <span>&gt;</span>
-              <span>{selectedPlant.name}</span>
-              <span>&gt;</span>
-              <span>{divisionFilter || "All Divisions"}</span>
-              <span>&gt;</span>
-              <span>{selectedLineData?.line_name || "Select Line"}</span>
-            </nav>
+            <div>
+              <p className={`text-xs font-black uppercase tracking-[0.18em] ${isDark ? "text-cyan-300" : "text-[#1474b8]"}`}>Digital Workstation</p>
+              <h1 className={`mt-1 text-2xl font-bold ${isDark ? "text-zinc-200" : "text-slate-950"}`}>Live Production</h1>
+            </div>
           </div>
-          <Settings className={`h-8 w-8 ${isDark ? "text-white" : "text-slate-700"}`} />
+          <div className={`rounded-lg border px-3 py-2 text-sm font-bold ${isDark ? "border-zinc-800 bg-white/5 text-zinc-300" : "border-[#c9d8ea] bg-white/80 text-slate-600"}`}>
+            {selectedPlant.name} | {divisionFilter || "All Divisions"} | {selectedLineData?.line_name || "Select Line"}
+          </div>
         </div>
 
-        <div className="mb-6 grid gap-5 md:grid-cols-2 xl:grid-cols-[280px_280px_280px_280px_280px_280px]">
-          <SelectField theme={theme} label="Select Location" value={selectedPlant.code} onChange={(value) => {
-            setSelectedPlant(getPlantByCode(value));
-            setSelectedLine("");
-          }}>
-            {PLANTS.map((plant) => <option key={plant.code} value={plant.code}>{plant.location}</option>)}
-          </SelectField>
+        <div className="mb-5 grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(190px,1fr))] 2xl:[grid-template-columns:repeat(5,minmax(220px,280px))]">
           <SelectField theme={theme} label="Select Plant" value={selectedPlant.code} onChange={(value) => {
             setSelectedPlant(getPlantByCode(value));
             setSelectedLine("");
@@ -833,12 +1149,6 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
             <option value="cell-1">Cell 1</option>
             <option value="cell-2">Cell 2</option>
           </SelectField>
-          <div className="flex items-end">
-            <button type="button" className={`flex h-[38px] w-full items-center justify-center gap-2 rounded-lg text-sm font-extrabold text-white transition ${isDark ? "bg-[#242222] hover:bg-[#343030]" : "bg-[#4b49ac] shadow-[0_10px_22px_rgba(75,73,172,0.24)] hover:bg-[#3f3d9b]"}`}>
-              <Save className="h-4 w-4" />
-              Save Configuration
-            </button>
-          </div>
         </div>
 
         {error && (
@@ -850,9 +1160,9 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
         <section>
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className={`text-xs font-black uppercase tracking-[0.12em] ${isDark ? "text-cyan-400" : "text-[#4b49ac]"}`}>Live PLC Production</p>
+              <p className={`text-xs font-black uppercase tracking-[0.12em] ${isDark ? "text-cyan-400" : "text-[#1474b8]"}`}>Live Production</p>
               <h2 className={`mt-1 text-xl font-black ${isDark ? "text-white" : "text-slate-950"}`}>
-                Machine-wise Latest Cycle Data
+                Latest Cycle Data
               </h2>
             </div>
             <button
@@ -880,24 +1190,79 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
               <RefreshCw className="h-4 w-4 animate-spin" />
               Loading live PLC cards...
             </div>
-          ) : visiblePlcReadings.length ? (
-            <div className="grid gap-5">
-              {visiblePlcReadings.map((reading) => (
+          ) : visibleCardReadings.length ? (
+            <div className="grid gap-4">
+              {visibleCardReadings.map((reading) => (
                 (() => {
                   const row = getWorkstationRowForReading(reading);
+                  const key = getReadingKey(reading) || reading.plc_ip || reading.machine_name;
+                  const state = cardLiveStates[key];
                   return (
-                    <PlcMachineCard
-                      key={reading.plc_ip}
-                      reading={reading}
-                      machineInfo={row.machine}
-                      lineInfo={row.line}
-                      theme={theme}
-                      currentUser={currentUser}
-                      onOpenTable={openPlcTable}
-                    />
+                    <div key={key}>
+                      <PlcMachineCard
+                        reading={reading}
+                        machineInfo={row.machine}
+                        lineInfo={row.line}
+                        theme={theme}
+                        currentUser={currentUser}
+                        liveState={state}
+                        onOpenTable={openPlcTable}
+                      />
+                      <div className="mt-2 flex items-center justify-end">
+                        <button
+                          type="button"
+                          onClick={() => setHistoryOpen((open) => !open)}
+                          className={`flex h-10 items-center gap-2 rounded-md border px-3 text-xs font-black transition ${
+                            state?.status === "breakdown"
+                              ? "border-red-500/30 bg-red-500/10 text-red-200 hover:bg-red-500/20"
+                              : "border-zinc-800 bg-[#101010] text-zinc-300 hover:bg-zinc-900"
+                          }`}
+                          title="Breakdown history"
+                        >
+                          <Bell className="h-4 w-4" />
+                          Breakdown History
+                        </button>
+                      </div>
+                    </div>
                   );
                 })()
               ))}
+              {historyOpen && visibleBreakdownHistory.length > 0 && (
+                <section className="rounded-md border border-zinc-900 bg-[#101010] p-4">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <h3 className="text-sm font-black uppercase tracking-[0.14em] text-zinc-300">Die Breakdown History</h3>
+                    <span className="text-xs font-bold text-zinc-500">Latest {visibleBreakdownHistory.length}</span>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[760px] text-left text-xs">
+                      <thead className="text-zinc-500">
+                        <tr>
+                          <th className="py-2 pr-4 font-black uppercase">Machine</th>
+                          <th className="py-2 pr-4 font-black uppercase">Status</th>
+                          <th className="py-2 pr-4 font-black uppercase">From</th>
+                          <th className="py-2 pr-4 font-black uppercase">To</th>
+                          <th className="py-2 pr-4 font-black uppercase">Duration</th>
+                          <th className="py-2 pr-4 font-black uppercase">Reason</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {visibleBreakdownHistory.map((event) => (
+                          <tr key={event.id} className="border-t border-zinc-900">
+                            <td className="py-2 pr-4 font-bold text-zinc-200">{event.machineName}</td>
+                            <td className={`py-2 pr-4 font-black ${event.status === "breakdown" ? "text-red-300" : "text-emerald-300"}`}>
+                              Die Breakdown
+                            </td>
+                            <td className="py-2 pr-4 font-bold text-zinc-400">{formatDateTime(event.startedAt)}</td>
+                            <td className="py-2 pr-4 font-bold text-zinc-400">{event.endedAt ? formatDateTime(event.endedAt) : "Live"}</td>
+                            <td className="py-2 pr-4 font-bold text-zinc-400">{event.durationSec === null ? "-" : formatElapsed(event.durationSec * 1000)}</td>
+                            <td className="py-2 pr-4 font-bold text-zinc-400">{event.reason}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              )}
             </div>
           ) : (
             <div className={`flex min-h-[180px] items-center justify-center rounded-md border px-4 text-center text-sm font-bold ${
