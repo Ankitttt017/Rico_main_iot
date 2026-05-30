@@ -10,6 +10,19 @@ export default class ErrorBoundary extends React.Component {
     return { hasError: true };
   }
 
+  componentDidCatch() {
+    const reloadKey = "rico_error_reload_attempted";
+    if (sessionStorage.getItem(reloadKey) === "true") return;
+    sessionStorage.setItem(reloadKey, "true");
+    window.location.reload();
+  }
+
+  componentDidUpdate() {
+    if (!this.state.hasError) {
+      sessionStorage.removeItem("rico_error_reload_attempted");
+    }
+  }
+
   render() {
     if (!this.state.hasError) return this.props.children;
 
