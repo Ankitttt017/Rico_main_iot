@@ -6,7 +6,7 @@ import { SOCKET_URL } from "../../../services/endpoints";
 import { DEFAULT_MACHINES, MACHINE_NAMES, PLC_LATEST_POLL_MS, REGISTER_GROUPS, getMachineKey, mergeMachineList } from "../constants";
 import PlcMonitorStyles from "../components/PlcMonitorStyles";
 import PlcReportModal from "../components/PlcReportModal";
-import { MachineStatusCard, MetricTile, ParameterTable, STATUS_CFG, ValueCard, formatValue } from "../components/PlcWidgets";
+import { MachineStatusCard, MetricTile, ParameterTable, STATUS_CFG, ValueCard, formatValue, hasReadableValue } from "../components/PlcWidgets";
 import { buildShotDateFromRow, buildShotTimeFromRow, formatDateOnly, formatDateTime, formatTimeOnly, getMachineKindFromRow, getNumericShotNumber, getReadingShotNumber, getRowTimestamp, rowToReadings } from "../utils/plcFormatters";
 
 function PLCDashboard() {
