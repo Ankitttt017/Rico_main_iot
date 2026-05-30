@@ -1,0 +1,77 @@
+export const PAGE_SIZE = 50;
+export const REFRESH_INTERVAL_MS = 30000;
+
+export const DEFAULT_PLANTS = [
+  { label: "Gurugram Plant", value: "1002" },
+  { label: "Bawal Plant", value: "1008" },
+];
+
+export const LINES_BY_DIVISION = {
+  "": [
+    { label: "All Lines", value: "" },
+    { label: "HPDC Line C01 (135T-250T)", value: "C01" },
+    { label: "HPDC Line C02 (350T-420T)", value: "C02" },
+    { label: "HPDC Line C03 (500T-660T)", value: "C03" },
+    { label: "HPDC Line C04 (800T)", value: "C04" },
+    { label: "HPDC Line C05 (1050T)", value: "C05" },
+    { label: "HPDC Line C06 (1400T-1800T)", value: "C06" },
+    { label: "Trimming & Vibro", value: "C33" },
+    { label: "Furnace", value: "F01" },
+    { label: "Machining Line M01", value: "M01" },
+    { label: "Machining Line M03", value: "M03" },
+    { label: "Machining Line M04", value: "M04" },
+    { label: "Machining Line M05", value: "M05" },
+    { label: "Machining Line M07", value: "M07" },
+    { label: "Machining Line M09", value: "M09" },
+    { label: "Machining Line M10", value: "M10" },
+    { label: "Machining Line M11", value: "M11" },
+    { label: "Machining Line M14", value: "M14" },
+    { label: "Machining Line M15", value: "M15" },
+    { label: "Machining Line M18", value: "M18" },
+    { label: "Machining Line M20", value: "M20" },
+    { label: "Machining Line M61", value: "M61" },
+    { label: "Machining Line M62", value: "M62" },
+    { label: "Paint Shop", value: "P01" },
+  ],
+  HPDC: [
+    { label: "All Lines", value: "" },
+    { label: "HPDC Line C01 (135T-250T)", value: "C01" },
+    { label: "HPDC Line C02 (350T-420T)", value: "C02" },
+    { label: "HPDC Line C03 (500T-660T)", value: "C03" },
+    { label: "HPDC Line C04 (800T)", value: "C04" },
+    { label: "HPDC Line C05 (1050T)", value: "C05" },
+    { label: "HPDC Line C06 (1400T-1800T)", value: "C06" },
+    { label: "Trimming & Vibro", value: "C33" },
+    { label: "Furnace", value: "F01" },
+  ],
+  Machining: [
+    { label: "All Lines", value: "" },
+    { label: "Machining Line M01", value: "M01" },
+    { label: "Machining Line M03", value: "M03" },
+    { label: "Machining Line M04", value: "M04" },
+    { label: "Machining Line M05", value: "M05" },
+    { label: "Machining Line M07", value: "M07" },
+    { label: "Machining Line M09", value: "M09" },
+    { label: "Machining Line M10", value: "M10" },
+    { label: "Machining Line M11", value: "M11" },
+    { label: "Machining Line M14", value: "M14" },
+    { label: "Machining Line M15", value: "M15" },
+    { label: "Machining Line M18", value: "M18" },
+    { label: "Machining Line M20", value: "M20" },
+    { label: "Machining Line M61", value: "M61" },
+    { label: "Machining Line M62", value: "M62" },
+    { label: "Paint Shop", value: "P01" },
+  ],
+};
+
+export const MACHINE_TYPE_LABELS = {
+  hpdc: "HPDC Machine",
+  cnc: "CNC",
+  broach: "Broaching",
+  boring: "Boring",
+  grind: "Grinding",
+  furnace: "Furnace",
+  crane: "Crane / EOT",
+  trim: "Trimming",
+  general: "General Machine",
+};

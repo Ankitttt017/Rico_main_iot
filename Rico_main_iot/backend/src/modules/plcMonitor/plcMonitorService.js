@@ -1,410 +1,56 @@
 ﻿"use strict";
 
 const net = require("net");
+const fs = require("fs");
+const path = require("path");
 const db = require("../../config/db");
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // MACHINE CONFIG
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-const TARGET_MACHINE = {
-  key: "ube-850t-2",
-  ip: "192.168.117.201",
-  port: 5002,
-  name: "UBE 850T-2",
-  kind: "ube",
-};
-
-const DEFAULT_MACHINES = [
+const {
   TARGET_MACHINE,
-];
-
-const TARGET_MACHINE_NAME = "UBE 850T-2";
-const TARGET_MACHINE_IP = "192.168.117.201";
-
-function isTargetMachine(machine = {}) {
-  return (
-    String(machine.ip || "").trim() === TARGET_MACHINE_IP ||
-    String(machine.key || "").trim().toLowerCase() === TARGET_MACHINE.key ||
-    String(machine.name || "").trim().toLowerCase() === TARGET_MACHINE_NAME.toLowerCase()
-  );
-}
-
-function normalizeTargetMachine(machine = {}) {
-  return {
-    ...TARGET_MACHINE,
-    ...machine,
-    key: TARGET_MACHINE.key,
-    ip: TARGET_MACHINE_IP,
-    port: Number(machine.port || TARGET_MACHINE.port),
-    name: TARGET_MACHINE_NAME,
-    kind: "ube",
-  };
-}
-
-function getMachines() {
-  if (process.env.PLC_MACHINES_JSON) {
-    try {
-      const parsed = JSON.parse(process.env.PLC_MACHINES_JSON);
-      if (Array.isArray(parsed) && parsed.length) {
-        const targetMachines = parsed
-          .map((machine, index) => ({
-            key: machine.key || machine.machine_key || machine.ip || `machine-${index + 1}`,
-            ip: machine.ip,
-            port: Number(machine.port || 5002),
-            name: machine.name || machine.ip,
-            kind: machine.kind || "ube",
-          }))
-          .filter((machine) => machine.ip && isTargetMachine(machine))
-          .map(normalizeTargetMachine);
-
-        if (targetMachines.length) return targetMachines.slice(0, 1);
-      }
-    } catch (error) {
-      console.error("Invalid PLC_MACHINES_JSON:", error.message);
-    }
-  }
-  return DEFAULT_MACHINES.map(normalizeTargetMachine);
-}
-
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// CONSTANTS
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-const TABLE = "dbo.PlcCycleReadings";
-const LEAK_TEST_TABLE = "dbo.Leaktest";
-const CONNECTION_EVENTS_TABLE = "dbo.PlcConnectionEvents";
-
-const DEVICE_CODE = { M: 0x90, D: 0xa8, R: 0xaf };
-const CYCLE_START_DEVICE = "M840";
-const CYCLE_END_DEVICE = "M4598";
-const SHOT_DATE_TIME_DEVICES = {
-  year: "D2100",
-  month: "D2101",
-  day: "D2102",
-  hour: "D2103",
-  minute: "D2104",
-  second: "D2105",
-};
-const UBE_ALLOWED_M_DEVICES = new Set([CYCLE_START_DEVICE, CYCLE_END_DEVICE]);
-const UBE_CYCLE_END_DELAY_MS = Math.min(
-  5000,
-  Math.max(2000, Number(process.env.PLC_CYCLE_END_DELAY_MS || 2000))
-);
-const UBE_CYCLE_END_POLL_MS = Number(process.env.PLC_UBE_CYCLE_END_POLL_MS || 200);
-const UBE_LIVE_READ_MS = Number(process.env.PLC_UBE_LIVE_READ_MS || 1000);
-const PLC_MAX_CONSECUTIVE_READ_FAILURES = Number(process.env.PLC_MAX_CONSECUTIVE_READ_FAILURES || 5);
-const PLC_DB_RETRY_MS = Number(process.env.PLC_DB_RETRY_MS || 5000);
-const PLC_DB_RETRY_MAX = Number(process.env.PLC_DB_RETRY_MAX || 500);
-
-const LEAK_TEST_CONTROL = {
-  cycleStartDevice: process.env.PLC_LEAK_CYCLE_START_DEVICE || "M110",
-  cycleEndDevice: process.env.PLC_LEAK_CYCLE_END_DEVICE || "M300",
-};
-
-const LEAK_DUPLICATE_WINDOW_SEC = Number(process.env.PLC_LEAK_DUPLICATE_WINDOW_SEC || 3);
-const LEAK_QR_DUPLICATE_WINDOW_SEC = Number(process.env.PLC_LEAK_QR_DUPLICATE_WINDOW_SEC || 300);
-const LEAK_CHANGE_SAVE_ENABLED =
-  String(process.env.PLC_LEAK_SAVE_ON_CHANGE || "true").toLowerCase() !== "false";
-const LEAK_CHANGE_MIN_INTERVAL_MS = Number(process.env.PLC_LEAK_CHANGE_MIN_INTERVAL_MS || 1500);
-
-const PLC_READ_TIMEOUT_MS = Number(process.env.PLC_READ_TIMEOUT_MS || 8000);
-const PLC_RECONNECT_AFTER_TIMEOUT_MS = Number(process.env.PLC_RECONNECT_AFTER_TIMEOUT_MS || 500);
-
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// PARAMETERS
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-const EXCEL_PARAMETERS = [
-  { name: "Sr. No", type: "int", computed: "serial" },
-  { name: "Cycle End", device: "M4598", type: "int" },
-  { name: "SHOT TIME", type: "text", computed: "shotTime" },
-  { name: "SHOT NO.", device: "D1120", type: "int" },
-  { name: "CYCLE TIME sec.", device: "D1127", type: "decimal", scale: 0.1 },
- { name: "HIGH SHOT COUNT", device: "D947", type: "int" },
-  { name: "NG COUNTER", device: "D955", type: "int" },
-  { name: "DIE-CLOSE CORE IN TIME sec", device: "D1128", type: "decimal", scale: 0.1 },
-  { name: "POURING TIME sec", device: "D1129", type: "decimal", scale: 0.1 },
-  { name: "SHOT FWD TIME sec", device: "D1130", type: "decimal", scale: 0.1 },
-  { name: "CURING TIME sec", device: "D1137", type: "decimal", scale: 0.1 },
-  { name: "DIE OPEN CORE OUT TIME sec", device: "D1132", type: "decimal", scale: 0.1 },
-  { name: "EJECTOR TIME sec", device: "D1133", type: "decimal", scale: 0.1 },
-  { name: "EXTRACT TIME sec", device: "D1134", type: "decimal", scale: 0.1 },
-  { name: "SPRAY TIME sec", device: "D1135", type: "decimal", scale: 0.1 },
-  { name: "V1 m/sec", device: "D6900", type: "decimal", scale: 0.01 },
-  { name: "V2 m/sec", device: "D6902", type: "decimal", scale: 0.01 },
-  { name: "V3 m/sec", device: "D6904", type: "decimal", scale: 0.01 },
-  { name: "V4 m/sec", device: "D6906", type: "decimal", scale: 0.01 },
-  { name: "METAL PRESS. Mpa", device: "D6912", type: "decimal", scale: 0.1 },
-  { name: "FURNACE METAL TEMP. C", device: "D6934", type: "decimal", scale: 1 },
-  { name: "COOLING WATER FLOW RATE (MOV.) L/min", device: "D6930", type: "decimal", scale: 0.1 },
-  { name: "COOLING WATER FLOW RATE (STA.) L/min", device: "D6932", type: "decimal", scale: 0.1 },
-  { name: "ACCEL. POINT mm", device: "D6908", type: "decimal", scale: 1 },
-  { name: "DEACEL. POINT mm", device: "D6910", type: "decimal", scale: 1 },
-  { name: "INTEN. TIME msec", device: "D6914", type: "decimal", scale: 1 },
-  { name: "BISCUIT THICKNESS mm", device: "D6916", type: "decimal", scale: 0.1 },
-  { name: "JET COOLING PRESSURE kgf/cm2", device: "D6954", type: "decimal", scale: 0.1 },
-  { name: "CLAMP TONNAGE(HE.LOW) %", device: "D6918", type: "decimal", scale: 1 },
-  { name: "CLAMP TONNAGE(HE.LOW) MN", device: "D6920", type: "decimal", scale: 0.01 },
-  { name: "CLAMP TONNAGE(OP.UP) %", device: "D6922", type: "decimal", scale: 1 },
-  { name: "CLAMP TONNAGE(OP.LOW) %", device: "D6924", type: "decimal", scale: 1 },
-  { name: "CLAMP TONNAGE(HE.UP) %", device: "D6926", type: "decimal", scale: 1 },
-  { name: "VACUUM PRESSURE mbar", device: "D6928", type: "decimal", scale: 1 },
-  { name: "Cycle Start", device: "M840", type: "int" },
-  { name: "CLAMP FORCE (%)", device: "D1044", type: "decimal", scale: 1 },
-  { name: "CLAMP TONNAGE (T)", device: "D1045", type: "decimal", scale: 1 },
-  { name: "SHOT ACC. PRESSURE", device: "D1700", type: "decimal", scale: 0.01 },
-  { name: "INTENSIFICATION ACC. PRESSURE", device: "D1701", type: "decimal", scale: 0.01 },
-  { name: "Fixed Die Temp (F-1)", device: "D1400", type: "decimal", scale: 1 },
-  { name: "Fixed Die Temp (F-2)", device: "D1401", type: "decimal", scale: 1 },
-  { name: "Moving Die Temp (M-1)", device: "D1402", type: "decimal", scale: 1 },
-  { name: "Moving Die Temp (M-2)", device: "D1403", type: "decimal", scale: 1 },
-  { name: "Slide Temp -1 (S-1)", device: "D1404", type: "decimal", scale: 1 },
-  { name: "FIX. 1 Flow (Lpm)", device: "D1410", type: "decimal", scale: 0.1 },
-  { name: "FIX. 2 Flow (Lpm)", device: "D1411", type: "decimal", scale: 0.1 },
-  { name: "FIX. 3 Flow (Lpm)", device: "D1412", type: "decimal", scale: 0.1 },
-  { name: "Mov. 1 Flow (Lpm)", device: "D1413", type: "decimal", scale: 0.1 },
-  { name: "Mov. 2 Flow (Lpm)", device: "D1414", type: "decimal", scale: 0.1 },
-  { name: "Mov. 3 Flow (Lpm)", device: "D1415", type: "decimal", scale: 0.1 },
-  { name: "Vacuum pressure (mmHg)", device: "D1416", type: "decimal", scale: 1 },
-  { name: "AVERAGE DIE CLAMP TONNAGE COUNT", device: "D7472", type: "int" },
-  { name: "Time for stroke(ms)", device: "D10470", type: "int" },
-  { name: "Stroke (mm)", device: "D10356", type: "decimal", scale: 1 },
-  { name: "Shot Status", device: "D1301", type: "int" },
-];
-
-const LEAK_TEST_PARAMETERS = [
-  {
-    name: "part_qr_code",
-    type: "text",
-    stringDevice: process.env.PLC_LEAK_SCAN_DEVICE || "D101",
-    stringLength: Number(process.env.PLC_LEAK_SCAN_LENGTH || 14),
-  },
-  { name: "body_leak_value", device: process.env.PLC_LEAK_BODY_VALUE_DEVICE || "D2258", type: "real32" },
-  { name: "gall_1", device: process.env.PLC_LEAK_GALL_1_DEVICE || "D2254", type: "real32" },
-  { name: "gall_2", device: process.env.PLC_LEAK_GALL_2_DEVICE || "D2256", type: "real32" },
-  {
-    name: "result",
-    type: "text",
-    stringDevice: process.env.PLC_LEAK_RESULT_DEVICE || "R2250",
-    stringLength: Number(process.env.PLC_LEAK_RESULT_LENGTH || 1),
-  },
-  {
-    name: "auto_bit",
-    device: process.env.PLC_LEAK_AUTO_MODE_DEVICE || "M101",
-    type: "int",
-    hidden: true,
-  },
-  { name: "manual", device: process.env.PLC_LEAK_MANUAL_MODE_DEVICE || "M102", type: "int" },
-  { name: "dry", device: process.env.PLC_LEAK_DRY_MODE_DEVICE || "M190", type: "int" },
-  { name: "wey", device: process.env.PLC_LEAK_WEY_MODE_DEVICE || "M191", type: "int" },
-  { name: "both", device: process.env.PLC_LEAK_BOTH_MODE_DEVICE || "M192", type: "int" },
-  {
-    name: "cycle_time",
-    device: process.env.PLC_LEAK_CYCLE_TIME_DEVICE || "D6010",
-    type: "decimal",
-    scale: Number(process.env.PLC_LEAK_CYCLE_TIME_SCALE || 1),
-  },
-];
-
-const UBE_READ_PARAMETERS = EXCEL_PARAMETERS.filter((parameter) => {
-  if (parameter.computed) return true;
-  if (!parameter.device) return true;
-  if (parameter.device.startsWith("D")) return true;
-  return parameter.device.startsWith("M") && UBE_ALLOWED_M_DEVICES.has(parameter.device);
-});
-
-const ALL_PARAMETERS = [...EXCEL_PARAMETERS, ...LEAK_TEST_PARAMETERS];
-const PARAMETER_BY_NAME = new Map(ALL_PARAMETERS.map((p) => [p.name, p]));
-
-const LEGACY_COLUMNS_BY_PARAMETER = {
-  "SHOT NO.": "shot_number",
-  "CYCLE TIME sec.": "cycle_time",
-  "HIGH SHOT COUNT": "ok_shot",
-  "DIE-CLOSE CORE IN TIME sec": "die_close_core_in_time",
-  "POURING TIME sec": "pouring_time",
-  "SHOT FWD TIME sec": "shot_fwd_time",
-  "CURING TIME sec": "curing_time",
-  "DIE OPEN CORE OUT TIME sec": "die_open_core_out_time",
-  "EJECTOR TIME sec": "ejector_time",
-  "EXTRACT TIME sec": "extract_time",
-  "SPRAY TIME sec": "spray_time",
-  "V1 m/sec": "v1_speed",
-  "V2 m/sec": "v2_speed",
-  "V3 m/sec": "v3_speed",
-  "V4 m/sec": "v4_speed",
-  "METAL PRESS. Mpa": "metal_pressure",
-  "FURNACE METAL TEMP. C": "furnace_metal_temp",
-  "COOLING WATER FLOW RATE (MOV.) L/min": "cooling_water_mov",
-  "COOLING WATER FLOW RATE (STA.) L/min": "cooling_water_sta",
-  "ACCEL. POINT mm": "accel_point",
-  "DEACEL. POINT mm": "deaccel_point",
-  "INTEN. TIME msec": "intensification_time",
-  "BISCUIT THICKNESS mm": "biscuit_thickness",
-  "JET COOLING PRESSURE kgf/cm2": "jet_cooling_pressure",
-  "CLAMP TONNAGE(HE.LOW) %": "clamp_tonnage_he_low_pct",
-  "CLAMP TONNAGE(HE.LOW) MN": "clamp_tonnage_he_low_mn",
-  "CLAMP TONNAGE(OP.UP) %": "clamp_tonnage_op_up_pct",
-  "CLAMP TONNAGE(OP.LOW) %": "clamp_tonnage_op_low_pct",
-  "CLAMP TONNAGE(HE.UP) %": "clamp_tonnage_he_up_pct",
-  "VACUUM PRESSURE mbar": "vacuum_pressure",
-  "CLAMP FORCE (%)": "clamp_force_pct",
-  "CLAMP TONNAGE (T)": "clamp_tonnage",
-  "SHOT ACC. PRESSURE": "shot_acc_pressure",
-  "INTENSIFICATION ACC. PRESSURE": "intensification_acc_pressure",
-  "Fixed Die Temp (F-1)": "fixed_die_temp_f1",
-  "Fixed Die Temp (F-2)": "fixed_die_temp_f2",
-  "Moving Die Temp (M-1)": "moving_die_temp_m1",
-  "Moving Die Temp (M-2)": "moving_die_temp_m2",
-  "Slide Temp -1 (S-1)": "slide_temp_s1",
-  "FIX. 1 Flow (Lpm)": "fix_1_flow",
-  "FIX. 2 Flow (Lpm)": "fix_2_flow",
-  "FIX. 3 Flow (Lpm)": "fix_3_flow",
-  "Mov. 1 Flow (Lpm)": "mov_1_flow",
-  "Mov. 2 Flow (Lpm)": "mov_2_flow",
-  "Mov. 3 Flow (Lpm)": "mov_3_flow",
-  "Vacuum pressure (mmHg)": "vacuum_pressure_mmhg",
-  "AVERAGE DIE CLAMP TONNAGE COUNT": "average_die_clamp_tonnage_count",
-  "Time for stroke(ms)": "time_for_stroke",
-  "Stroke (mm)": "stroke",
-  "Shot Status": "shot_status",
-  "Cycle End": "cycle_end",
-};
-
-const DUPLICATE_SOURCE_COLUMNS = new Set(Object.keys(LEGACY_COLUMNS_BY_PARAMETER));
-
-const DROPPED_READING_COLUMNS = new Set([
-  ...DUPLICATE_SOURCE_COLUMNS,
-  "HIGH SHOT COUNT value",
-  "NG COUNTER",
-  "NG COUNTER value",
-  "high_shot_count",
-  "high_shot",
-  "ng_counter",
-  "off_shot",
-  "ng_shot",
-  "manual_mode",
-  "shot_uid",
-  "Sr. No",
-  "SHOT TIME",
-  "cycletime EndDateTime",
-  "SHOT FWD TIME sec value",
-  "AUTO/OK-step value (sec)",
-  "AUTO/ROBOT/OK-step value (sec)",
-  ...EXCEL_PARAMETERS.filter((p) => p.device?.startsWith("M")).map((p) => `${p.name} duration (sec)`),
-  ...LEAK_TEST_PARAMETERS.filter((p) => p.device?.startsWith("M")).map((p) => `${p.name} duration (sec)`),
-]);
-
-const REPORT_COLUMNS = [
-  ["machine_name", "Machine"],
-  ["part_name", "Part Name"],
-  ["part_qr_code", "Part QR Code"],
-  ["shot_time", "Shot Time"],
-  ["shot_date_full", "Shot Date"],
-  ["shot_number", "Shot Number"],
-  ["ok_shot", "OK Shot"],
-  ...Array.from(new Set(Object.values(LEGACY_COLUMNS_BY_PARAMETER)))
-    .filter((name) => name !== "shot_number")
-    .map((name) => [name, name]),
-  ...EXCEL_PARAMETERS.filter((p) => !DROPPED_READING_COLUMNS.has(p.name)).map((p) => [p.name, p.name]),
-  ...LEAK_TEST_PARAMETERS.filter((p) => !p.hidden && p.name !== "part_qr_code").map((p) => [p.name, p.name]),
-];
-
-const LEAK_ONLY_REPORT_KEYS = new Set([
-  "part_qr_code",
-  "body_leak_value",
-  "gall_1",
-  "gall_2",
-  "result",
-  "manual",
-  "dry",
-  "wey",
-  "both",
-  "cycle_end_time",
-  "status",
-  "machine",
-  "ip",
-]);
-
-const UBE_REPORT_COLUMNS = REPORT_COLUMNS.filter(([key]) => !LEAK_ONLY_REPORT_KEYS.has(key));
-
-const LEAK_REPORT_COLUMNS = [
-  ["machine_name", "Machine"],
-  ["plc_ip", "PLC IP"],
-  ["cycle_end_time", "Cycle End Time"],
-  ["part_qr_code", "Part QR Code"],
-  ["result", "Result"],
-  ["body_leak_value", "Body Leak Value"],
-  ["gall_1", "GALL-1"],
-  ["gall_2", "GALL-2"],
-  ["cycle_time", "Cycle Time"],
-  ["running_mode", "Running Mode"],
-  ["manual", "Manual"],
-  ["dry", "Dry"],
-  ["wey", "Wey"],
-  ["both", "Both"],
-];
-
-const EXTRA_READING_COLUMNS = [
-  ["machine_key", "NVARCHAR(80)"],
-  ["shot_date", "DATE"],
-  ["shot_time", "TIME(0)"],
-  ["shot_datetime", "DATETIME2(0)"],
-  ["shot_year", "NVARCHAR(2)"],
-  ["shot_month", "NVARCHAR(2)"],
-  ["shot_day", "NVARCHAR(2)"],
-  ["shot_hour", "NVARCHAR(2)"],
-  ["shot_minute", "NVARCHAR(2)"],
-  ["shot_second", "NVARCHAR(2)"],
-  ["shot_number", "INT"],
-  ["ok_shot", "INT"],
-];
-
-const TWO_DIGIT_READING_COLUMNS = new Set([
-  "shot_year",
-  "shot_month",
-  "shot_day",
-  "shot_hour",
-  "shot_minute",
-  "shot_second",
-]);
-
-const M_BIT_DURATION_COLUMNS = [];
-
-const UBE_CLIENT_READING_NAMES = new Set([
-  "shot_year",
-  "shot_month",
-  "shot_day",
-  "shot_date",
-  "shot_time",
-  "shot_datetime",
-  "shot_hour",
-  "shot_minute",
-  "shot_second",
-  "shot_number",
-  "ok_shot",
-  "cycle_time",
-  ...EXCEL_PARAMETERS.map((p) => p.name),
-  ...Object.values(LEGACY_COLUMNS_BY_PARAMETER),
-]);
-
-const LEAK_CLIENT_READING_NAMES = new Set([
-  "machine",
-  "ip",
-  "status",
-  "cycle_end_time",
-  "part_qr_code",
-  "result",
-  "body_leak_value",
-  "gall_1",
-  "gall_2",
-  "cycle_time",
-  "running_mode",
-  "manual",
-  "dry",
-  "wey",
-  "both",
-]);
+  getMachines,
+} = require("./config/machineConfig");
+const {
+  TABLE,
+  LEAK_TEST_TABLE,
+  CONNECTION_EVENTS_TABLE,
+  DEVICE_CODE,
+  CYCLE_START_DEVICE,
+  CYCLE_END_DEVICE,
+  SHOT_DATE_TIME_DEVICES,
+  UBE_CYCLE_END_DELAY_MS,
+  UBE_CYCLE_END_POLL_MS,
+  UBE_LIVE_READ_MS,
+  PLC_MAX_CONSECUTIVE_READ_FAILURES,
+  PLC_DB_RETRY_MS,
+  PLC_DB_RETRY_MAX,
+  PLC_PENDING_SAVE_FILE,
+  LEAK_TEST_CONTROL,
+  LEAK_DUPLICATE_WINDOW_SEC,
+  LEAK_QR_DUPLICATE_WINDOW_SEC,
+  LEAK_CHANGE_SAVE_ENABLED,
+  LEAK_CHANGE_MIN_INTERVAL_MS,
+  PLC_READ_TIMEOUT_MS,
+  PLC_RECONNECT_AFTER_TIMEOUT_MS,
+  EXCEL_PARAMETERS,
+  LEAK_TEST_PARAMETERS,
+  UBE_READ_PARAMETERS,
+  ALL_PARAMETERS,
+  PARAMETER_BY_NAME,
+  LEGACY_COLUMNS_BY_PARAMETER,
+  DROPPED_READING_COLUMNS,
+  LIVE_READING_METADATA_COLUMNS,
+  UBE_REPORT_COLUMNS,
+  LEAK_REPORT_COLUMNS,
+  EXTRA_READING_COLUMNS,
+  TWO_DIGIT_READING_COLUMNS,
+  M_BIT_DURATION_COLUMNS,
+  UBE_CLIENT_READING_NAMES,
+  LEAK_CLIENT_READING_NAMES,
+} = require("./config/registerConfig");
 
 let schemaReadyPromise = null;
 
@@ -903,6 +549,72 @@ function formatDbReading(row, machineFallback = {}) {
   };
 }
 
+function formatLiveReadingSnapshot(machine, partName, readings = {}, timestamp = new Date().toISOString()) {
+  return formatDbReading(
+    {
+      ...readings,
+      id: `live-${machine.key || machine.ip}`,
+      recorded_at: timestamp || new Date().toISOString(),
+      created_at: new Date().toISOString(),
+      machine_key: machine.key || machine.ip,
+      machine_name: machine.name,
+      plc_ip: machine.ip,
+      plc_port: machine.port,
+      part_name: partName,
+    },
+    { ...machine, connected: true }
+  );
+}
+
+function getComparableShotNumber(row = {}) {
+  const value = row.shot_number ?? row.lastShotNumber;
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function chooseFreshestReading(dbReading, machine = {}) {
+  const liveReading = machine.latestReading;
+  if (!liveReading?.has_data) return dbReading;
+  if (!dbReading?.has_data) return liveReading;
+
+  const liveShot = getComparableShotNumber(liveReading);
+  const dbShot = getComparableShotNumber(dbReading);
+  if (liveShot !== null && dbShot !== null && liveShot > dbShot) return liveReading;
+
+  const liveTime = new Date(liveReading.recorded_at || liveReading.created_at || 0).getTime();
+  const dbTime = new Date(dbReading.recorded_at || dbReading.created_at || 0).getTime();
+  if (Number.isFinite(liveTime) && Number.isFinite(dbTime) && liveTime > dbTime) return liveReading;
+
+  return dbReading;
+}
+
+function buildReadingsForDBFromLiveSnapshot(liveReading = {}) {
+  return Object.fromEntries(
+    Object.entries(liveReading).filter(([name]) => !LIVE_READING_METADATA_COLUMNS.has(name))
+  );
+}
+
+async function persistLiveSnapshotIfAhead(machine = {}, dbReading = {}) {
+  if (!isUbeMachine(machine) || !machine.latestReading?.has_data) return null;
+
+  const liveShot = getComparableShotNumber(machine.latestReading);
+  const dbShot = getComparableShotNumber(dbReading);
+  if (liveShot === null || (dbShot !== null && liveShot <= dbShot)) return null;
+  if (machine.lastCatchupSavedShot === liveShot) return null;
+
+  const readings = buildReadingsForDBFromLiveSnapshot(machine.latestReading);
+  if (!Object.keys(readings).length) return null;
+
+  const result = await saveToDB(
+    machine,
+    machine.latestReading.part_name || machine.partName || "",
+    readings
+  );
+  if (!result?.queued && !result?.skipped) machine.lastCatchupSavedShot = liveShot;
+  return result;
+}
+
 function formatReadingsForClient(readings, machineKind = "ube") {
   const allowedNames =
     machineKind === "leaktest" ? LEAK_CLIENT_READING_NAMES : UBE_CLIENT_READING_NAMES;
@@ -1195,78 +907,92 @@ async function getLatestReadingsForMachines(machineSnapshots = getMachines()) {
   const rowByKey = new Map();
 
   if (ubeMachines.length) {
-    const machineKeys = ubeMachines.map((m) => m.key || m.ip);
-    const machineIps = Array.from(new Set(ubeMachines.map((m) => m.ip).filter(Boolean)));
-    const keyPlaceholders = machineKeys.map(() => "?").join(", ");
-    const ipPlaceholders = machineIps.map(() => "?").join(", ");
+    const targets = ubeMachines.map((m) => ({
+      key: m.key || m.ip,
+      ip: m.ip || m.key,
+    }));
+    const valuesSql = targets.map(() => "(?, ?)").join(", ");
+    const params = targets.flatMap((target) => [target.key, target.ip]);
 
     const { rows } = await db.query(
-      `WITH ranked_readings AS (
-        SELECT *,
-          ROW_NUMBER() OVER (
-            PARTITION BY COALESCE(machine_key, plc_ip)
-            ORDER BY recorded_at DESC, id DESC
-          ) AS rn
-        FROM ${TABLE}
-        WHERE COALESCE(machine_key, plc_ip) IN (${keyPlaceholders})
-          OR plc_ip IN (${ipPlaceholders})
+      `WITH target_machines(machine_key, plc_ip) AS (
+        SELECT * FROM (VALUES ${valuesSql}) AS target(machine_key, plc_ip)
       )
-      SELECT * FROM ranked_readings WHERE rn = 1
-      ORDER BY COALESCE(machine_key, plc_ip)`,
-      [...machineKeys, ...machineIps]
+      SELECT latest.*
+      FROM target_machines target
+      OUTER APPLY (
+        SELECT TOP 1 *
+        FROM ${TABLE} reading
+        WHERE reading.machine_key = target.machine_key
+           OR reading.plc_ip = target.plc_ip
+           OR reading.plc_ip = target.machine_key
+        ORDER BY reading.recorded_at DESC, reading.id DESC
+      ) latest
+      WHERE latest.id IS NOT NULL
+      ORDER BY COALESCE(latest.machine_key, latest.plc_ip)`,
+      params
     );
     rows.forEach((row) => rowByKey.set(String(row.machine_key || row.plc_ip), row));
   }
 
   if (leakMachines.length) {
     const machineIps = Array.from(new Set(leakMachines.map((m) => m.ip).filter(Boolean)));
-    const ipPlaceholders = machineIps.map(() => "?").join(", ");
+    const valuesSql = machineIps.map(() => "(?)").join(", ");
 
     const { rows } = await db.query(
-      `WITH ranked_readings AS (
-        SELECT
-          [Id] AS id,
-          CAST([Cycle_End_Time] AS DATETIME2(3)) AS recorded_at,
-          CAST([Cycle_End_Time] AS DATETIME2(3)) AS cycle_end_time,
-          [Machine] AS machine_name,
-          [PLC_IP] AS plc_ip,
-          1027 AS plc_port,
-          [Machine] AS machine,
-          [PLC_IP] AS ip,
-          [Status] AS status,
-          [Part_QR_Code] AS part_name,
-          [Part_QR_Code] AS part_qr_code,
-          [Part_QR_Code] AS scan_data,
-          [Body_Leak_Value] AS body_leak_value,
-          [Gall_1] AS gall_1,
-          [Gall_2] AS gall_2,
-          [Result] AS result,
-          [Running_Mode] AS running_mode,
-          [Manual] AS manual,
-          [Dry] AS dry,
-          [Wey] AS wey,
-          [Both] AS both,
-          [Cycle_Time] AS cycle_time,
-          ROW_NUMBER() OVER (
-            PARTITION BY [PLC_IP]
-            ORDER BY [Cycle_End_Time] DESC, [Id] DESC
-          ) AS rn
-        FROM ${LEAK_TEST_TABLE}
-        WHERE [PLC_IP] IN (${ipPlaceholders})
+      `WITH target_machines(plc_ip) AS (
+        SELECT * FROM (VALUES ${valuesSql}) AS target(plc_ip)
       )
-      SELECT * FROM ranked_readings WHERE rn = 1
-      ORDER BY plc_ip`,
+      SELECT latest.*
+      FROM target_machines target
+      OUTER APPLY (
+        SELECT
+          leak.[Id] AS id,
+          CAST(leak.[Cycle_End_Time] AS DATETIME2(3)) AS recorded_at,
+          CAST(leak.[Cycle_End_Time] AS DATETIME2(3)) AS cycle_end_time,
+          leak.[Machine] AS machine_name,
+          leak.[PLC_IP] AS plc_ip,
+          1027 AS plc_port,
+          leak.[Machine] AS machine,
+          leak.[PLC_IP] AS ip,
+          leak.[Status] AS status,
+          leak.[Part_QR_Code] AS part_name,
+          leak.[Part_QR_Code] AS part_qr_code,
+          leak.[Part_QR_Code] AS scan_data,
+          leak.[Body_Leak_Value] AS body_leak_value,
+          leak.[Gall_1] AS gall_1,
+          leak.[Gall_2] AS gall_2,
+          leak.[Result] AS result,
+          leak.[Running_Mode] AS running_mode,
+          leak.[Manual] AS manual,
+          leak.[Dry] AS dry,
+          leak.[Wey] AS wey,
+          leak.[Both] AS both,
+          leak.[Cycle_Time] AS cycle_time
+        FROM ${LEAK_TEST_TABLE}
+        WHERE leak.[PLC_IP] = target.plc_ip
+        ORDER BY leak.[Cycle_End_Time] DESC, leak.[Id] DESC
+      ) latest
+      WHERE latest.id IS NOT NULL
+      ORDER BY latest.plc_ip`,
       machineIps
     );
     rows.forEach((row) => rowByKey.set(String(row.plc_ip), row));
   }
 
-  return machines.map((machine) =>
-    formatDbReading(
+  const results = [];
+  for (const machine of machines) {
+    const dbReading = formatDbReading(
       rowByKey.get(machine.key || machine.ip) || rowByKey.get(machine.ip),
       machine
-    )
-  );
+    );
+    persistLiveSnapshotIfAhead(machine, dbReading).catch((error) => {
+      console.error(`PLC live catch-up save failed for ${machine.ip}:`, error.message);
+    });
+    results.push(chooseFreshestReading(dbReading, machine));
+  }
+
+  return results;
 }
 
 async function getReadingHistory({ ip, limit = 200, from, to } = {}) {
@@ -1358,24 +1084,58 @@ async function getConnectionEvents({ ip, limit = 200, from, to } = {}) {
 // DB SAVE â€” UBE
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+const inFlightUbeSaveKeys = new Set();
+
+function buildUbeTimestampSaveKey(machine, readings = {}) {
+  const machineKey = machine.key || machine.ip;
+  const shotDate = normalizeReadingForDB("shot_date", readings.shot_date);
+  const shotTime = normalizeReadingForDB("shot_time", readings.shot_time);
+  if (shotDate && shotTime) return `${machineKey}:${shotDate}:${shotTime}`;
+
+  const shotDateTime = readings.shot_datetime ? new Date(readings.shot_datetime) : null;
+  if (shotDateTime && !Number.isNaN(shotDateTime.getTime())) {
+    return `${machineKey}:${shotDateTime.toISOString()}`;
+  }
+
+  return null;
+}
+
 async function saveToDB(machine, partName, readings) {
+  const saveKey = buildUbeTimestampSaveKey(machine, readings);
+  if (saveKey) {
+    if (inFlightUbeSaveKeys.has(saveKey)) {
+      return { skipped: true, reason: "duplicate-cycle-in-flight" };
+    }
+    inFlightUbeSaveKeys.add(saveKey);
+  }
+
+  try {
+    return await saveToDBUnlocked(machine, partName, readings);
+  } finally {
+    if (saveKey) inFlightUbeSaveKeys.delete(saveKey);
+  }
+}
+
+async function saveToDBUnlocked(machine, partName, readings) {
   const columns = ["recorded_at", "machine_key", "machine_name", "plc_ip", "plc_port", "part_name"];
   const plcRecordedAt = readings.shot_datetime ? new Date(readings.shot_datetime) : null;
-  const shotNumber = normalizeReadingForDB("shot_number", readings.shot_number ?? readings["SHOT NO."]);
   const shotDate = normalizeReadingForDB("shot_date", readings.shot_date);
+  const shotTime = normalizeReadingForDB("shot_time", readings.shot_time);
+  const hasPlcRecordedAt = plcRecordedAt && !Number.isNaN(plcRecordedAt.getTime());
 
-  if (shotNumber !== null && shotNumber !== undefined) {
+  if ((shotDate && shotTime) || hasPlcRecordedAt) {
     const duplicateFilters = [
       "(machine_key = ? OR plc_ip = ?)",
-      "shot_number = ?",
     ];
-    const duplicateValues = [machine.key || machine.ip, machine.ip, shotNumber];
+    const duplicateValues = [machine.key || machine.ip, machine.ip];
 
-    if (shotDate) {
+    if (shotDate && shotTime) {
       duplicateFilters.push("shot_date = ?");
-      duplicateValues.push(shotDate);
-    } else {
-      duplicateFilters.push("recorded_at >= DATEADD(day, -1, SYSDATETIME())");
+      duplicateFilters.push("shot_time = ?");
+      duplicateValues.push(shotDate, shotTime);
+    } else if (hasPlcRecordedAt) {
+      duplicateFilters.push("ABS(DATEDIFF(second, recorded_at, ?)) <= ?");
+      duplicateValues.push(plcRecordedAt, Number(process.env.PLC_DUPLICATE_SHOT_WINDOW_SEC || 15));
     }
 
     const { rows: duplicateRows } = await db.query(
@@ -1384,7 +1144,7 @@ async function saveToDB(machine, partName, readings) {
        ORDER BY recorded_at DESC, id DESC`,
       duplicateValues
     );
-    if (duplicateRows.length) return { skipped: true, reason: "duplicate-shot-number" };
+    if (duplicateRows.length) return { skipped: true, reason: "duplicate-cycle-timestamp" };
   }
 
   const values = [
@@ -1917,6 +1677,26 @@ BEGIN
   CREATE INDEX [IX_PlcCycleReadings_id_desc] ON ${TABLE} ([id] DESC)
 END
 
+IF NOT EXISTS (
+  SELECT 1 FROM sys.indexes
+  WHERE [name] = N'IX_PlcCycleReadings_machine_key_recorded_desc'
+    AND [object_id] = OBJECT_ID(N'${TABLE}')
+)
+BEGIN
+  CREATE INDEX [IX_PlcCycleReadings_machine_key_recorded_desc]
+    ON ${TABLE} ([machine_key], [recorded_at] DESC, [id] DESC)
+END
+
+IF NOT EXISTS (
+  SELECT 1 FROM sys.indexes
+  WHERE [name] = N'IX_PlcCycleReadings_plc_ip_recorded_desc'
+    AND [object_id] = OBJECT_ID(N'${TABLE}')
+)
+BEGIN
+  CREATE INDEX [IX_PlcCycleReadings_plc_ip_recorded_desc]
+    ON ${TABLE} ([plc_ip], [recorded_at] DESC, [id] DESC)
+END
+
 IF EXISTS (
   SELECT 1 FROM sys.indexes
   WHERE [name] = N'UX_MachineShot'
@@ -1973,9 +1753,50 @@ END
 `);
 }
 
+async function hasUsablePlcSchema() {
+  const { rows } = await db.query(`
+    SELECT
+      CASE WHEN OBJECT_ID(N'${TABLE}', N'U') IS NOT NULL THEN 1 ELSE 0 END AS has_plc_table,
+      CASE WHEN OBJECT_ID(N'${LEAK_TEST_TABLE}', N'U') IS NOT NULL THEN 1 ELSE 0 END AS has_leak_table,
+      CASE WHEN COL_LENGTH('${TABLE}', 'recorded_at') IS NOT NULL THEN 1 ELSE 0 END AS has_recorded_at,
+      CASE WHEN COL_LENGTH('${TABLE}', 'machine_key') IS NOT NULL THEN 1 ELSE 0 END AS has_machine_key,
+      CASE WHEN COL_LENGTH('${TABLE}', 'plc_ip') IS NOT NULL THEN 1 ELSE 0 END AS has_plc_ip,
+      CASE WHEN EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE [name] = N'IX_PlcCycleReadings_machine_key_recorded_desc'
+          AND [object_id] = OBJECT_ID(N'${TABLE}')
+      ) THEN 1 ELSE 0 END AS has_machine_key_index,
+      CASE WHEN EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE [name] = N'IX_PlcCycleReadings_plc_ip_recorded_desc'
+          AND [object_id] = OBJECT_ID(N'${TABLE}')
+      ) THEN 1 ELSE 0 END AS has_plc_ip_index,
+      CASE WHEN EXISTS (
+        SELECT 1 FROM sys.indexes
+        WHERE [name] = N'IX_Leaktest_ip_cycle_end_desc'
+          AND [object_id] = OBJECT_ID(N'${LEAK_TEST_TABLE}')
+      ) THEN 1 ELSE 0 END AS has_leak_index
+  `);
+
+  const schema = rows[0] || {};
+  return [
+    "has_plc_table",
+    "has_leak_table",
+    "has_recorded_at",
+    "has_machine_key",
+    "has_plc_ip",
+    "has_machine_key_index",
+    "has_plc_ip_index",
+    "has_leak_index",
+  ].every((key) => Number(schema[key]) === 1);
+}
+
 function ensureTableOnce() {
   if (!schemaReadyPromise) {
-    schemaReadyPromise = ensureTable().catch((err) => {
+    schemaReadyPromise = (async () => {
+      if (await hasUsablePlcSchema()) return;
+      await ensureTable();
+    })().catch((err) => {
       schemaReadyPromise = null;
       throw err;
     });
@@ -2018,6 +1839,42 @@ function startPlcMonitor(io) {
   let monitoringRunning =
     String(process.env.PLC_MONITOR_ENABLED || "true").toLowerCase() !== "false";
   let lastPlcConnected = null;
+
+  const persistPendingUbeSaves = () => {
+    try {
+      if (!pendingUbeSaves.size) {
+        fs.rmSync(PLC_PENDING_SAVE_FILE, { force: true });
+        return;
+      }
+      fs.mkdirSync(path.dirname(PLC_PENDING_SAVE_FILE), { recursive: true });
+      fs.writeFileSync(
+        PLC_PENDING_SAVE_FILE,
+        JSON.stringify(Array.from(pendingUbeSaves.entries()), null, 2)
+      );
+    } catch (error) {
+      console.error("PLC pending save queue persist failed:", error.message);
+    }
+  };
+
+  const loadPendingUbeSaves = () => {
+    try {
+      if (!fs.existsSync(PLC_PENDING_SAVE_FILE)) return;
+      const parsed = JSON.parse(fs.readFileSync(PLC_PENDING_SAVE_FILE, "utf8"));
+      if (!Array.isArray(parsed)) return;
+      parsed.forEach(([key, item]) => {
+        if (key && item?.machine && item?.readings) {
+          pendingUbeSaves.set(key, item);
+        }
+      });
+      if (pendingUbeSaves.size) {
+        console.log(`PLC pending save queue restored: ${pendingUbeSaves.size} items`);
+      }
+    } catch (error) {
+      console.error("PLC pending save queue restore failed:", error.message);
+    }
+  };
+
+  loadPendingUbeSaves();
 
   // â”€â”€ UPDATED: emitMachineState â€” per-machine events â”€â”€
   const emitMachineState = () => {
@@ -2112,6 +1969,7 @@ function startPlcMonitor(io) {
       queuedAt: existing?.queuedAt || new Date().toISOString(),
       lastAttemptAt: new Date().toISOString(),
     });
+    persistPendingUbeSaves();
 
     updateMachineState(machine, {
       connected: true,
@@ -2123,6 +1981,7 @@ function startPlcMonitor(io) {
     try {
       const result = await saveToDB(machine, partName, readings);
       pendingUbeSaves.delete(buildUbeSaveKey(machine, readings));
+      persistPendingUbeSaves();
       return result;
     } catch (error) {
       queueUbeSave(machine, partName, readings, error);
@@ -2138,6 +1997,7 @@ function startPlcMonitor(io) {
       try {
         await saveToDB(item.machine, item.partName, item.readings);
         pendingUbeSaves.delete(key);
+        persistPendingUbeSaves();
         updateMachineState(item.machine, {
           connected: true,
           error: pendingUbeSaves.size
@@ -2151,6 +2011,7 @@ function startPlcMonitor(io) {
           lastError: error.message,
           lastAttemptAt: new Date().toISOString(),
         });
+        persistPendingUbeSaves();
         console.error(`PLC DB retry failed for ${item.machine.ip}:`, error.message);
       }
     }
@@ -2336,6 +2197,7 @@ function startPlcMonitor(io) {
           ? machineState.get(machineKey)?.lastCycleAt
           : payload.timestamp,
         lastShotNumber: readings.shot_number,
+        latestReading: formatLiveReadingSnapshot(machine, partName, readings, payload.timestamp),
         partName,
         cycleTime: readings.cycle_time,
         shotStatus: liveOnly ? "Live registers updated." : "Cycle complete.",
@@ -2409,6 +2271,7 @@ function startPlcMonitor(io) {
       error: null,
       lastCycleAt: lastPayload.timestamp,
       lastShotNumber: finalReadings.shot_number,
+      latestReading: formatLiveReadingSnapshot(machine, lastPayload.partName, finalReadings, lastPayload.timestamp),
       partName: lastPayload.partName,
       cycleTime: finalReadings.cycle_time,
     });
@@ -2535,6 +2398,7 @@ function startPlcMonitor(io) {
           ? machineState.get(machineKey)?.lastCycleAt
           : payload.timestamp,
         lastShotNumber: readings.part_qr_code,
+        latestReading: formatLiveReadingSnapshot(machine, partName, readings, payload.timestamp),
         partName,
         cycleTime: readings.cycle_time,
         shotStatus: liveOnly ? "Live registers updated." : "Cycle complete.",
@@ -3062,7 +2926,18 @@ function startPlcMonitor(io) {
     }),
     getLatestReadings: () =>
       getLatestReadingsForMachines(Array.from(machineState.values())),
-    getReadingHistory,
+    getReadingHistory: async (args = {}) => {
+      const machinesForCatchup = Array.from(machineState.values()).filter((machine) => {
+        const key = machine.key || machine.ip;
+        return !args.ip || key === args.ip || machine.ip === args.ip;
+      });
+      if (machinesForCatchup.length) {
+        getLatestReadingsForMachines(machinesForCatchup).catch((error) => {
+          console.error("PLC report background catch-up failed:", error.message);
+        });
+      }
+      return getReadingHistory(args);
+    },
     getConnectionEvents,
     buildReadingsCsv,
     buildReadingsExcelXml,

@@ -736,3 +736,23 @@ IF NOT EXISTS (
 BEGIN
   CREATE INDEX [IX_PlcCycleReadings_id_desc] ON dbo.PlcCycleReadings ([id] DESC);
 END;
+
+IF NOT EXISTS (
+  SELECT 1 FROM sys.indexes
+  WHERE [name] = N'IX_PlcCycleReadings_machine_key_recorded_desc'
+    AND [object_id] = OBJECT_ID(N'dbo.PlcCycleReadings')
+)
+BEGIN
+  CREATE INDEX [IX_PlcCycleReadings_machine_key_recorded_desc]
+    ON dbo.PlcCycleReadings ([machine_key], [recorded_at] DESC, [id] DESC);
+END;
+
+IF NOT EXISTS (
+  SELECT 1 FROM sys.indexes
+  WHERE [name] = N'IX_PlcCycleReadings_plc_ip_recorded_desc'
+    AND [object_id] = OBJECT_ID(N'dbo.PlcCycleReadings')
+)
+BEGIN
+  CREATE INDEX [IX_PlcCycleReadings_plc_ip_recorded_desc]
+    ON dbo.PlcCycleReadings ([plc_ip], [recorded_at] DESC, [id] DESC);
+END;

@@ -25,17 +25,21 @@ jobs:
         run: npm run build
 
       - name: Copy Rico IoT Frontend Build
-        run: robocopy "${{ github.workspace }}\Rico_main_iot\frontend\dist" "C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\frontend\dist" /E & exit 0
+        run: robocopy "${{ github.workspace }}\Rico_main_iot\frontend\dist" "C:\Users\IOT1\Desktop\Rico_Main_Iot_Production\Rico_main_iot\frontend\dist" /E & exit 0
 
       - name: Install Rico IoT Backend Dependencies
         working-directory: ${{ github.workspace }}\Rico_main_iot\backend
         run: npm install
 
       - name: Copy Rico IoT Backend
-        run: robocopy "${{ github.workspace }}\Rico_main_iot\backend" "C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot\backend" /E /XD node_modules .git /XF *.log .env & exit 0
+        run: robocopy "${{ github.workspace }}\Rico_main_iot\backend" "C:\Users\IOT1\Desktop\Rico_Main_Iot_Production\Rico_main_iot\backend" /E /XD node_modules .git /XF *.log .env & exit 0
+
+      - name: Install Rico IoT Production Backend Dependencies
+        working-directory: C:\Users\IOT1\Desktop\Rico_Main_Iot_Production\Rico_main_iot\backend
+        run: npm install
 
       - name: Restart Rico IoT Backend
-        working-directory: C:\Users\IOT1\Desktop\Rico_Main_Iot\Rico_main_iot
+        working-directory: C:\Users\IOT1\Desktop\Rico_Main_Iot_Production\Rico_main_iot
         run: C:\Users\IOT1\AppData\Roaming\npm\pm2.cmd startOrRestart ecosystem.config.js --only rico-main-iot-backend --update-env && C:\Users\IOT1\AppData\Roaming\npm\pm2.cmd save
 
       - name: Reload Nginx

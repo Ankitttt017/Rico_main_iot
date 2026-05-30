@@ -87,7 +87,7 @@ const Navbar = ({ onLogout, currentUser }) => {
   const meta = useMemo(() => {
     if (location.pathname.startsWith("/part/")) return { title: "Part Profile", subtitle: "Configuration, operations and document control" };
     if (location.pathname.startsWith("/machine/")) return { title: "Machine Profile", subtitle: "Live state, configuration and maintenance view" };
-    return pageMeta[location.pathname] || pageMeta["/parts"];
+    return pageMeta[location.pathname] || pageMeta["/lines"];
   }, [location.pathname]);
 
   const displayDate = useMemo(() => {
