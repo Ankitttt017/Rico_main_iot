@@ -8,20 +8,20 @@ export default function PlcMonitorStyles() {
 
         :root {
           --bg: #eef3ff;
-          --panel: #f8fbff;
-          --panel-2: #edf4ff;
+          --panel: #f9fbfe;
+          --panel-2: #eef4fb;
           --panel-3: #20224a;
-          --line: rgba(75, 73, 172, 0.16);
-          --line-strong: rgba(75, 73, 172, 0.3);
-          --text: #20224a;
-          --muted: #667092;
+          --line: rgba(28, 63, 104, 0.13);
+          --line-strong: rgba(28, 63, 104, 0.24);
+          --text: #102b46;
+          --muted: #5f7288;
           --faint: #8a98ad;
           --green: #22c55e;
           --red: #f3797e;
           --amber: #e17a00;
-          --cyan: #4b49ac;
-          --overview-card-height: 122px;
-          --mono: 'Inter', 'Consolas', monospace;
+          --cyan: #1474b8;
+          --overview-card-height: 112px;
+          --mono: 'Inter', system-ui, sans-serif;
           --sans: 'Inter', system-ui, sans-serif;
         }
 
@@ -31,13 +31,9 @@ export default function PlcMonitorStyles() {
         }
 
         .dash {
-          min-height: 100vh;
-          background:
-            radial-gradient(circle at 16% 0%, rgba(152,189,255,0.36), transparent 28rem),
-            radial-gradient(circle at 88% 10%, rgba(121,120,233,0.15), transparent 24rem),
-            linear-gradient(180deg, #f7f9ff 0%, #eef3ff 54%, #e8efff 100%);
+          min-height: 0;
+          background: transparent;
           font-family: var(--sans);
-          padding: 18px 20px 34px;
         }
 
         .theme-dark {
@@ -51,7 +47,7 @@ export default function PlcMonitorStyles() {
           --muted: #7f8ea3;
           --faint: #4d5b6e;
           --cyan: #22d3ee;
-          --overview-card-height: 124px;
+          --overview-card-height: 108px;
           background:
             linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px) 0 0 / 36px 36px,
             linear-gradient(0deg, rgba(255,255,255,0.02) 1px, transparent 1px) 0 0 / 36px 36px,
@@ -60,16 +56,16 @@ export default function PlcMonitorStyles() {
         }
 
         .shell {
-          width: min(1560px, 100%);
-          margin: 0 auto;
+          width: 100%;
+          margin: 0;
         }
 
         .header {
           display: grid;
           grid-template-columns: 1fr auto;
-          gap: 16px;
+          gap: 12px;
           align-items: center;
-          padding: 16px 17px;
+          padding: 12px 14px;
           border: 1px solid var(--line-strong);
           border-radius: 14px;
           background: linear-gradient(135deg, #f8fbff 0%, #edf4ff 100%);
@@ -116,26 +112,20 @@ export default function PlcMonitorStyles() {
           margin-top: 6px;
         }
 
-        .badges {
-          display: flex;
-          gap: 10px;
-          flex-wrap: wrap;
-          justify-content: flex-end;
-        }
-
         .header-controls {
           display: grid;
-          grid-template-columns: 1fr auto;
+          grid-template-columns: 1fr;
           gap: 10px 14px;
           align-items: center;
-          min-width: min(760px, 52vw);
+          min-width: min(520px, 42vw);
         }
 
         .plc-form {
           display: grid;
-          grid-template-columns: minmax(230px, 1.25fr) minmax(150px, 1fr) 90px 90px;
+          grid-template-columns: minmax(180px, 280px);
           gap: 8px;
           align-items: end;
+          justify-content: end;
         }
 
         .field {
@@ -185,7 +175,6 @@ export default function PlcMonitorStyles() {
         }
 
         .apply-btn,
-        .theme-toggle,
         .run-btn {
           height: 36px;
           border-radius: 8px;
@@ -202,7 +191,6 @@ export default function PlcMonitorStyles() {
         }
 
         .apply-btn:hover,
-        .theme-toggle:hover,
         .run-btn:hover {
           transform: translateY(-1px);
           border-color: rgba(75,73,172,0.38);
@@ -226,51 +214,6 @@ export default function PlcMonitorStyles() {
           transform: none;
         }
 
-        .right-tools {
-          display: flex;
-          align-items: end;
-          justify-content: flex-end;
-          gap: 10px;
-        }
-
-        .theme-toggle {
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
-          background: #edf4ff;
-          color: var(--text);
-          white-space: nowrap;
-        }
-
-        .toggle-track {
-          width: 34px;
-          height: 18px;
-          border-radius: 999px;
-          background: #dce8ff;
-          border: 1px solid var(--line-strong);
-          padding: 2px;
-          display: inline-flex;
-          align-items: center;
-        }
-
-        .toggle-knob {
-          width: 12px;
-          height: 12px;
-          border-radius: 50%;
-          background: var(--cyan);
-          transition: transform 0.18s ease, background 0.18s ease;
-        }
-
-        .toggle-track.is-light {
-          background: #ffffff;
-          border-color: #ffffff;
-        }
-
-        .toggle-track.is-light .toggle-knob {
-          background: var(--cyan);
-          transform: translateX(14px);
-        }
-
         .config-line {
           grid-column: 1 / -1;
           color: #aab3c0;
@@ -286,54 +229,25 @@ export default function PlcMonitorStyles() {
           color: var(--cyan);
         }
 
-        .badge {
-          min-width: 112px;
-          border: 1px solid rgba(255,255,255,0.22);
-          border-radius: 6px;
-          background: rgba(255,255,255,0.06);
-          padding: 9px 12px;
-          font-family: var(--mono);
-          font-size: 12px;
-          font-weight: 700;
-          color: var(--muted);
-          display: inline-flex;
-          justify-content: space-between;
-          align-items: center;
-          letter-spacing: 0.5px;
-        }
-
-        .badge::after {
-          content: '';
-          width: 8px;
-          height: 8px;
-          border-radius: 50%;
-          background: currentColor;
-          box-shadow: none;
-        }
-
-        .badge-green { color: var(--green); }
-        .badge-blue { color: var(--cyan); }
-        .badge-red { color: var(--red); }
-
         .overview {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
+          grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
           grid-auto-rows: minmax(var(--overview-card-height), auto);
           gap: 10px;
-          margin: 14px 0 10px;
+          margin: 10px 0;
         }
 
         .process-state {
           border: 1px solid var(--line-strong);
           border-radius: 10px;
-          background: linear-gradient(180deg, #f8fbff, #edf4ff);
-          padding: 12px 13px;
+          background: linear-gradient(180deg, #ffffff, #f2f6fb);
+          padding: 10px 12px;
           min-height: var(--overview-card-height);
           min-width: 0;
           display: flex;
           flex-direction: column;
           justify-content: space-between;
-          box-shadow: 0 10px 22px rgba(75,73,172,0.08);
+          box-shadow: 0 10px 22px rgba(19,75,143,0.06);
           overflow: hidden;
         }
 
@@ -355,11 +269,12 @@ export default function PlcMonitorStyles() {
 
         .state-value {
           margin-top: 8px;
-          font-size: clamp(17px, 1.15vw, 21px);
-          font-weight: 800;
+          font-size: clamp(16px, 1.05vw, 19px);
+          font-weight: 600;
           font-family: var(--mono);
-          color: #111111;
+          color: var(--text);
           line-height: 1.12;
+          font-variant-numeric: tabular-nums;
           overflow-wrap: anywhere;
           word-break: break-word;
           display: -webkit-box;
@@ -397,27 +312,30 @@ export default function PlcMonitorStyles() {
         }
 
         .status-complete .status-chip {
-          color: var(--green);
-          border-color: rgba(34,197,94,0.35);
-          background: rgba(34,197,94,0.09);
+          color: #16a34a;
+          border-color: rgba(34,197,94,0.46);
+          background: rgba(34,197,94,0.13);
         }
 
         .status-idle .status-chip {
-          color: var(--amber);
-          border-color: rgba(245,158,11,0.34);
-          background: rgba(245,158,11,0.08);
+          color: var(--red);
+          border-color: rgba(243,121,126,0.42);
+          background: rgba(243,121,126,0.1);
         }
 
         .metric {
           border: 1px solid var(--line-strong);
           border-radius: 10px;
-          background: linear-gradient(180deg, #f8fbff, #edf4ff);
-          padding: 12px 13px;
+          background: linear-gradient(180deg, #ffffff, #f2f6fb);
+          padding: 10px 12px;
           min-height: var(--overview-card-height);
           min-width: 0;
           position: relative;
           overflow: hidden;
-          box-shadow: 0 10px 22px rgba(75,73,172,0.08);
+          box-shadow: 0 10px 22px rgba(19,75,143,0.06);
+          display: flex;
+          flex-direction: column;
+          justify-content: space-between;
         }
 
         .metric::before {
@@ -437,21 +355,28 @@ export default function PlcMonitorStyles() {
           color: var(--muted);
           font-family: var(--mono);
           font-size: 10px;
-          letter-spacing: 1.2px;
+          font-weight: 600;
+          letter-spacing: 0.12em;
           text-transform: uppercase;
         }
 
         .metric-value {
-          margin-top: 10px;
-          color: #111111;
+          margin-top: 8px;
+          color: var(--text);
           font-family: var(--mono);
-          font-size: clamp(19px, 1.45vw, 25px);
-          font-weight: 850;
-          line-height: 1.08;
-          white-space: nowrap;
+          font-size: clamp(17px, 1.15vw, 22px);
+          font-weight: 600;
+          line-height: 1.12;
+          font-variant-numeric: tabular-nums;
+          white-space: normal;
           overflow: hidden;
           text-overflow: ellipsis;
+          overflow-wrap: anywhere;
+          word-break: break-word;
           max-width: 100%;
+          display: -webkit-box;
+          -webkit-box-orient: vertical;
+          -webkit-line-clamp: 2;
         }
 
         .metric-unit {
@@ -462,7 +387,7 @@ export default function PlcMonitorStyles() {
         }
 
         .metric-machine .metric-value {
-          font-size: clamp(15px, 1.05vw, 19px);
+          font-size: clamp(15px, 1vw, 18px);
           line-height: 1.15;
           overflow-wrap: anywhere;
           white-space: normal;
@@ -473,12 +398,8 @@ export default function PlcMonitorStyles() {
         }
 
         .dashboard-content {
-          display: grid;
-          grid-template-columns: minmax(0, 1fr) 360px;
-          gap: 14px;
-          align-items: start;
           width: 100%;
-          margin-top: 8px;
+          margin-top: 6px;
         }
 
         .content-main {
@@ -488,14 +409,6 @@ export default function PlcMonitorStyles() {
           background: linear-gradient(180deg, #f8fbff, #edf4ff);
           overflow: hidden;
           box-shadow: 0 14px 30px rgba(28,48,90,0.08);
-        }
-
-        .side-stack {
-          display: grid;
-          gap: 10px;
-          align-self: start;
-          position: sticky;
-          top: 12px;
         }
 
         .info-card {
@@ -517,9 +430,10 @@ export default function PlcMonitorStyles() {
 
         .info-time {
           font-family: var(--mono);
-          font-size: 21px;
+          font-size: 20px;
           font-weight: 700;
-          color: #111111;
+          color: var(--text);
+          font-variant-numeric: tabular-nums;
         }
 
         .info-date {
@@ -627,7 +541,7 @@ export default function PlcMonitorStyles() {
           color: var(--text);
           font-family: var(--mono);
           font-size: 17px;
-          font-weight: 800;
+          font-weight: 700;
           line-height: 1.15;
         }
 
@@ -675,6 +589,8 @@ export default function PlcMonitorStyles() {
           margin-top: 4px;
           color: var(--text);
           font-size: 12px;
+          font-weight: 700;
+          font-variant-numeric: tabular-nums;
           overflow-wrap: anywhere;
         }
 
@@ -721,27 +637,6 @@ export default function PlcMonitorStyles() {
           margin: 0;
         }
 
-        .table-layout {
-          width: 100%;
-        }
-
-        .view-toggle {
-          display: inline-grid;
-          grid-template-columns: 1fr 1fr;
-          border: 1px solid var(--line);
-          border-radius: 7px;
-          overflow: hidden;
-          background: var(--panel);
-          flex: 0 0 auto;
-        }
-
-        .view-actions {
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
-          flex: 0 0 auto;
-        }
-
         .report-btn {
           height: 34px;
           min-width: 86px;
@@ -762,28 +657,6 @@ export default function PlcMonitorStyles() {
         .report-btn:disabled {
           cursor: not-allowed;
           opacity: 0.45;
-        }
-
-        .view-btn {
-          min-width: 76px;
-          height: 34px;
-          border: 0;
-          border-right: 1px solid var(--line);
-          background: transparent;
-          color: var(--muted);
-          cursor: pointer;
-          font-family: var(--mono);
-          font-size: 11px;
-          font-weight: 800;
-        }
-
-        .view-btn:last-child {
-          border-right: 0;
-        }
-
-        .view-btn.active {
-          background: #111111;
-          color: #ffffff;
         }
 
         .report-backdrop {
@@ -1065,7 +938,8 @@ export default function PlcMonitorStyles() {
         }
 
         .group-section {
-          margin-bottom: 20px;
+          margin: 12px 0 18px;
+          padding: 0 12px;
         }
 
         .group-header {
@@ -1110,8 +984,8 @@ export default function PlcMonitorStyles() {
 
         .cards-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(205px, 1fr));
-          gap: 9px;
+          grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+          gap: 10px;
         }
 
         .param-table-wrap {
@@ -1172,9 +1046,10 @@ export default function PlcMonitorStyles() {
         }
 
         .table-value {
-          color: #111111;
-          font-size: 14px;
-          font-weight: 800;
+          color: var(--text);
+          font-size: 13px;
+          font-weight: 600;
+          font-variant-numeric: tabular-nums;
         }
 
         .table-unit {
@@ -1194,14 +1069,17 @@ export default function PlcMonitorStyles() {
 
         .vcard {
           background:
-            linear-gradient(180deg, #f8fbff, #edf4ff);
-          border: 1px solid var(--line);
+            linear-gradient(180deg, #ffffff, #f3f7fb);
+          border: 1px solid var(--line-strong);
           border-left: 3px solid var(--accent);
           border-radius: 10px;
-          min-height: 70px;
-          padding: 8px 10px;
-          box-shadow: 0 8px 18px rgba(75,73,172,0.07);
+          min-height: 78px;
+          padding: 9px 10px;
+          box-shadow: 0 8px 18px rgba(19,75,143,0.055);
           transition: border-color 0.16s ease, transform 0.16s ease, background 0.16s ease;
+          display: flex;
+          flex-direction: column;
+          justify-content: space-between;
         }
 
         .vcard:hover {
@@ -1221,7 +1099,8 @@ export default function PlcMonitorStyles() {
         .vcard-name {
           color: var(--muted);
           font-family: var(--mono);
-          font-size: 9px;
+          font-size: 10px;
+          font-weight: 600;
           letter-spacing: 0.08em;
           line-height: 1.25;
           min-width: 0;
@@ -1243,29 +1122,31 @@ export default function PlcMonitorStyles() {
 
         .vcard-bottom {
           display: flex;
-          align-items: flex-end;
+          align-items: end;
           justify-content: space-between;
-          gap: 8px;
+          gap: 10px;
         }
 
         .vcard-readout {
+          flex: 1 1 auto;
           min-width: 0;
-          white-space: normal;
+          white-space: nowrap;
           overflow: hidden;
-          overflow-wrap: anywhere;
         }
 
         .vcard-val {
-          color: #111111;
+          color: var(--text);
           font-family: var(--mono);
-          font-size: clamp(17px, 1.2vw, 20px);
-          font-weight: 850;
-          line-height: 1.08;
-          display: block;
+          font-size: clamp(14px, 0.95vw, 18px);
+          font-weight: 600;
+          line-height: 1.16;
+          font-variant-numeric: tabular-nums;
+          display: inline-block;
           max-width: 100%;
           overflow: hidden;
           text-overflow: ellipsis;
-          overflow-wrap: anywhere;
+          vertical-align: bottom;
+          white-space: nowrap;
         }
 
         .vcard-unit {
@@ -1278,13 +1159,13 @@ export default function PlcMonitorStyles() {
 
         .spark {
           flex: 0 0 auto;
-          opacity: 0.88;
+          opacity: 0.72;
         }
 
         .spark-empty {
-          width: 76px;
-          height: 28px;
-          border-bottom: 1px solid rgba(17,17,17,0.16);
+          width: 54px;
+          height: 24px;
+          border-bottom: 1px solid rgba(16,43,70,0.16);
           flex: 0 0 auto;
         }
 
@@ -1339,8 +1220,7 @@ export default function PlcMonitorStyles() {
         }
 
         .theme-dark .field input,
-        .theme-dark .field select,
-        .theme-dark .theme-toggle {
+        .theme-dark .field select {
           background: rgba(11,17,27,0.92);
           border-color: rgba(148,163,184,0.22);
           color: #dbe7f6;
@@ -1349,16 +1229,6 @@ export default function PlcMonitorStyles() {
         .theme-dark .field select option {
           background: #101722;
           color: #dbe7f6;
-        }
-
-        .theme-dark .toggle-track {
-          background: rgba(34,211,238,0.12);
-          border-color: rgba(34,211,238,0.3);
-        }
-
-        .theme-dark .badge {
-          background: rgba(10,15,23,0.76);
-          border-color: rgba(148,163,184,0.18);
         }
 
         .theme-dark .config-line {
@@ -1407,10 +1277,6 @@ export default function PlcMonitorStyles() {
           background: rgba(10,15,23,0.72);
         }
 
-        .theme-dark .view-btn.active {
-          background: rgba(20,29,42,0.98);
-        }
-
         .theme-dark .tab {
           background: rgba(10,15,23,0.8);
         }
@@ -1444,8 +1310,6 @@ export default function PlcMonitorStyles() {
         }
 
         @media (max-width: 720px) {
-          .dash { padding: 14px 12px 36px; }
-
           .header {
             grid-template-columns: 1fr;
           }
@@ -1460,27 +1324,8 @@ export default function PlcMonitorStyles() {
           }
 
           .field:first-child,
-          .apply-btn,
           .run-btn {
             grid-column: 1 / -1;
-          }
-
-          .right-tools {
-            align-items: stretch;
-            flex-wrap: wrap;
-          }
-
-          .theme-toggle {
-            flex: 1 1 130px;
-            justify-content: center;
-          }
-
-          .badges {
-            justify-content: stretch;
-          }
-
-          .badge {
-            flex: 1 1 140px;
           }
 
           .overview,
@@ -1489,16 +1334,6 @@ export default function PlcMonitorStyles() {
           }
 
           .view-bar {
-            align-items: stretch;
-            flex-direction: column;
-          }
-
-          .view-toggle {
-            width: 100%;
-          }
-
-          .view-actions {
-            width: 100%;
             align-items: stretch;
             flex-direction: column;
           }
@@ -1536,7 +1371,8 @@ export default function PlcMonitorStyles() {
           }
 
           .cards-grid {
-            grid-template-columns: repeat(auto-fill, minmax(156px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
           }
         }
 

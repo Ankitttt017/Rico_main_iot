@@ -90,6 +90,16 @@ export function formatDuration(seconds) {
 
 export const todayInput = () => new Date().toISOString().slice(0, 10);
 
+export function getNumericShotNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+export function getReadingShotNumber(readings = {}) {
+  return getNumericShotNumber(readings.shot_number?.value);
+}
+
 export function buildShotTimeFromRow(row = {}) {
   if (row.shot_time) return formatTimeOnly(row.shot_time);
   const parts = [row.shot_hour, row.shot_minute, row.shot_second].map((value) => pad2(value));

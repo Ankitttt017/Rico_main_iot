@@ -120,12 +120,12 @@ export const REGISTER_GROUPS = [
     keys: [
       { name: "cooling_water_mov", unit: "L/min" },
       { name: "cooling_water_sta", unit: "L/min" },
-      { name: "furnace_metal_temp", unit: "C" },
-      { name: "fixed_die_temp_f1", unit: "C" },
-      { name: "fixed_die_temp_f2", unit: "C" },
-      { name: "moving_die_temp_m1", unit: "C" },
-      { name: "moving_die_temp_m2", unit: "C" },
-      { name: "slide_temp_s1", unit: "C" },
+      { name: "furnace_metal_temp", unit: "°C" },
+      { name: "fixed_die_temp_f1", unit: "°C" },
+      { name: "fixed_die_temp_f2", unit: "°C" },
+      { name: "moving_die_temp_m1", unit: "°C" },
+      { name: "moving_die_temp_m2", unit: "°C" },
+      { name: "slide_temp_s1", unit: "°C" },
     ],
   },
   {

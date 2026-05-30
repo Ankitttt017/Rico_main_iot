@@ -4,21 +4,13 @@ import AppLayout from "../../../components/common/AppLayout";
 import { getPlcLatestReadings } from "../../../services/api";
 import { SOCKET_URL } from "../../../services/endpoints";
 import { DEFAULT_MACHINES, MACHINE_NAMES, PLC_LATEST_POLL_MS, REGISTER_GROUPS, getMachineKey, mergeMachineList } from "../constants";
-import PlcReportModal from "../components/PlcReportModal";
 import PlcMonitorStyles from "../components/PlcMonitorStyles";
+import PlcReportModal from "../components/PlcReportModal";
 import { MachineStatusCard, MetricTile, ParameterTable, STATUS_CFG, ValueCard, formatValue } from "../components/PlcWidgets";
-import {
-  buildShotDateFromRow,
-  buildShotTimeFromRow,
-  formatDateOnly,
-  formatDateTime,
-  formatTimeOnly,
-  getMachineKindFromRow,
-  getRowTimestamp,
-  rowToReadings,
-} from "../utils/plcFormatters";
+import { buildShotDateFromRow, buildShotTimeFromRow, formatDateOnly, formatDateTime, formatTimeOnly, getMachineKindFromRow, getNumericShotNumber, getReadingShotNumber, getRowTimestamp, rowToReadings } from "../utils/plcFormatters";
+
 function PLCDashboard() {
-  const [theme, setTheme] = useState("light");
+  const [theme] = useState("light");
   const [plcConnected, setPlcConnected] = useState(false);
   const [socketConnected, setSocketConnected] = useState(false);
   const [cycleStatus, setCycleStatus] = useState("idle");
@@ -30,21 +22,41 @@ function PLCDashboard() {
   const [cycleCount, setCycleCount] = useState(0);
   const [sparklines, setSparklines] = useState({});
   const [activeGroup, setActiveGroup] = useState(null);
-  const [viewMode, setViewMode] = useState("cards");
   const [machines, setMachines] = useState(DEFAULT_MACHINES);
   const [machineStatuses, setMachineStatuses] = useState({});
   const [monitoringRunning, setMonitoringRunning] = useState(true);
   const [plcConfig, setPlcConfig] = useState({ key: "ube-850t-2", ip: "192.168.117.201", port: 5002,kind: "ube" });
   const [draftConfig, setDraftConfig] = useState({ ip: "192.168.117.201", port: "5002" });
   const [configMessage, setConfigMessage] = useState("");
-  const [savingConfig, setSavingConfig] = useState(false);
   const [readingsByIp, setReadingsByIp] = useState({});
   const [historyByIp, setHistoryByIp] = useState({});
   const [sparkByIp, setSparkByIp] = useState({});
   const [metaByIp, setMetaByIp] = useState({});
   const socketRef = useRef(null);
   const selectedKeyRef = useRef(plcConfig.key || plcConfig.ip);
+  const selectedSnapshotRef = useRef({ shotNumber: null, observedAtMs: 0, source: "" });
   const disconnectTimerRef = useRef(null);
+
+  const rememberSelectedSnapshot = useCallback((readingsSnapshot = {}, { observedAt, source } = {}) => {
+    const shotNumber = getReadingShotNumber(readingsSnapshot);
+    if (shotNumber === null) return;
+    const observedAtMs = observedAt ? new Date(observedAt).getTime() : Date.now();
+    selectedSnapshotRef.current = {
+      shotNumber,
+      observedAtMs: Number.isNaN(observedAtMs) ? Date.now() : observedAtMs,
+      source: source || selectedSnapshotRef.current.source,
+    };
+  }, []);
+
+  const isOlderDbSnapshotForSelectedMachine = useCallback((row = {}) => {
+    const dbShotNumber = getNumericShotNumber(row.shot_number);
+    const current = selectedSnapshotRef.current;
+    if (dbShotNumber === null || current.shotNumber === null) return false;
+    if (dbShotNumber >= current.shotNumber) return false;
+
+    const liveAgeMs = Date.now() - (current.observedAtMs || 0);
+    return current.source === "live" && liveAgeMs < Math.max(PLC_LATEST_POLL_MS * 3, 10000);
+  }, []);
 
   useEffect(() => {
     selectedKeyRef.current = plcConfig.key || plcConfig.ip;
@@ -114,6 +126,7 @@ function PLCDashboard() {
         const cycleTime = row.cycle_time ?? null;
         const historyItem = { id: `db-${row.id || timestamp}`, timestamp: new Date(timestamp), cycleTime };
         setReadings(nextReadings);
+        rememberSelectedSnapshot(nextReadings, { observedAt: timestamp, source: "db" });
         setCycleHistory([historyItem]);
         setCycleCount(1);
         setLastTimestamp(new Date(timestamp));
@@ -129,7 +142,7 @@ function PLCDashboard() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [rememberSelectedSnapshot]);
 
   const pushSpark = useCallback((name, value) => {
     setSparklines(prev => {
@@ -234,7 +247,10 @@ function PLCDashboard() {
         const cycleTime = selectedRow.cycle_time ?? null;
         const historyItem = { id: `db-${selectedRow.id || timestamp}`, timestamp: new Date(timestamp), cycleTime };
 
+        if (isOlderDbSnapshotForSelectedMachine(selectedRow)) return;
+
         setReadings(nextReadings);
+        rememberSelectedSnapshot(nextReadings, { observedAt: timestamp, source: "db" });
         setLastTimestamp(new Date(timestamp));
         setPartName(selectedRow.part_qr_code || selectedRow.scan_data || selectedRow.part_name || "");
         setShotTime(buildShotTimeFromRow(selectedRow));
@@ -263,7 +279,7 @@ function PLCDashboard() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [plcConfig.ip, plcConfig.key, pushSpark]);
+  }, [isOlderDbSnapshotForSelectedMachine, plcConfig.ip, plcConfig.key, pushSpark, rememberSelectedSnapshot]);
 
   const loadMachineSnapshot = useCallback((machineOrKey) => {
     const lookupKeys = typeof machineOrKey === "object"
@@ -398,6 +414,7 @@ function PLCDashboard() {
       setPlcConfig({ key, ip, port, kind: config?.kind });
       setDraftConfig({ ip, port: String(port) });
       setReadings(r);
+      rememberSelectedSnapshot(r, { observedAt: observedTimestamp, source: "live" });
       if (!liveOnly && eventTimestamp) {
         setLastTimestamp(new Date(eventTimestamp));
       }
@@ -444,6 +461,7 @@ function PLCDashboard() {
       setDraftConfig({ ip, port: String(port) });
       setCycleStatus("complete");
       setReadings(r);
+      rememberSelectedSnapshot(r, { observedAt: eventTimestamp, source: "live" });
       setLastTimestamp(new Date(eventTimestamp));
       setPartName(eventPartName);
       setShotTime(nextShotTime || "");
@@ -463,7 +481,7 @@ function PLCDashboard() {
       }
       socket.disconnect();
     };
-  }, [normalizeConfig, pushSpark]);
+  }, [normalizeConfig, pushSpark, rememberSelectedSnapshot]);
 
   const st = STATUS_CFG[cycleStatus] || STATUS_CFG.idle;
   const shotNumber = readings.shot_number?.value ?? null;
@@ -484,12 +502,53 @@ function PLCDashboard() {
   const selectedMachineStatus = machineStatuses[selectedMachineKey] || machineStatuses[plcConfig.ip] || {};
   const selectedMachineOnline = Boolean(selectedMachineStatus.connected);
   const selectedPlcConnected = Boolean(selectedMachineStatus.connected || selectedMachineStatus.hasRecentData || readings.plc_ip?.value);
-  const themeLabel = theme === "dark" ? "Dark" : "White";
-  const availableGroups = REGISTER_GROUPS.filter((group) => group.kind === selectedMachineKind);
+  const availableGroups = REGISTER_GROUPS
+    .filter((group) => group.kind === selectedMachineKind)
+    .filter((group) => {
+      if (group.id !== "machine_bits") return true;
+      return group.keys.some(({ name }) => {
+        const value = readings[name]?.value;
+        if (!hasReadableValue(value)) return false;
+        if (name === "cycle_end" && Number(value) === 0) return false;
+        return true;
+      });
+    });
   const validActiveGroup = availableGroups.some((group) => group.id === activeGroup) ? activeGroup : null;
-  const displayGroups = validActiveGroup
+  const baseDisplayGroups = validActiveGroup
     ? availableGroups.filter(g => g.id === validActiveGroup)
     : availableGroups;
+  const displayGroups = baseDisplayGroups
+    .map((group) => (
+      group.id === "machine_bits"
+        ? {
+            ...group,
+            keys: group.keys.filter(({ name }) => {
+              const value = readings[name]?.value;
+              if (!hasReadableValue(value)) return false;
+              if (name === "cycle_end" && Number(value) === 0) return false;
+              return true;
+            }),
+          }
+        : group
+    ))
+    .filter((group) => group.keys.length > 0);
+  const compactCardHiddenFields = new Set([
+    "machine_name",
+    "plc_ip",
+    "shot_datetime",
+    "shot_year",
+    "shot_month",
+    "shot_day",
+    "shot_hour",
+    "shot_minute",
+    "shot_second",
+  ]);
+  const cardGroups = displayGroups
+    .map((group) => ({
+      ...group,
+      keys: group.keys.filter(({ name }) => !compactCardHiddenFields.has(name)),
+    }))
+    .filter((group) => group.keys.length > 0);
   const reportReading = {
     ...Object.fromEntries(Object.entries(readings).map(([name, item]) => [name, item?.value ?? null])),
     machine_name: readings.machine_name?.value || machineName,
@@ -516,53 +575,6 @@ function PLCDashboard() {
     setSparklines({});
   };
 
-  const updateDraftConfig = (key, value) => {
-    setDraftConfig(prev => ({ ...prev, [key]: value }));
-    setConfigMessage("");
-  };
-
-  const togglePlcProgram = () => {
-    const socket = socketRef.current;
-    if (!socket || !socketConnected) {
-      setConfigMessage("Server is not connected.");
-      return;
-    }
-
-    if (monitoringRunning) {
-      socket.emit("set_monitoring", { running: false }, (res) => {
-        if (res?.ok) {
-          setMonitoringRunning(false);
-          setConfigMessage("PLC monitoring stopped.");
-        }
-      });
-      return;
-    }
-
-    setSavingConfig(true);
-    setConfigMessage("Starting PLC monitoring...");
-    socket.emit("update_plc_config", {
-      key: plcConfig.key,
-      ip: draftConfig.ip.trim(),
-      port: Number(draftConfig.port),
-      kind: plcConfig.kind,
-    }, (res) => {
-      setSavingConfig(false);
-
-      if (!res?.ok) {
-        setConfigMessage(res?.error || "PLC config update failed.");
-        return;
-      }
-
-      setPlcConfig(res.config);
-      setDraftConfig({ ip: res.config.ip, port: String(res.config.port) });
-      resetDashboardData();
-      socket.emit("set_monitoring", { running: true }, (runRes) => {
-        setMonitoringRunning(Boolean(runRes?.running));
-      });
-      setConfigMessage("PLC monitoring started.");
-    });
-  };
-
   const selectMachine = (key) => {
     const machine = DEFAULT_MACHINES.find(item => getMachineKey(item) === key)
       || machines.find(item => getMachineKey(item) === key)
@@ -577,15 +589,6 @@ function PLCDashboard() {
     socketRef.current?.emit("update_plc_config", config);
   };
 
-  const setMonitoring = (running) => {
-    socketRef.current?.emit("set_monitoring", { running }, (res) => {
-      if (res?.ok) {
-        setMonitoringRunning(res.running);
-        setConfigMessage(res.running ? "PLC monitoring started." : "PLC monitoring stopped.");
-      }
-    });
-  };
-
   return (
     <>
       <PlcMonitorStyles />
@@ -594,13 +597,13 @@ function PLCDashboard() {
         <div className="shell">
           <header className="header">
             <div>
-              <div className="plant-tag">Live Production Dashboard</div>
+              <div className="plant-tag">Production Monitor</div>
               <div className="header-title">
                 <span className={`status-dot ${socketConnected ? "" : "off"}`} />
-                PLC MONITOR
+                {machineName} Live Production
               </div>
               <div className="header-sub">
-                Mitsubishi MC Protocol | Type3E Binary | 1s Polling
+                Real-time machine parameters and latest cycle status
               </div>
             </div>
 
@@ -620,55 +623,10 @@ function PLCDashboard() {
                     })}
                   </select>
                 </label>
-                <label className="field">
-                  <span>PLC IP</span>
-                  <input
-                    value={draftConfig.ip}
-                    onChange={(e) => updateDraftConfig("ip", e.target.value)}
-                    placeholder="192.168.117.201"
-                  />
-                </label>
-                <label className="field field-port">
-                  <span>Port</span>
-                  <input
-                    value={draftConfig.port}
-                    onChange={(e) => updateDraftConfig("port", e.target.value)}
-                    placeholder="5002"
-                    inputMode="numeric"
-                  />
-                </label>
-                <button
-                  className={`run-btn ${monitoringRunning ? "is-running" : ""}`}
-                  type="button"
-                  onClick={togglePlcProgram}
-                  disabled={savingConfig}
-                >
-                  {savingConfig ? "..." : monitoringRunning ? "STOP" : "START"}
-                </button>
               </div>
 
-              <div className="right-tools">
-                <button
-                  className="theme-toggle"
-                  onClick={() => setTheme(prev => prev === "dark" ? "light" : "dark")}
-                  aria-label="Toggle dashboard theme"
-                >
-                  <span className={`toggle-track ${theme === "light" ? "is-light" : ""}`}>
-                    <span className="toggle-knob" />
-                  </span>
-                  {themeLabel}
-                </button>
-                <div className="badges">
-                  <span className={`badge ${socketConnected ? "badge-green" : "badge-red"}`}>
-                    SERVER
-                  </span>
-                  <span className={`badge ${selectedPlcConnected ? "badge-blue" : "badge-red"}`}>
-                    PLC
-                  </span>
-                </div>
-              </div>
               <div className="config-line">
-                Target: {plcConfig.ip}:{plcConfig.port} | {machineName}
+                Last update: {lastTimestamp ? lastTimestamp.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) : "Waiting for cycle"}
                 {selectedMachineStatus.error && <span>{selectedMachineStatus.error}</span>}
                 {configMessage && <span>{configMessage}</span>}
               </div>
@@ -685,11 +643,10 @@ function PLCDashboard() {
                 {selectedMachineOnline ? "ONLINE" : socketConnected ? "SERVER READY" : "OFFLINE"}
               </div>
               <div className="state-sub">
-                {machineName} | {plcConfig.ip}:{plcConfig.port} | {monitoringRunning ? "RUNNING" : "STOPPED"}
+                {machineName} | {monitoringRunning ? "RUNNING" : "STOPPED"}
               </div>
             </div>
 
-            <MetricTile label="Machine" value={machineName} tone="slate" />
             <MetricTile label={isLeakTestMachine ? "Part QR Code" : "Part Name"} value={partName || "-"} tone="cyan" />
             <MetricTile
               label={isLeakTestMachine ? "Result" : "Shot Number"}
@@ -747,23 +704,6 @@ function PLCDashboard() {
                     </button>
                   ))}
                 </div>
-
-                <div className="view-actions">
-                  <div className="view-toggle" aria-label="Change parameter view">
-                    <button
-                      className={`view-btn ${viewMode === "cards" ? "active" : ""}`}
-                      onClick={() => setViewMode("cards")}
-                    >
-                      CARDS
-                    </button>
-                    <button
-                      className={`view-btn ${viewMode === "table" ? "active" : ""}`}
-                      onClick={() => setViewMode("table")}
-                    >
-                      TABLE
-                    </button>
-                  </div>
-                </div>
               </div>
 
               {Object.keys(readings).length === 0 && (
@@ -777,13 +717,7 @@ function PLCDashboard() {
                 </div>
               )}
 
-              {Object.keys(readings).length > 0 && viewMode === "table" && (
-                <div className="table-layout">
-                  <ParameterTable groups={displayGroups} readings={readings} />
-                </div>
-              )}
-
-              {Object.keys(readings).length > 0 && viewMode === "cards" && displayGroups.map(group => (
+              {Object.keys(readings).length > 0 && cardGroups.map(group => (
                   <section
                     key={group.id}
                     className="group-section"
@@ -815,60 +749,8 @@ function PLCDashboard() {
                   </section>
                 ))}
             </div>
-
-            <aside className="side-stack">
-              <MachineStatusCard
-                machineName={machineName}
-                machineKind={selectedMachineKind}
-                plcConfig={plcConfig}
-                socketConnected={socketConnected}
-                monitoringRunning={monitoringRunning}
-                selectedMachineStatus={selectedMachineStatus}
-                readings={readings}
-                lastTimestamp={lastTimestamp}
-              />
-
-              <div className="info-card">
-                <div className="info-card-title">Last Cycle Detail</div>
-                {lastTimestamp ? (
-                  <>
-                    <div className="info-time">{lastTimestamp.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}</div>
-                    <div className="info-date">{formatDateOnly(lastTimestamp)}</div>
-                    <div className="info-ct">
-                      {isLeakTestMachine ? "Result" : "Shot"} {formatValue(isLeakTestMachine ? readings.result?.value ?? null : shotNumber)} | CT {formatValue(cycleTime)} sec
-                    </div>
-                    {partName && (
-                      <div className="info-ct">
-                        {isLeakTestMachine ? "Part QR" : "Part"} {partName}
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div className="info-none">No cycle completed yet</div>
-                )}
-              </div>
-
-              <div className="info-card history-card">
-                <div className="info-card-title">Recent History</div>
-                {cycleHistory.length === 0 ? (
-                  <div className="info-none">No history yet</div>
-                ) : (
-                  <div className="history-scroll">
-                    {cycleHistory.map((h, i) => (
-                      <div key={h.id} className="hist-row">
-                        <span className="hist-time">{h.timestamp.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}</span>
-                        <span className={`hist-ct ${i > 0 ? "old" : ""}`}>{h.cycleTime}s</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </aside>
           </section>
 
-          <footer className="footer">
-            {machineName} | PLC: {plcConfig.ip}:{plcConfig.port} | SERVER: {SOCKET_URL} | POLL: 1s
-          </footer>
         </div>
       </div>
     </>
@@ -877,7 +759,7 @@ function PLCDashboard() {
 
 export default function PlcMonitorPage({ onLogout, currentUser }) {
   return (
-    <AppLayout onLogout={onLogout} currentUser={currentUser}>
+    <AppLayout onLogout={onLogout} currentUser={currentUser} hideFooter>
       <PLCDashboard />
     </AppLayout>
   );

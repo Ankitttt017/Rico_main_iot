@@ -1,16 +1,20 @@
 import { getDisplayLabel } from "../utils/plcFormatters";
 
 export function Spark({ data, color = "#22d3ee" }) {
-  if (!data || data.length < 2) return <div className="spark-empty" />;
+  if (!data) return null;
 
-  const min = Math.min(...data);
-  const max = Math.max(...data);
+  const values = data.map(Number).filter(Number.isFinite);
+  if (values.length === 0) return null;
+  if (values.length < 2) return <div className="spark-empty" />;
+
+  const min = Math.min(...values);
+  const max = Math.max(...values);
   const range = max - min || 1;
   const w = 76;
   const h = 28;
-  const pts = data
+  const pts = values
     .map((v, i) => {
-      const x = (i / (data.length - 1)) * w;
+      const x = (i / (values.length - 1)) * w;
       const y = h - ((v - min) / range) * h;
       return `${x},${y}`;
     })
@@ -42,6 +46,11 @@ export function formatValue(value, fallback = "-") {
   }
 
   return value;
+}
+
+export function hasReadableValue(value) {
+  if (value === null || value === undefined) return false;
+  return String(value).trim() !== "" && String(value).trim() !== "-";
 }
 
 export function ValueCard({ name, label, unit, value, history, accentColor }) {
@@ -108,7 +117,6 @@ export function MachineStatusCard({
 
   const detailItems = isLeakTest
     ? [
-        ["PLC", `${plcConfig.ip}:${plcConfig.port}`],
         ["Monitor", monitoringRunning ? "RUNNING" : "STOPPED"],
         ["Part QR", formatValue(partQrCode)],
         ["Result", formatValue(leakResult)],
@@ -118,10 +126,7 @@ export function MachineStatusCard({
         ["Manual", formatValue(manualMode)],
       ]
     : [
-        ["PLC", `${plcConfig.ip}:${plcConfig.port}`],
         ["Monitor", monitoringRunning ? "RUNNING" : "STOPPED"],
-        ["Shot Number", formatValue(counter)],
-        ["OK Shot", formatValue(highShot)],
         ["E-Stop", formatValue(emergencyStop)],
         ["Hyd. Oil Low", formatValue(oilLevelLow)],
       ];
