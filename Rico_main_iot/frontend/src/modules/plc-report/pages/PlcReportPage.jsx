@@ -359,7 +359,7 @@ function shotStatusLabel(value) {
   if (status === 1) return "OK Shot";
   if (status === 3) return "Warm Up Shot";
   if (status === 5) return "Off Shot";
-  return value || "-";
+  return "-";
 }
 
 function formatValue(value, key) {
