@@ -5,9 +5,9 @@ const cors = require("cors");
 const http = require("http");
 const { Server } = require("socket.io");
 const db = require("./src/config/db");
-const partRoutes = require("./src/routes/partRoutes");
-const lineRoutes = require("./src/routes/lineRoutes");
-const machineRoutes = require("./src/routes/machine");
+const partRoutes = require("./src/modules/parts/part.routes");
+const lineRoutes = require("./src/modules/lines/line.routes");
+const machineRoutes = require("./src/modules/machines/machine.routes");
 const createPlcMonitorRoutes = require("./src/modules/plcMonitor/plcMonitorRoutes");
 const { startPlcMonitor } = require("./src/modules/plcMonitor/plcMonitorService");
 

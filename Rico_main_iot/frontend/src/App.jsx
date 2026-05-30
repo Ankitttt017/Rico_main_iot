@@ -110,7 +110,7 @@ const App = () => {
           ) : (
             <Routes>
             {/* ── Default redirect ── */}
-            <Route path="/" element={<Navigate to="/parts" />} />
+            <Route path="/" element={<Navigate to="/lines" />} />
 
             {/* ══════════════════════════════════════
                 RICO IOT ROUTES
