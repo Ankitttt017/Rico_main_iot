@@ -46,4 +46,6 @@ jobs:
 
       - name: Check Rico IoT backend syntax
         working-directory: ${{ github.workspace }}\Rico_main_iot\backend
-        run: node --check server.js
+        run: |
+          node --check server.js
+          node --check src\modules\plcMonitor\plcMonitorService.js

@@ -105,12 +105,58 @@ function buildShotDateTimeValue(yearValue, monthValue, dayValue, hourValue, minu
   return shotDate && shotTime ? `${shotDate}T${shotTime}` : null;
 }
 
+function buildLocalShotClock(now = new Date()) {
+  const year = now.getFullYear();
+  const month = now.getMonth() + 1;
+  const day = now.getDate();
+  const hour = now.getHours();
+  const minute = now.getMinutes();
+  const second = now.getSeconds();
+  const shotDate = `${year}-${pad2(month)}-${pad2(day)}`;
+  const shotTime = `${pad2(hour)}:${pad2(minute)}:${pad2(second)}`;
+
+  return {
+    shotDate,
+    shotTime,
+    shotDateTime: `${shotDate}T${shotTime}`,
+    shotYear: pad2(year),
+    shotMonth: pad2(month),
+    shotDay: pad2(day),
+    shotHour: pad2(hour),
+    shotMinute: pad2(minute),
+    shotSecond: pad2(second),
+  };
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const PLC_CONNECT_TIMEOUT_MS = Number(process.env.PLC_CONNECT_TIMEOUT_MS || 15000);
+const PLC_RECONNECT_MIN_MS = Number(process.env.PLC_RECONNECT_MIN_MS || process.env.PLC_RECONNECT_MS || 2000);
+const PLC_RECONNECT_MAX_MS = Number(process.env.PLC_RECONNECT_MAX_MS || 30000);
+const PLC_RECONNECT_BACKOFF_FACTOR = Number(process.env.PLC_RECONNECT_BACKOFF_FACTOR || 1.6);
+const PLC_RECONNECT_JITTER_MS = Number(process.env.PLC_RECONNECT_JITTER_MS || 1000);
+
 function isPlcReadTimeoutError(error) {
   return /PLC read timeout|timed out|timeout/i.test(String(error?.message || error || ""));
+}
+
+function isPlcConnectionError(error) {
+  return /PLC connection timeout|PLC read timeout|timed out|timeout|ECONN|EHOST|ENET|EPIPE|socket hang up/i.test(
+    String(error?.message || error || "")
+  );
+}
+
+function reconnectDelayMs(attempt = 1) {
+  const minDelay = Math.max(500, PLC_RECONNECT_MIN_MS);
+  const maxDelay = Math.max(minDelay, PLC_RECONNECT_MAX_MS);
+  const factor = Number.isFinite(PLC_RECONNECT_BACKOFF_FACTOR) && PLC_RECONNECT_BACKOFF_FACTOR > 1
+    ? PLC_RECONNECT_BACKOFF_FACTOR
+    : 1.6;
+  const backoff = minDelay * Math.pow(factor, Math.max(0, attempt - 1));
+  const jitter = PLC_RECONNECT_JITTER_MS > 0 ? Math.floor(Math.random() * PLC_RECONNECT_JITTER_MS) : 0;
+  return Math.min(maxDelay, Math.floor(backoff + jitter));
 }
 
 function closeSocket(sock) {
@@ -320,7 +366,7 @@ async function readString(sock, startDevice, length) {
 function connectPLC(machine) {
   return new Promise((resolve, reject) => {
     const sock = new net.Socket();
-    const timeoutMs = Number(process.env.PLC_CONNECT_TIMEOUT_MS || 5000);
+    const timeoutMs = PLC_CONNECT_TIMEOUT_MS;
     let settled = false;
 
     const cleanup = () => {
@@ -986,9 +1032,6 @@ async function getLatestReadingsForMachines(machineSnapshots = getMachines()) {
       rowByKey.get(machine.key || machine.ip) || rowByKey.get(machine.ip),
       machine
     );
-    persistLiveSnapshotIfAhead(machine, dbReading).catch((error) => {
-      console.error(`PLC live catch-up save failed for ${machine.ip}:`, error.message);
-    });
     results.push(chooseFreshestReading(dbReading, machine));
   }
 
@@ -1088,7 +1131,12 @@ const inFlightUbeSaveKeys = new Set();
 
 function buildUbeTimestampSaveKey(machine, readings = {}) {
   const machineKey = machine.key || machine.ip;
+  const shotNumber = normalizeReadingForDB("shot_number", readings.shot_number ?? readings["SHOT NO."]);
   const shotDate = normalizeReadingForDB("shot_date", readings.shot_date);
+  if (shotNumber !== null && shotNumber !== undefined && shotDate) {
+    return `${machineKey}:shot:${shotDate}:${shotNumber}`;
+  }
+
   const shotTime = normalizeReadingForDB("shot_time", readings.shot_time);
   if (shotDate && shotTime) return `${machineKey}:${shotDate}:${shotTime}`;
 
@@ -1121,7 +1169,20 @@ async function saveToDBUnlocked(machine, partName, readings) {
   const plcRecordedAt = readings.shot_datetime ? new Date(readings.shot_datetime) : null;
   const shotDate = normalizeReadingForDB("shot_date", readings.shot_date);
   const shotTime = normalizeReadingForDB("shot_time", readings.shot_time);
+  const shotNumber = normalizeReadingForDB("shot_number", readings.shot_number ?? readings["SHOT NO."]);
   const hasPlcRecordedAt = plcRecordedAt && !Number.isNaN(plcRecordedAt.getTime());
+
+  if (shotNumber !== null && shotNumber !== undefined && shotDate) {
+    const { rows: duplicateShotRows } = await db.query(
+      `SELECT TOP 1 id FROM ${TABLE}
+       WHERE (machine_key = ? OR plc_ip = ?)
+         AND shot_date = ?
+         AND shot_number = ?
+       ORDER BY recorded_at DESC, id DESC`,
+      [machine.key || machine.ip, machine.ip, shotDate, shotNumber]
+    );
+    if (duplicateShotRows.length) return { skipped: true, reason: "duplicate-shot-number" };
+  }
 
   if ((shotDate && shotTime) || hasPlcRecordedAt) {
     const duplicateFilters = [
@@ -1697,6 +1758,26 @@ BEGIN
     ON ${TABLE} ([plc_ip], [recorded_at] DESC, [id] DESC)
 END
 
+IF NOT EXISTS (
+  SELECT 1 FROM sys.indexes
+  WHERE [name] = N'IX_PlcCycleReadings_machine_shot_date_number'
+    AND [object_id] = OBJECT_ID(N'${TABLE}')
+)
+BEGIN
+  CREATE INDEX [IX_PlcCycleReadings_machine_shot_date_number]
+    ON ${TABLE} ([machine_key], [shot_date], [shot_number], [recorded_at] DESC, [id] DESC)
+END
+
+IF NOT EXISTS (
+  SELECT 1 FROM sys.indexes
+  WHERE [name] = N'IX_PlcCycleReadings_ip_shot_date_number'
+    AND [object_id] = OBJECT_ID(N'${TABLE}')
+)
+BEGIN
+  CREATE INDEX [IX_PlcCycleReadings_ip_shot_date_number]
+    ON ${TABLE} ([plc_ip], [shot_date], [shot_number], [recorded_at] DESC, [id] DESC)
+END
+
 IF EXISTS (
   SELECT 1 FROM sys.indexes
   WHERE [name] = N'UX_MachineShot'
@@ -2079,33 +2160,21 @@ function startPlcMonitor(io) {
     const now = new Date();
 
     const partName = await readString(sock, "D100", 11).catch(() => "");
-    const shotYearRaw = await readWord(sock, SHOT_DATE_TIME_DEVICES.year).catch(() => null);
-    const shotMonthRaw = await readWord(sock, SHOT_DATE_TIME_DEVICES.month).catch(() => null);
-    const shotDayRaw = await readWord(sock, SHOT_DATE_TIME_DEVICES.day).catch(() => null);
-    const shotHour = await readWord(sock, SHOT_DATE_TIME_DEVICES.hour).catch(() => null);
-    const shotMinute = await readWord(sock, SHOT_DATE_TIME_DEVICES.minute).catch(() => null);
-    const shotSecond = await readWord(sock, SHOT_DATE_TIME_DEVICES.second).catch(() => null);
-    const shotTime = buildShotTimeValue(shotHour, shotMinute, shotSecond);
-    const shotDateTime = buildShotDateTimeValue(
-      shotYearRaw,
-      shotMonthRaw,
-      shotDayRaw,
-      shotHour,
-      shotMinute,
-      shotSecond
-    );
+    const localShotClock = buildLocalShotClock(now);
+    const shotTime = localShotClock.shotTime;
+    const shotDateTime = localShotClock.shotDateTime;
     const cycleTimestamp = shotDateTime || now.toISOString();
 
     reportSerial += 1;
-    readings.shot_date = buildShotDateValue(shotYearRaw, shotMonthRaw, shotDayRaw);
+    readings.shot_date = localShotClock.shotDate;
     readings.shot_time = shotTime;
     readings.shot_datetime = shotDateTime;
-    readings.shot_year = pad2(shotYearRaw);
-    readings.shot_month = pad2(shotMonthRaw);
-    readings.shot_day = pad2(shotDayRaw);
-    readings.shot_hour = pad2(shotHour);
-    readings.shot_minute = pad2(shotMinute);
-    readings.shot_second = pad2(shotSecond);
+    readings.shot_year = localShotClock.shotYear;
+    readings.shot_month = localShotClock.shotMonth;
+    readings.shot_day = localShotClock.shotDay;
+    readings.shot_hour = localShotClock.shotHour;
+    readings.shot_minute = localShotClock.shotMinute;
+    readings.shot_second = localShotClock.shotSecond;
 
     for (const parameter of UBE_READ_PARAMETERS) {
       const { name, device, computed } = parameter;
@@ -2129,7 +2198,8 @@ function startPlcMonitor(io) {
             machine, name, readings[name], now
           );
         }
-      } catch {
+      } catch (error) {
+        if (isPlcConnectionError(error)) throw error;
         readings[name] = null;
       }
     }
@@ -2615,26 +2685,43 @@ function startPlcMonitor(io) {
   const monitorMachine = async (machine) => {
     const machineKey = machine.key || machine.ip;
     const machineLabel = `[${isLeakTestMachine(machine) ? "LEAKTEST" : "UBE"}] ${machine.name} (${machine.ip})`;
+    let reconnectAttempt = 0;
 
     while (true) {
       let sock = null;
       try {
+        updateMachineState(machine, {
+          connected: false,
+          error: null,
+          shotStatus: reconnectAttempt
+            ? `Reconnecting PLC socket (attempt ${reconnectAttempt + 1}).`
+            : "Connecting to PLC server.",
+        });
         sock = await connectPLC(machine);
         console.log(`${machineLabel} â€” Connected`);
-        updateMachineState(machine, { connected: true, error: null });
+        reconnectAttempt = 0;
+        updateMachineState(machine, {
+          connected: true,
+          error: null,
+          shotStatus: "PLC connected; monitoring live registers.",
+        });
         recordConnectionChange(machine, true).catch(() => { });
 
         const refreshSocketAfterTimeout = async (reason) => {
           console.warn(`${machineLabel} - PLC read timed out; refreshing socket (${reason})`);
           updateMachineState(machine, {
-            connected: true,
-            error: null,
+            connected: false,
+            error: `PLC response delayed while reading ${reason}. Reconnecting socket.`,
             shotStatus: "PLC response delayed; reconnecting monitor socket.",
           });
           closeSocket(sock);
           await sleep(PLC_RECONNECT_AFTER_TIMEOUT_MS);
           sock = await connectPLC(machine);
-          updateMachineState(machine, { connected: true, error: null });
+          updateMachineState(machine, {
+            connected: true,
+            error: null,
+            shotStatus: "PLC reconnected; monitoring resumed.",
+          });
           return sock;
         };
 
@@ -2649,16 +2736,35 @@ function startPlcMonitor(io) {
             ? await readBit(sock, cycleStartDevice).catch(() => 0)
             : 0;
           let lastCycleEndBit = 0; // Fixed: always start fresh, not from PLC state
+          let consecutiveReadFailures = 0;
 
           while (true) {
             if (!monitoringRunning) { await sleep(1000); continue; }
 
-            const cycleStart = cycleStartDevice
-              ? await readBit(sock, cycleStartDevice).catch(() => lastCycleStartBit)
-              : 0;
-            const cycleEnd = cycleEndDevice
-              ? await readBit(sock, cycleEndDevice).catch(() => lastCycleEndBit)
-              : 0;
+            let cycleStart = lastCycleStartBit;
+            let cycleEnd = lastCycleEndBit;
+
+            try {
+              cycleStart = cycleStartDevice ? await readBit(sock, cycleStartDevice) : 0;
+              cycleEnd = cycleEndDevice ? await readBit(sock, cycleEndDevice) : 0;
+              consecutiveReadFailures = 0;
+            } catch (error) {
+              if (isPlcConnectionError(error)) {
+                await refreshSocketAfterTimeout(`leak cycle bits ${cycleStartDevice || ""}/${cycleEndDevice || ""}`);
+                consecutiveReadFailures = 0;
+                await sleep(Number(process.env.PLC_LEAK_POLL_MS || process.env.PLC_POLL_MS || 1000));
+                continue;
+              }
+
+              consecutiveReadFailures += 1;
+              updateMachineState(machine, {
+                connected: true,
+                error: `PLC read failed (${consecutiveReadFailures}/${PLC_MAX_CONSECUTIVE_READ_FAILURES}): ${error.message}`,
+              });
+              if (consecutiveReadFailures >= PLC_MAX_CONSECUTIVE_READ_FAILURES) {
+                throw new Error(`PLC connection stale after ${consecutiveReadFailures} read failures: ${error.message}`);
+              }
+            }
 
             const cycleStartedNow = cycleStartDevice
               ? cycleStart === 1 && lastCycleStartBit !== 1
@@ -2689,14 +2795,17 @@ function startPlcMonitor(io) {
                 liveOnly: true,
                 cycleEndAt: new Date(),
               }).catch((error) => {
+                if (isPlcConnectionError(error)) throw error;
+                consecutiveReadFailures += 1;
                 updateMachineState(machine, {
                   connected: true,
-                  error: `Live read failed: ${error.message}`,
+                  error: `Live read failed (${consecutiveReadFailures}/${PLC_MAX_CONSECUTIVE_READ_FAILURES}): ${error.message}`,
                 });
                 return null;
               });
 
               if (probePayload) {
+                consecutiveReadFailures = 0;
                 const probeReadings = Object.fromEntries(
                   Object.entries(probePayload.readings || {}).map(([name, r]) => [name, r?.value])
                 );
@@ -2738,6 +2847,9 @@ function startPlcMonitor(io) {
                     saved: false,
                   });
                 }
+              }
+              if (!probePayload && consecutiveReadFailures >= PLC_MAX_CONSECUTIVE_READ_FAILURES) {
+                throw new Error(`PLC live reads failed ${consecutiveReadFailures} times; reconnecting.`);
               }
             }
 
@@ -2874,11 +2986,17 @@ function startPlcMonitor(io) {
           await sleep(UBE_CYCLE_END_POLL_MS);
         }
       } catch (error) {
+        reconnectAttempt += 1;
+        const reconnectDelay = reconnectDelayMs(reconnectAttempt);
         console.error(`${machineLabel} â€” Error: ${error.message}`);
-        updateMachineState(machine, { connected: false, error: error.message });
+        updateMachineState(machine, {
+          connected: false,
+          error: error.message,
+          shotStatus: `PLC offline; retrying in ${Math.ceil(reconnectDelay / 1000)} sec.`,
+        });
         recordConnectionChange(machine, false, error.message).catch(() => { });
         closeSocket(sock);
-        await sleep(Number(process.env.PLC_RECONNECT_MS || 5000));
+        await sleep(reconnectDelay);
       }
     }
   };

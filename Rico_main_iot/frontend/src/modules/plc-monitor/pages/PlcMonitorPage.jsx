@@ -490,8 +490,8 @@ function PLCDashboard() {
 
   const st = STATUS_CFG[cycleStatus] || STATUS_CFG.idle;
   const shotNumber = readings.shot_number?.value ?? null;
-  const highShot = readings.ok_shot?.value ?? null;
   const cycleTime = readings.cycle_time?.value ?? null;
+  const shotForwardTime = readings.shot_fwd_time?.value ?? null;
   const shotDate = readings.shot_date?.value || buildShotDateFromRow(
     Object.fromEntries(Object.entries(readings).map(([name, item]) => [name, item?.value ?? null]))
   );
@@ -658,11 +658,13 @@ function PLCDashboard() {
               value={isLeakTestMachine ? readings.result?.value ?? null : shotNumber}
               tone="cyan"
             />
-            <MetricTile
-              label={isLeakTestMachine ? "Body Leak" : "OK Shot"}
-              value={isLeakTestMachine ? readings.body_leak_value?.value ?? null : highShot}
-              tone="green"
-            />
+            {isLeakTestMachine && (
+              <MetricTile
+                label="Body Leak"
+                value={readings.body_leak_value?.value ?? null}
+                tone="green"
+              />
+            )}
             {isLeakTestMachine && (
               <MetricTile
                 label="GALL-1 / GALL-2"
@@ -672,10 +674,11 @@ function PLCDashboard() {
             )}
             <MetricTile label="Cycle Time" value={cycleTime} unit="sec" tone="green" />
             <MetricTile
-              label={isLeakTestMachine ? "Cycle End Time" : "Shot Time"}
+              label={isLeakTestMachine ? "Cycle End Time" : "Shot Forward Time"}
               value={isLeakTestMachine
                 ? (lastTimestamp ? lastTimestamp.toLocaleTimeString() : null)
-                : formatTimeOnly(plcShotTime)}
+                : shotForwardTime}
+              unit={isLeakTestMachine ? "" : "sec"}
               tone="slate"
             />
             {!isLeakTestMachine && (

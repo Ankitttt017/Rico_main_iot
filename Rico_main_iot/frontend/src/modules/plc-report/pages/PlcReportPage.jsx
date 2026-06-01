@@ -27,6 +27,7 @@ const HIDDEN_COLUMNS = new Set([
   "shot_hour",
   "shot_minute",
   "shot_month",
+  "ok_shot",
   "shot_second",
   "shot_year",
   "machine_name",
@@ -59,7 +60,6 @@ const PREFERRED_COLUMNS = [
   "shot_number",
   "shot_status",
   "cycle_time",
-  "ok_shot",
 ];
 
 const SHOT_STATUS = {
@@ -153,6 +153,7 @@ function slugify(value) {
 function labelize(key) {
   if (key === SERIAL_COLUMN) return "S No";
   if (key === SHIFT_COLUMN) return "Shift";
+  if (normalizeColumnKey(key) === "shot_number") return "Machine Shot Number";
   return String(key || "")
     .replace(/_/g, " ")
     .replace(/\b\w/g, (char) => char.toUpperCase());
