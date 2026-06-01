@@ -60,10 +60,6 @@ jobs:
         working-directory: C:\Users\IOT1\Desktop\Rico_Main_Iot_Production\Rico_main_iot\backend
         run: npm install
 
-      - name: Apply Rico IoT Database Schema
-        working-directory: C:\Users\IOT1\Desktop\Rico_Main_Iot_Production\Rico_main_iot\backend
-        run: node -e "const db=require('./src/config/db'); db.initializeSchema().then(()=>process.exit(0)).catch((err)=>{console.error(err); process.exit(1);})"
-
       - name: Restart Rico IoT Backend
         working-directory: C:\Users\IOT1\Desktop\Rico_Main_Iot_Production\Rico_main_iot
         run: C:\Users\IOT1\AppData\Roaming\npm\pm2.cmd startOrRestart ecosystem.config.js --only rico-main-iot-backend --update-env && C:\Users\IOT1\AppData\Roaming\npm\pm2.cmd save

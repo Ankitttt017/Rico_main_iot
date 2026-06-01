@@ -41,14 +41,17 @@ const LoginPage = ({ onLogin }) => {
           <div className="absolute left-8 right-8 top-8 h-px bg-white/15" />
 
           <div className="relative">
-            <div className="inline-flex h-20 w-28 items-center justify-center rounded-lg bg-white shadow-xl shadow-black/10 ring-1 ring-white/60">
+            <div className="inline-flex h-24 w-48 flex-col items-center justify-center rounded-lg bg-white px-4 py-3 shadow-xl shadow-black/10 ring-1 ring-white/60">
               <div className="scale-[0.72]">
                 <BrandLogo wordmark className="justify-center" />
               </div>
+              <span className="mt-1 max-w-full text-center text-[10px] font-extrabold uppercase leading-tight tracking-[0.08em] text-[#0b4f86]">
+                Intelligence Manufacturing Platform
+              </span>
             </div>
             <div className="mt-10 max-w-sm">
               <h1 className="text-[34px] font-bold leading-tight text-white">
-                {t("IOT DEVICE MANAGEMENT")}
+                {t("Rico Intelligence Manufacturing Platform")}
               </h1>
               <p className="mt-5 text-[15px] font-medium leading-7 text-white/78">
                 Secure access for master data, PLC monitoring, traceability, and production reports.
@@ -74,10 +77,13 @@ const LoginPage = ({ onLogin }) => {
 
         <section className="flex min-h-[540px] flex-col px-6 py-8 sm:px-10 lg:px-12 lg:py-10">
           <div className="mb-8 flex justify-center lg:hidden">
-            <div className="flex h-20 w-28 items-center justify-center rounded-xl bg-white shadow-lg ring-1 ring-slate-200">
+            <div className="flex h-24 w-48 flex-col items-center justify-center rounded-xl bg-white px-4 py-3 shadow-lg ring-1 ring-slate-200">
               <div className="scale-[0.72]">
                 <BrandLogo wordmark className="justify-center" />
               </div>
+              <span className="mt-1 max-w-full text-center text-[10px] font-extrabold uppercase leading-tight tracking-[0.08em] text-[#0b4f86]">
+                Intelligence Manufacturing Platform
+              </span>
             </div>
           </div>
 

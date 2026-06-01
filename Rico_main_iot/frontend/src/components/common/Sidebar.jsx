@@ -166,8 +166,11 @@ const Sidebar = () => {
           }
         >
           {!collapsed && (
-            <div className="flex h-14 min-w-0 flex-1 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-white px-4 shadow-lg shadow-black/10">
+            <div className="flex h-14 min-w-0 flex-1 flex-col items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-white px-4 py-1.5 shadow-lg shadow-black/10">
               <BrandLogo wordmark />
+              <span className="mt-0.5 max-w-full text-center text-[9px] font-extrabold uppercase leading-none tracking-[0.08em] text-[#0b4f86]">
+                Intelligence Manufacturing
+              </span>
             </div>
           )}
           <button
