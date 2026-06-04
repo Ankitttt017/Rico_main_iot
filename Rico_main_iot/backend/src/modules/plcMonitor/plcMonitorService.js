@@ -1160,13 +1160,15 @@ async function getConnectionEvents({ ip, limit = 200, from, to } = {}) {
 
 const inFlightUbeSaveKeys = new Set();
 
-async function calculateMinorStoppageMachine(machine, readings = {}) {
+async function calculateCompletedMinorStoppageMachine(machine, readings = {}) {
   const currentShotAt = normalizeReadingForDB("shot_datetime", readings.shot_datetime);
-  const cycleTime = Number(normalizeReadingForDB("cycle_time", readings.cycle_time ?? readings["CYCLE TIME sec."]));
-  if (!currentShotAt || !Number.isFinite(cycleTime)) return null;
+  if (!currentShotAt) return null;
 
   const { rows } = await db.query(
-    `SELECT TOP 1 COALESCE(shot_datetime, recorded_at) AS previous_shot_at
+    `SELECT TOP 1
+       id,
+       COALESCE(shot_datetime, recorded_at) AS previous_shot_at,
+       TRY_CONVERT(DECIMAL(18,2), cycle_time) AS previous_cycle_time
      FROM ${TABLE}
      WHERE (machine_key = ? OR plc_ip = ?)
        AND COALESCE(shot_datetime, recorded_at) < ?
@@ -1174,16 +1176,40 @@ async function calculateMinorStoppageMachine(machine, readings = {}) {
     [machine.key || machine.ip, machine.ip, currentShotAt]
   );
 
-  const previousShotAt = rows[0]?.previous_shot_at ? new Date(rows[0].previous_shot_at) : null;
+  const previousRow = rows[0] || null;
+  const previousShotAt = previousRow?.previous_shot_at ? new Date(previousRow.previous_shot_at) : null;
+  const previousCycleTime = Number(previousRow?.previous_cycle_time);
   const currentShotDate = new Date(currentShotAt);
-  if (!previousShotAt || Number.isNaN(previousShotAt.getTime()) || Number.isNaN(currentShotDate.getTime())) {
+  if (
+    !previousRow ||
+    !previousShotAt ||
+    Number.isNaN(previousShotAt.getTime()) ||
+    Number.isNaN(currentShotDate.getTime()) ||
+    !Number.isFinite(previousCycleTime)
+  ) {
     return null;
   }
 
   const shotGapSeconds = (currentShotDate.getTime() - previousShotAt.getTime()) / 1000;
-  const stoppageSeconds = shotGapSeconds - cycleTime;
+  const stoppageSeconds = shotGapSeconds - previousCycleTime;
   if (!Number.isFinite(stoppageSeconds)) return null;
-  return Number(Math.max(0, stoppageSeconds).toFixed(2));
+  return {
+    previousId: previousRow.id,
+    value: Number(Math.max(0, stoppageSeconds).toFixed(2)),
+  };
+}
+
+async function updatePreviousMinorStoppageMachine(machine, readings = {}) {
+  const completed = await calculateCompletedMinorStoppageMachine(machine, readings);
+  if (!completed) return null;
+
+  await db.run(
+    `UPDATE ${TABLE}
+     SET [minor_stoppage_machine] = ?
+     WHERE [id] = ?`,
+    [completed.value, completed.previousId]
+  );
+  return completed.value;
 }
 
 function buildUbeTimestampSaveKey(machine, readings = {}) {
@@ -1229,9 +1255,7 @@ async function saveToDBUnlocked(machine, partName, readings) {
     return { skipped: true, reason: "missing-plc-shot-datetime" };
   }
 
-  if (readings.minor_stoppage_machine === undefined) {
-    readings.minor_stoppage_machine = await calculateMinorStoppageMachine(machine, readings);
-  }
+  readings.minor_stoppage_machine = null;
 
   if (shotNumber !== null && shotNumber !== undefined && shotDate) {
     const { rows: duplicateShotRows } = await db.query(
@@ -1302,6 +1326,7 @@ async function saveToDBUnlocked(machine, partName, readings) {
     .join(", ");
 
   await db.run(`INSERT INTO ${TABLE} (${columnSql}) VALUES (${placeholders})`, values);
+  await updatePreviousMinorStoppageMachine(machine, readings);
   return { skipped: false };
 }
 
@@ -1731,24 +1756,23 @@ BEGIN
       [id],
       [shot_at],
       TRY_CONVERT(DECIMAL(18,2), [cycle_time]) AS cycle_time_value,
-      LAG([shot_at]) OVER (
+      LEAD([shot_at]) OVER (
         PARTITION BY COALESCE([machine_key], [plc_ip])
         ORDER BY [shot_at] ASC, [id] ASC
-      ) AS previous_shot_at
+      ) AS next_shot_at
     FROM recent_rows
     WHERE [shot_at] IS NOT NULL
   )
   UPDATE target
   SET [minor_stoppage_machine] = CAST(
     CASE
-      WHEN DATEDIFF(second, ordered.previous_shot_at, ordered.shot_at) - ordered.cycle_time_value < 0 THEN 0
-      ELSE DATEDIFF(second, ordered.previous_shot_at, ordered.shot_at) - ordered.cycle_time_value
+      WHEN ordered.next_shot_at IS NULL OR ordered.cycle_time_value IS NULL THEN NULL
+      WHEN DATEDIFF(second, ordered.shot_at, ordered.next_shot_at) - ordered.cycle_time_value < 0 THEN 0
+      ELSE DATEDIFF(second, ordered.shot_at, ordered.next_shot_at) - ordered.cycle_time_value
     END AS DECIMAL(18,2)
   )
   FROM ${TABLE} target
   INNER JOIN ordered ON target.[id] = ordered.[id]
-  WHERE ordered.previous_shot_at IS NOT NULL
-    AND ordered.cycle_time_value IS NOT NULL
 END
 
 IF OBJECT_ID(N'${LEAK_TEST_TABLE}', N'U') IS NULL
@@ -2326,7 +2350,8 @@ function startPlcMonitor(io) {
       }
     }
 
-    readings.minor_stoppage_machine = await calculateMinorStoppageMachine(machine, readings);
+    const completedMinorStoppage = await calculateCompletedMinorStoppageMachine(machine, readings);
+    readings.minor_stoppage_machine = completedMinorStoppage?.value ?? null;
 
     // â”€â”€ machineKey + machineType always in payload â”€â”€
     const machineKey = machine.key || machine.ip;
