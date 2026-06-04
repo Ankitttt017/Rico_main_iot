@@ -649,6 +649,7 @@ BEGIN
     [id] BIGINT NOT NULL CONSTRAINT [DF_PlcCycleReadings_id] DEFAULT NEXT VALUE FOR dbo.PlcCycleReadingsIdSeq,
     [recorded_at] DATETIME2(3) NOT NULL CONSTRAINT [DF_PlcCycleReadings_recorded_at] DEFAULT SYSDATETIME(),
     [created_at] DATETIME2(3) NOT NULL CONSTRAINT [DF_PlcCycleReadings_created_at] DEFAULT SYSUTCDATETIME(),
+    [machine_key] NVARCHAR(80) NULL,
     [machine_name] NVARCHAR(100) NULL,
     [plc_ip] NVARCHAR(45) NULL,
     [plc_port] INT NULL,
@@ -657,6 +658,11 @@ BEGIN
     [shot_month] INT NULL,
     [shot_day] INT NULL,
     [shot_date] DATE NULL,
+    [shot_hour] INT NULL,
+    [shot_minute] INT NULL,
+    [shot_second] INT NULL,
+    [shot_time] TIME(0) NULL,
+    [shot_datetime] DATETIME2(0) NULL,
     [Sr. No] INT NULL,
     [Counter] INT NULL,
     [cycletime EndDateTime] NVARCHAR(30) NULL,
@@ -719,6 +725,8 @@ END;
 
 IF COL_LENGTH('dbo.PlcCycleReadings', 'raw_readings_json') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [raw_readings_json] NVARCHAR(MAX) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'machine_key') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [machine_key] NVARCHAR(80) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_year') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [shot_year] INT NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_month') IS NULL
@@ -727,6 +735,83 @@ IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_day') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [shot_day] INT NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_date') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [shot_date] DATE NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_hour') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [shot_hour] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_minute') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [shot_minute] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_second') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [shot_second] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_time') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [shot_time] TIME(0) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_datetime') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [shot_datetime] DATETIME2(0) NULL;
+
+EXEC(N'CREATE OR ALTER TRIGGER dbo.trg_PlcCycleReadings_ShotDate
+ON dbo.PlcCycleReadings
+AFTER INSERT, UPDATE
+AS
+BEGIN
+  SET NOCOUNT ON;
+
+  UPDATE target
+  SET [shot_date] = COALESCE(target.[shot_date], TRY_CONVERT(date, CONCAT(
+    CASE
+      WHEN TRY_CONVERT(INT, target.[shot_year]) < 100 THEN 2000 + TRY_CONVERT(INT, target.[shot_year])
+      ELSE TRY_CONVERT(INT, target.[shot_year])
+    END,
+    ''-'',
+    RIGHT(''00'' + CAST(TRY_CONVERT(INT, target.[shot_month]) AS VARCHAR(2)), 2),
+    ''-'',
+    RIGHT(''00'' + CAST(TRY_CONVERT(INT, target.[shot_day]) AS VARCHAR(2)), 2)
+  ))),
+  [shot_time] = COALESCE(target.[shot_time], TRY_CONVERT(time(0), CONCAT(
+    RIGHT(''00'' + CAST(TRY_CONVERT(INT, target.[shot_hour]) AS VARCHAR(2)), 2),
+    '':'',
+    RIGHT(''00'' + CAST(TRY_CONVERT(INT, target.[shot_minute]) AS VARCHAR(2)), 2),
+    '':'',
+    RIGHT(''00'' + CAST(TRY_CONVERT(INT, target.[shot_second]) AS VARCHAR(2)), 2)
+  ))),
+  [shot_datetime] = COALESCE(target.[shot_datetime], TRY_CONVERT(datetime2(0), CONCAT(
+    CASE
+      WHEN TRY_CONVERT(INT, target.[shot_year]) < 100 THEN 2000 + TRY_CONVERT(INT, target.[shot_year])
+      ELSE TRY_CONVERT(INT, target.[shot_year])
+    END,
+    ''-'',
+    RIGHT(''00'' + CAST(TRY_CONVERT(INT, target.[shot_month]) AS VARCHAR(2)), 2),
+    ''-'',
+    RIGHT(''00'' + CAST(TRY_CONVERT(INT, target.[shot_day]) AS VARCHAR(2)), 2),
+    ''T'',
+    RIGHT(''00'' + CAST(TRY_CONVERT(INT, target.[shot_hour]) AS VARCHAR(2)), 2),
+    '':'',
+    RIGHT(''00'' + CAST(TRY_CONVERT(INT, target.[shot_minute]) AS VARCHAR(2)), 2),
+    '':'',
+    RIGHT(''00'' + CAST(TRY_CONVERT(INT, target.[shot_second]) AS VARCHAR(2)), 2)
+  ))),
+  [recorded_at] = COALESCE(TRY_CONVERT(datetime2(0), CONCAT(
+    CASE
+      WHEN TRY_CONVERT(INT, target.[shot_year]) < 100 THEN 2000 + TRY_CONVERT(INT, target.[shot_year])
+      ELSE TRY_CONVERT(INT, target.[shot_year])
+    END,
+    ''-'',
+    RIGHT(''00'' + CAST(TRY_CONVERT(INT, target.[shot_month]) AS VARCHAR(2)), 2),
+    ''-'',
+    RIGHT(''00'' + CAST(TRY_CONVERT(INT, target.[shot_day]) AS VARCHAR(2)), 2),
+    ''T'',
+    RIGHT(''00'' + CAST(TRY_CONVERT(INT, target.[shot_hour]) AS VARCHAR(2)), 2),
+    '':'',
+    RIGHT(''00'' + CAST(TRY_CONVERT(INT, target.[shot_minute]) AS VARCHAR(2)), 2),
+    '':'',
+    RIGHT(''00'' + CAST(TRY_CONVERT(INT, target.[shot_second]) AS VARCHAR(2)), 2)
+  )), target.[recorded_at])
+  FROM dbo.PlcCycleReadings target
+  INNER JOIN inserted i ON i.[id] = target.[id]
+  WHERE TRY_CONVERT(INT, target.[shot_year]) IS NOT NULL
+    AND TRY_CONVERT(INT, target.[shot_month]) BETWEEN 1 AND 12
+    AND TRY_CONVERT(INT, target.[shot_day]) BETWEEN 1 AND 31
+    AND TRY_CONVERT(INT, target.[shot_hour]) BETWEEN 0 AND 23
+    AND TRY_CONVERT(INT, target.[shot_minute]) BETWEEN 0 AND 59
+    AND TRY_CONVERT(INT, target.[shot_second]) BETWEEN 0 AND 59;
+END');
 
 IF NOT EXISTS (
   SELECT 1 FROM sys.indexes

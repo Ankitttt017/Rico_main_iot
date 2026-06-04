@@ -7,7 +7,19 @@ import { DEFAULT_MACHINES, MACHINE_NAMES, PLC_LATEST_POLL_MS, REGISTER_GROUPS, g
 import PlcMonitorStyles from "../components/PlcMonitorStyles";
 import PlcReportModal from "../components/PlcReportModal";
 import { MachineStatusCard, MetricTile, ParameterTable, STATUS_CFG, ValueCard, formatValue } from "../components/PlcWidgets";
-import { buildShotDateFromRow, buildShotTimeFromRow, formatDateOnly, formatDateTime, formatTimeOnly, getMachineKindFromRow, getNumericShotNumber, getReadingShotNumber, getRowTimestamp, rowToReadings } from "../utils/plcFormatters";
+import {
+  buildShotDateFromRow,
+  buildShotDateTimeFromRow,
+  buildShotTimeFromRow,
+  formatDateOnly,
+  formatDateTime,
+  formatTimeOnly,
+  getMachineKindFromRow,
+  getNumericShotNumber,
+  getReadingShotNumber,
+  getRowTimestamp,
+  rowToReadings,
+} from "../utils/plcFormatters";
 
 function hasReadableValue(value) {
   if (value === null || value === undefined) return false;
@@ -88,7 +100,7 @@ function PLCDashboard() {
           const machine = DEFAULT_MACHINES.find((entry) => getMachineKey(entry) === key || entry.ip === item.plc_ip);
           const itemKind = machine?.kind || getMachineKindFromRow(item);
           const itemTimestamp = getRowTimestamp(item);
-          const itemHistory = { id: `db-${item.id || itemTimestamp}`, timestamp: new Date(itemTimestamp), cycleTime: item.cycle_time ?? null };
+          const itemHistory = { id: `db-${item.id || itemTimestamp}`, timestamp: toValidDate(itemTimestamp), cycleTime: item.cycle_time ?? null };
           nextReadingsByKey[key] = rowToReadings(item, itemKind);
           if (item.plc_ip) nextReadingsByKey[item.plc_ip] = nextReadingsByKey[key];
           nextMetaByKey[key] = {
@@ -129,12 +141,12 @@ function PLCDashboard() {
         const nextReadings = rowToReadings(row, rowMachine?.kind || getMachineKindFromRow(row));
         const timestamp = getRowTimestamp(row);
         const cycleTime = row.cycle_time ?? null;
-        const historyItem = { id: `db-${row.id || timestamp}`, timestamp: new Date(timestamp), cycleTime };
+        const historyItem = { id: `db-${row.id || timestamp}`, timestamp: toValidDate(timestamp), cycleTime };
         setReadings(nextReadings);
         rememberSelectedSnapshot(nextReadings, { observedAt: timestamp, source: "db" });
         setCycleHistory([historyItem]);
         setCycleCount(1);
-        setLastTimestamp(new Date(timestamp));
+        setLastTimestamp(toValidDate(timestamp));
         setPartName(row.part_qr_code || row.scan_data || row.part_name || "");
         setShotTime(buildShotTimeFromRow(row));
         setPlcConfig({ key: rowKey, ip: row.plc_ip, port: Number(row.plc_port || rowMachine?.port || 5002), kind: rowMachine?.kind });
@@ -158,10 +170,10 @@ function PLCDashboard() {
 
   const applyReadings = useCallback((newReadings, timestamp, cycleTime) => {
     setReadings(newReadings);
-    setLastTimestamp(new Date(timestamp));
+    setLastTimestamp(toValidDate(timestamp));
     setCycleCount(c => c + 1);
     setCycleHistory(prev => [
-      { id: Date.now(), timestamp: new Date(timestamp), cycleTime },
+      { id: Date.now(), timestamp: toValidDate(timestamp), cycleTime },
       ...prev,
     ].slice(0, 100));
 
@@ -201,7 +213,7 @@ function PLCDashboard() {
           const itemReadings = rowToReadings(item, itemKind);
           const itemHistory = {
             id: `db-${item.id || itemTimestamp}`,
-            timestamp: new Date(itemTimestamp),
+            timestamp: toValidDate(itemTimestamp),
             cycleTime: item.cycle_time ?? null,
           };
 
@@ -250,13 +262,13 @@ function PLCDashboard() {
         const nextReadings = rowToReadings(selectedRow, rowMachine?.kind || getMachineKindFromRow(selectedRow));
         const timestamp = getRowTimestamp(selectedRow);
         const cycleTime = selectedRow.cycle_time ?? null;
-        const historyItem = { id: `db-${selectedRow.id || timestamp}`, timestamp: new Date(timestamp), cycleTime };
+        const historyItem = { id: `db-${selectedRow.id || timestamp}`, timestamp: toValidDate(timestamp), cycleTime };
 
         if (isOlderDbSnapshotForSelectedMachine(selectedRow)) return;
 
         setReadings(nextReadings);
         rememberSelectedSnapshot(nextReadings, { observedAt: timestamp, source: "db" });
-        setLastTimestamp(new Date(timestamp));
+        setLastTimestamp(toValidDate(timestamp));
         setPartName(selectedRow.part_qr_code || selectedRow.scan_data || selectedRow.part_name || "");
         setShotTime(buildShotTimeFromRow(selectedRow));
         setCycleHistory(prev => {
@@ -434,9 +446,9 @@ function PLCDashboard() {
       const key = config?.key || config?.ip || selectedKeyRef.current;
       const ip = config?.ip || key;
       const port = Number(config?.port || 5002);
-      const eventTimestamp = r?.cycle_end_time?.value || r?.shot_datetime?.value || timestamp;
+      const eventTimestamp = r?.cycle_end_time?.value || r?.shot_datetime?.value || timestamp || null;
       const eventPartName = r?.part_qr_code?.value || r?.scan_data?.value || nextPartName || "";
-      const historyItem = { id: `${key}-${eventTimestamp}`, timestamp: new Date(eventTimestamp), cycleTime };
+      const historyItem = { id: `${key}-${eventTimestamp}`, timestamp: toValidDate(eventTimestamp), cycleTime };
 
       setReadingsByIp(prev => ({ ...prev, [key]: r, [ip]: r }));
       setMetaByIp(prev => ({
@@ -467,7 +479,7 @@ function PLCDashboard() {
       setCycleStatus("complete");
       setReadings(r);
       rememberSelectedSnapshot(r, { observedAt: eventTimestamp, source: "live" });
-      setLastTimestamp(new Date(eventTimestamp));
+      setLastTimestamp(toValidDate(eventTimestamp));
       setPartName(eventPartName);
       setShotTime(nextShotTime || "");
       setCycleHistory(prev => [historyItem, ...prev].slice(0, 100));
@@ -564,9 +576,13 @@ function PLCDashboard() {
     part_name: readings.part_name?.value || readings.part_qr_code?.value || partName,
     shot_date: readings.shot_date?.value || shotDate,
     shot_time: readings.shot_time?.value || plcShotTime,
-    shot_datetime: readings.shot_datetime?.value || readings.recorded_at?.value || lastTimestamp?.toISOString(),
-    cycle_end_time: readings.cycle_end_time?.value || lastTimestamp?.toISOString(),
-    recorded_at: readings.shot_datetime?.value || lastTimestamp?.toISOString(),
+    shot_datetime: readings.shot_datetime?.value || buildShotDateTimeFromRow(
+      Object.fromEntries(Object.entries(readings).map(([name, item]) => [name, item?.value ?? null]))
+    ) || null,
+    cycle_end_time: isLeakTestMachine ? readings.cycle_end_time?.value || lastTimestamp?.toISOString() : null,
+    recorded_at: readings.shot_datetime?.value || buildShotDateTimeFromRow(
+      Object.fromEntries(Object.entries(readings).map(([name, item]) => [name, item?.value ?? null]))
+    ) || null,
   };
 
   const resetDashboardData = () => {

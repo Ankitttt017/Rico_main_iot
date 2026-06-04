@@ -108,8 +108,19 @@ export function buildShotTimeFromRow(row = {}) {
 
 export function buildShotDateFromRow(row = {}) {
   if (row.shot_date) return formatDateOnly(row.shot_date);
-  const parts = [row.shot_year, row.shot_month, row.shot_day].map((value) => pad2(value));
-  return parts.every(Boolean) ? `20${parts[0]}-${parts[1]}-${parts[2]}` : "";
+  const yearValue = Number(row.shot_year);
+  const year = Number.isFinite(yearValue)
+    ? String(yearValue < 100 ? 2000 + Math.trunc(Math.abs(yearValue)) : Math.trunc(yearValue))
+    : "";
+  const parts = [row.shot_month, row.shot_day].map((value) => pad2(value));
+  return year && parts.every(Boolean) ? `${year}-${parts[0]}-${parts[1]}` : "";
+}
+
+export function buildShotDateTimeFromRow(row = {}) {
+  if (row.shot_datetime) return String(row.shot_datetime).replace("T", " ");
+  const shotDate = buildShotDateFromRow(row);
+  const shotTime = buildShotTimeFromRow(row);
+  return shotDate && shotTime ? `${shotDate} ${shotTime}` : "";
 }
 
 export function normalizeDisplayValue(name, value) {
@@ -171,6 +182,6 @@ export function rowToReadings(row = {}, machineKind = getMachineKindFromRow(row)
 }
 
 export function getRowTimestamp(row = {}) {
-  return row.cycle_end_time || row.shot_datetime || row.recorded_at || row.created_at || new Date().toISOString();
+  return row.cycle_end_time || buildShotDateTimeFromRow(row) || row.recorded_at || row.created_at || null;
 }
 

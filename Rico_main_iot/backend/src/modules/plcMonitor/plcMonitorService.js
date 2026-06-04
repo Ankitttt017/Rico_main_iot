@@ -102,30 +102,7 @@ function buildShotTimeValue(hourValue, minuteValue, secondValue) {
 function buildShotDateTimeValue(yearValue, monthValue, dayValue, hourValue, minuteValue, secondValue) {
   const shotDate = buildShotDateValue(yearValue, monthValue, dayValue);
   const shotTime = buildShotTimeValue(hourValue, minuteValue, secondValue);
-  return shotDate && shotTime ? `${shotDate}T${shotTime}` : null;
-}
-
-function buildLocalShotClock(now = new Date()) {
-  const year = now.getFullYear();
-  const month = now.getMonth() + 1;
-  const day = now.getDate();
-  const hour = now.getHours();
-  const minute = now.getMinutes();
-  const second = now.getSeconds();
-  const shotDate = `${year}-${pad2(month)}-${pad2(day)}`;
-  const shotTime = `${pad2(hour)}:${pad2(minute)}:${pad2(second)}`;
-
-  return {
-    shotDate,
-    shotTime,
-    shotDateTime: `${shotDate}T${shotTime}`,
-    shotYear: pad2(year),
-    shotMonth: pad2(month),
-    shotDay: pad2(day),
-    shotHour: pad2(hour),
-    shotMinute: pad2(minute),
-    shotSecond: pad2(second),
-  };
+  return shotDate && shotTime ? `${shotDate} ${shotTime}` : null;
 }
 
 function sleep(ms) {
@@ -448,9 +425,12 @@ function normalizeReadingForDB(name, value) {
   }
   if (name === "shot_time") return String(value).slice(0, 8);
   if (name === "shot_datetime") {
+    const raw = String(value).trim().replace("T", " ");
+    const match = raw.match(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})/);
+    if (match) return `${match[1]} ${match[2]}`;
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return null;
-    return date;
+    return date.toISOString().slice(0, 19).replace("T", " ");
   }
   if (TWO_DIGIT_READING_COLUMNS.has(name)) return pad2(value);
 
@@ -600,7 +580,7 @@ function formatLiveReadingSnapshot(machine, partName, readings = {}, timestamp =
     {
       ...readings,
       id: `live-${machine.key || machine.ip}`,
-      recorded_at: timestamp || new Date().toISOString(),
+      recorded_at: timestamp || readings.shot_datetime || null,
       created_at: new Date().toISOString(),
       machine_key: machine.key || machine.ip,
       machine_name: machine.name,
@@ -1140,12 +1120,8 @@ function buildUbeTimestampSaveKey(machine, readings = {}) {
   const shotTime = normalizeReadingForDB("shot_time", readings.shot_time);
   if (shotDate && shotTime) return `${machineKey}:${shotDate}:${shotTime}`;
 
-  const shotDateTime = readings.shot_datetime ? new Date(readings.shot_datetime) : null;
-  if (shotDateTime && !Number.isNaN(shotDateTime.getTime())) {
-    return `${machineKey}:${shotDateTime.toISOString()}`;
-  }
-
-  return null;
+  const shotDateTime = normalizeReadingForDB("shot_datetime", readings.shot_datetime);
+  return shotDateTime ? `${machineKey}:${shotDateTime}` : null;
 }
 
 async function saveToDB(machine, partName, readings) {
@@ -1166,11 +1142,15 @@ async function saveToDB(machine, partName, readings) {
 
 async function saveToDBUnlocked(machine, partName, readings) {
   const columns = ["recorded_at", "machine_key", "machine_name", "plc_ip", "plc_port", "part_name"];
-  const plcRecordedAt = readings.shot_datetime ? new Date(readings.shot_datetime) : null;
+  const plcRecordedAt = normalizeReadingForDB("shot_datetime", readings.shot_datetime);
   const shotDate = normalizeReadingForDB("shot_date", readings.shot_date);
   const shotTime = normalizeReadingForDB("shot_time", readings.shot_time);
   const shotNumber = normalizeReadingForDB("shot_number", readings.shot_number ?? readings["SHOT NO."]);
-  const hasPlcRecordedAt = plcRecordedAt && !Number.isNaN(plcRecordedAt.getTime());
+  const hasPlcRecordedAt = Boolean(plcRecordedAt);
+
+  if (!hasPlcRecordedAt) {
+    return { skipped: true, reason: "missing-plc-shot-datetime" };
+  }
 
   if (shotNumber !== null && shotNumber !== undefined && shotDate) {
     const { rows: duplicateShotRows } = await db.query(
@@ -1209,7 +1189,7 @@ async function saveToDBUnlocked(machine, partName, readings) {
   }
 
   const values = [
-    plcRecordedAt && !Number.isNaN(plcRecordedAt.getTime()) ? plcRecordedAt : new Date(),
+    plcRecordedAt,
     machine.key || machine.ip,
     machine.name,
     machine.ip,
@@ -2029,7 +2009,7 @@ function startPlcMonitor(io) {
   const buildUbeSaveKey = (machine, readings = {}) => {
     const machineKey = machine.key || machine.ip;
     const shotNumber = readings.shot_number ?? readings["SHOT NO."] ?? "no-shot";
-    const shotDateTime = readings.shot_datetime || readings.shot_time || new Date().toISOString();
+    const shotDateTime = readings.shot_datetime || "missing-plc-shot-datetime";
     return `${machineKey}:${shotNumber}:${shotDateTime}`;
   };
 
@@ -2160,21 +2140,33 @@ function startPlcMonitor(io) {
     const now = new Date();
 
     const partName = await readString(sock, "D100", 11).catch(() => "");
-    const localShotClock = buildLocalShotClock(now);
-    const shotTime = localShotClock.shotTime;
-    const shotDateTime = localShotClock.shotDateTime;
-    const cycleTimestamp = shotDateTime || now.toISOString();
+    const shotYearRaw = await readWord(sock, SHOT_DATE_TIME_DEVICES.year).catch(() => null);
+    const shotMonthRaw = await readWord(sock, SHOT_DATE_TIME_DEVICES.month).catch(() => null);
+    const shotDayRaw = await readWord(sock, SHOT_DATE_TIME_DEVICES.day).catch(() => null);
+    const shotHour = await readWord(sock, SHOT_DATE_TIME_DEVICES.hour).catch(() => null);
+    const shotMinute = await readWord(sock, SHOT_DATE_TIME_DEVICES.minute).catch(() => null);
+    const shotSecond = await readWord(sock, SHOT_DATE_TIME_DEVICES.second).catch(() => null);
+    const shotTime = buildShotTimeValue(shotHour, shotMinute, shotSecond);
+    const shotDateTime = buildShotDateTimeValue(
+      shotYearRaw,
+      shotMonthRaw,
+      shotDayRaw,
+      shotHour,
+      shotMinute,
+      shotSecond
+    );
+    const cycleTimestamp = shotDateTime;
 
     reportSerial += 1;
-    readings.shot_date = localShotClock.shotDate;
+    readings.shot_date = buildShotDateValue(shotYearRaw, shotMonthRaw, shotDayRaw);
     readings.shot_time = shotTime;
     readings.shot_datetime = shotDateTime;
-    readings.shot_year = localShotClock.shotYear;
-    readings.shot_month = localShotClock.shotMonth;
-    readings.shot_day = localShotClock.shotDay;
-    readings.shot_hour = localShotClock.shotHour;
-    readings.shot_minute = localShotClock.shotMinute;
-    readings.shot_second = localShotClock.shotSecond;
+    readings.shot_year = pad2(shotYearRaw);
+    readings.shot_month = pad2(shotMonthRaw);
+    readings.shot_day = pad2(shotDayRaw);
+    readings.shot_hour = pad2(shotHour);
+    readings.shot_minute = pad2(shotMinute);
+    readings.shot_second = pad2(shotSecond);
 
     for (const parameter of UBE_READ_PARAMETERS) {
       const { name, device, computed } = parameter;
