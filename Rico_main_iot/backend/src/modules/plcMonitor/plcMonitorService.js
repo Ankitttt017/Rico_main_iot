@@ -1122,15 +1122,15 @@ async function calculateMinorStoppageMachine(machine, readings = {}) {
   if (!currentShotAt || !Number.isFinite(cycleTime)) return null;
 
   const { rows } = await db.query(
-    `SELECT TOP 1 recorded_at
+    `SELECT TOP 1 COALESCE(shot_datetime, recorded_at) AS previous_shot_at
      FROM ${TABLE}
      WHERE (machine_key = ? OR plc_ip = ?)
-       AND recorded_at < ?
-     ORDER BY recorded_at DESC, id DESC`,
+       AND COALESCE(shot_datetime, recorded_at) < ?
+     ORDER BY COALESCE(shot_datetime, recorded_at) DESC, id DESC`,
     [machine.key || machine.ip, machine.ip, currentShotAt]
   );
 
-  const previousShotAt = rows[0]?.recorded_at ? new Date(rows[0].recorded_at) : null;
+  const previousShotAt = rows[0]?.previous_shot_at ? new Date(rows[0].previous_shot_at) : null;
   const currentShotDate = new Date(currentShotAt);
   if (!previousShotAt || Number.isNaN(previousShotAt.getTime()) || Number.isNaN(currentShotDate.getTime())) {
     return null;
@@ -1670,29 +1670,40 @@ END
 
 IF COL_LENGTH('${TABLE}', 'minor_stoppage_machine') IS NOT NULL
 BEGIN
-  ;WITH ordered AS (
+  ;WITH recent_rows AS (
+    SELECT TOP (5000)
+      [id],
+      COALESCE([shot_datetime], [recorded_at]) AS shot_at,
+      [machine_key],
+      [plc_ip],
+      [cycle_time],
+      [minor_stoppage_machine]
+    FROM ${TABLE}
+    WHERE COALESCE([shot_datetime], [recorded_at]) >= DATEADD(day, -7, SYSDATETIME())
+    ORDER BY COALESCE([shot_datetime], [recorded_at]) DESC, [id] DESC
+  ),
+  ordered AS (
     SELECT
       [id],
-      [recorded_at],
+      [shot_at],
       TRY_CONVERT(DECIMAL(18,2), [cycle_time]) AS cycle_time_value,
-      LAG([recorded_at]) OVER (
+      LAG([shot_at]) OVER (
         PARTITION BY COALESCE([machine_key], [plc_ip])
-        ORDER BY [recorded_at] ASC, [id] ASC
-      ) AS previous_recorded_at
-    FROM ${TABLE}
-    WHERE [recorded_at] IS NOT NULL
+        ORDER BY [shot_at] ASC, [id] ASC
+      ) AS previous_shot_at
+    FROM recent_rows
+    WHERE [shot_at] IS NOT NULL
   )
   UPDATE target
   SET [minor_stoppage_machine] = CAST(
     CASE
-      WHEN DATEDIFF(second, ordered.previous_recorded_at, ordered.recorded_at) - ordered.cycle_time_value < 0 THEN 0
-      ELSE DATEDIFF(second, ordered.previous_recorded_at, ordered.recorded_at) - ordered.cycle_time_value
+      WHEN DATEDIFF(second, ordered.previous_shot_at, ordered.shot_at) - ordered.cycle_time_value < 0 THEN 0
+      ELSE DATEDIFF(second, ordered.previous_shot_at, ordered.shot_at) - ordered.cycle_time_value
     END AS DECIMAL(18,2)
   )
   FROM ${TABLE} target
   INNER JOIN ordered ON target.[id] = ordered.[id]
-  WHERE target.[minor_stoppage_machine] IS NULL
-    AND ordered.previous_recorded_at IS NOT NULL
+  WHERE ordered.previous_shot_at IS NOT NULL
     AND ordered.cycle_time_value IS NOT NULL
 END
 
