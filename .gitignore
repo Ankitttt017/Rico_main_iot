@@ -6,3 +6,4 @@ dist/
 **/.env
 *.log
 uptime-kuma/
+actions-runner/

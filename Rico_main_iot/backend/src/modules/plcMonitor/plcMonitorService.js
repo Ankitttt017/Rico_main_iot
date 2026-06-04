@@ -933,32 +933,39 @@ async function getLatestReadingsForMachines(machineSnapshots = getMachines()) {
   const rowByKey = new Map();
 
   if (ubeMachines.length) {
-    const targets = ubeMachines.map((m) => ({
-      key: m.key || m.ip,
-      ip: m.ip || m.key,
-    }));
-    const valuesSql = targets.map(() => "(?, ?)").join(", ");
-    const params = targets.flatMap((target) => [target.key, target.ip]);
-
-    const { rows } = await db.query(
-      `WITH target_machines(machine_key, plc_ip) AS (
-        SELECT * FROM (VALUES ${valuesSql}) AS target(machine_key, plc_ip)
-      )
-      SELECT latest.*
-      FROM target_machines target
-      OUTER APPLY (
+    for (const machine of ubeMachines) {
+      const machineKey = machine.key || machine.ip;
+      const machineIp = machine.ip || machine.key;
+      const { rows } = await db.query(
+        `WITH candidates AS (
+          SELECT * FROM (
+            SELECT TOP 1 *
+            FROM ${TABLE}
+            WHERE machine_key = ?
+            ORDER BY recorded_at DESC, id DESC
+          ) by_machine_key
+          UNION ALL
+          SELECT * FROM (
+            SELECT TOP 1 *
+            FROM ${TABLE}
+            WHERE plc_ip = ?
+            ORDER BY recorded_at DESC, id DESC
+          ) by_plc_ip
+          UNION ALL
+          SELECT * FROM (
+            SELECT TOP 1 *
+            FROM ${TABLE}
+            WHERE plc_ip = ?
+            ORDER BY recorded_at DESC, id DESC
+          ) by_legacy_key
+        )
         SELECT TOP 1 *
-        FROM ${TABLE} reading
-        WHERE reading.machine_key = target.machine_key
-           OR reading.plc_ip = target.plc_ip
-           OR reading.plc_ip = target.machine_key
-        ORDER BY reading.recorded_at DESC, reading.id DESC
-      ) latest
-      WHERE latest.id IS NOT NULL
-      ORDER BY COALESCE(latest.machine_key, latest.plc_ip)`,
-      params
-    );
-    rows.forEach((row) => rowByKey.set(String(row.machine_key || row.plc_ip), row));
+        FROM candidates
+        ORDER BY recorded_at DESC, id DESC`,
+        [machineKey, machineIp, machineKey]
+      );
+      if (rows[0]) rowByKey.set(String(machineKey), rows[0]);
+    }
   }
 
   if (leakMachines.length) {
