@@ -169,6 +169,7 @@ export default function PlcReportModal({ reading, readings, onClose }) {
                       <th>{isLeakTestReport ? "Part QR Code" : "Part"}</th>
                       <th>Cycle</th>
                       {!isLeakTestReport && <th>Minor Stoppage</th>}
+                      {!isLeakTestReport && <th>Minor Stoppage Machine</th>}
                       <th>{isLeakTestReport ? "Body Leak" : "OK"}</th>
                       <th>{isLeakTestReport ? "GALL" : "NG"}</th>
                     </tr>
@@ -183,13 +184,14 @@ export default function PlcReportModal({ reading, readings, onClose }) {
                         <td>{formatValue(isLeakTestReport ? row.part_qr_code || row.scan_data || row.part_name : row.part_name)}</td>
                         <td className="cycle-cell">{formatValue(row.cycle_time)}s</td>
                         {!isLeakTestReport && <td className="cycle-cell">{formatValue(row.minor_stoppage)}s</td>}
+                        {!isLeakTestReport && <td className="cycle-cell">{formatValue(row.minor_stoppage_machine)}s</td>}
                         <td>{formatValue(isLeakTestReport ? row.body_leak_value : row.ok_shot)}</td>
                         <td>{formatValue(isLeakTestReport ? [row.gall_1, row.gall_2].filter(value => value !== null && value !== undefined).join(" / ") : row.ok_shot)}</td>
                       </tr>
                     ))}
                     {!historyRows.length && (
                       <tr>
-                        <td colSpan={isLeakTestReport ? 6 : 9} className="empty-preview">No records found for this date range</td>
+                        <td colSpan={isLeakTestReport ? 6 : 10} className="empty-preview">No records found for this date range</td>
                       </tr>
                     )}
                   </tbody>

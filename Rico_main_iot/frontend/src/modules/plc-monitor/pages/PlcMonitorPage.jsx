@@ -502,6 +502,7 @@ function PLCDashboard() {
   const shotNumber = readings.shot_number?.value ?? null;
   const cycleTime = readings.cycle_time?.value ?? null;
   const minorStoppage = readings.minor_stoppage?.value ?? null;
+  const minorStoppageMachine = readings.minor_stoppage_machine?.value ?? null;
   const shotForwardTime = readings.shot_fwd_time?.value ?? null;
   const shotDate = readings.shot_date?.value || buildShotDateFromRow(
     Object.fromEntries(Object.entries(readings).map(([name, item]) => [name, item?.value ?? null]))
@@ -690,6 +691,9 @@ function PLCDashboard() {
             <MetricTile label="Cycle Time" value={cycleTime} unit="sec" tone="green" />
             {!isLeakTestMachine && (
               <MetricTile label="Minor Stoppage" value={minorStoppage} unit="sec" tone="amber" />
+            )}
+            {!isLeakTestMachine && (
+              <MetricTile label="Minor Stoppage Machine" value={minorStoppageMachine} unit="sec" tone="amber" />
             )}
             <MetricTile
               label={isLeakTestMachine ? "Cycle End Time" : "Shot Forward Time"}

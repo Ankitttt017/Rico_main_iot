@@ -54,6 +54,7 @@ export const REGISTER_GROUPS = [
       { name: "shot_number", unit: "" },
       { name: "cycle_time", unit: "sec" },
       { name: "minor_stoppage", unit: "sec" },
+      { name: "minor_stoppage_machine", unit: "sec" },
     ],
   },
   {
@@ -312,6 +313,7 @@ export const DISPLAY_LABELS = {
   shot_number: "Shot Number",
   cycle_time: "Cycle Time",
   minor_stoppage: "Minor Stoppage",
+  minor_stoppage_machine: "Minor Stoppage Machine",
   "cycletime value (sec)": "Cycle Time",
   "cycletime EndDateTime": "Shot Time",
   shot_hour: "Shot Hour",

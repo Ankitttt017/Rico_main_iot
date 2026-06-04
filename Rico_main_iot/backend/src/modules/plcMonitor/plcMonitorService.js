@@ -1116,6 +1116,32 @@ async function getConnectionEvents({ ip, limit = 200, from, to } = {}) {
 
 const inFlightUbeSaveKeys = new Set();
 
+async function calculateMinorStoppageMachine(machine, readings = {}) {
+  const currentShotAt = normalizeReadingForDB("shot_datetime", readings.shot_datetime);
+  const cycleTime = Number(normalizeReadingForDB("cycle_time", readings.cycle_time ?? readings["CYCLE TIME sec."]));
+  if (!currentShotAt || !Number.isFinite(cycleTime)) return null;
+
+  const { rows } = await db.query(
+    `SELECT TOP 1 recorded_at
+     FROM ${TABLE}
+     WHERE (machine_key = ? OR plc_ip = ?)
+       AND recorded_at < ?
+     ORDER BY recorded_at DESC, id DESC`,
+    [machine.key || machine.ip, machine.ip, currentShotAt]
+  );
+
+  const previousShotAt = rows[0]?.recorded_at ? new Date(rows[0].recorded_at) : null;
+  const currentShotDate = new Date(currentShotAt);
+  if (!previousShotAt || Number.isNaN(previousShotAt.getTime()) || Number.isNaN(currentShotDate.getTime())) {
+    return null;
+  }
+
+  const shotGapSeconds = (currentShotDate.getTime() - previousShotAt.getTime()) / 1000;
+  const stoppageSeconds = shotGapSeconds - cycleTime;
+  if (!Number.isFinite(stoppageSeconds)) return null;
+  return Number(Math.max(0, stoppageSeconds).toFixed(2));
+}
+
 function buildUbeTimestampSaveKey(machine, readings = {}) {
   const machineKey = machine.key || machine.ip;
   const shotNumber = normalizeReadingForDB("shot_number", readings.shot_number ?? readings["SHOT NO."]);
@@ -1157,6 +1183,10 @@ async function saveToDBUnlocked(machine, partName, readings) {
 
   if (!hasPlcRecordedAt) {
     return { skipped: true, reason: "missing-plc-shot-datetime" };
+  }
+
+  if (readings.minor_stoppage_machine === undefined) {
+    readings.minor_stoppage_machine = await calculateMinorStoppageMachine(machine, readings);
   }
 
   if (shotNumber !== null && shotNumber !== undefined && shotDate) {
@@ -1636,6 +1666,34 @@ ${dropDuplicateColumnsSql}
 IF COL_LENGTH('${TABLE}', 'raw_readings_json') IS NULL
 BEGIN
   ALTER TABLE ${TABLE} ADD [raw_readings_json] NVARCHAR(MAX) NULL
+END
+
+IF COL_LENGTH('${TABLE}', 'minor_stoppage_machine') IS NOT NULL
+BEGIN
+  ;WITH ordered AS (
+    SELECT
+      [id],
+      [recorded_at],
+      TRY_CONVERT(DECIMAL(18,2), [cycle_time]) AS cycle_time_value,
+      LAG([recorded_at]) OVER (
+        PARTITION BY COALESCE([machine_key], [plc_ip])
+        ORDER BY [recorded_at] ASC, [id] ASC
+      ) AS previous_recorded_at
+    FROM ${TABLE}
+    WHERE [recorded_at] IS NOT NULL
+  )
+  UPDATE target
+  SET [minor_stoppage_machine] = CAST(
+    CASE
+      WHEN DATEDIFF(second, ordered.previous_recorded_at, ordered.recorded_at) - ordered.cycle_time_value < 0 THEN 0
+      ELSE DATEDIFF(second, ordered.previous_recorded_at, ordered.recorded_at) - ordered.cycle_time_value
+    END AS DECIMAL(18,2)
+  )
+  FROM ${TABLE} target
+  INNER JOIN ordered ON target.[id] = ordered.[id]
+  WHERE target.[minor_stoppage_machine] IS NULL
+    AND ordered.previous_recorded_at IS NOT NULL
+    AND ordered.cycle_time_value IS NOT NULL
 END
 
 IF OBJECT_ID(N'${LEAK_TEST_TABLE}', N'U') IS NULL
@@ -2212,6 +2270,8 @@ function startPlcMonitor(io) {
         readings[legacyColumn] = readings[parameterName];
       }
     }
+
+    readings.minor_stoppage_machine = await calculateMinorStoppageMachine(machine, readings);
 
     // â”€â”€ machineKey + machineType always in payload â”€â”€
     const machineKey = machine.key || machine.ip;

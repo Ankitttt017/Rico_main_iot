@@ -61,6 +61,7 @@ const PREFERRED_COLUMNS = [
   "shot_status",
   "cycle_time",
   "minor_stoppage",
+  "minor_stoppage_machine",
 ];
 
 const SHOT_STATUS = {

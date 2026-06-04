@@ -311,6 +311,7 @@ const EXTRA_READING_COLUMNS = [
   ["shot_second", "NVARCHAR(2)"],
   ["shot_number", "INT"],
   ["ok_shot", "INT"],
+  ["minor_stoppage_machine", "DECIMAL(18,2)"],
 ];
 
 const TWO_DIGIT_READING_COLUMNS = new Set([
@@ -338,6 +339,7 @@ const UBE_CLIENT_READING_NAMES = new Set([
   "ok_shot",
   "cycle_time",
   "minor_stoppage",
+  "minor_stoppage_machine",
   ...EXCEL_PARAMETERS.map((p) => p.name),
   ...Object.values(LEGACY_COLUMNS_BY_PARAMETER),
 ]);
