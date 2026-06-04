@@ -269,6 +269,7 @@ function PLCDashboard() {
         setReadings(nextReadings);
         rememberSelectedSnapshot(nextReadings, { observedAt: timestamp, source: "db" });
         setLastTimestamp(toValidDate(timestamp));
+        setConfigMessage("");
         setPartName(selectedRow.part_qr_code || selectedRow.scan_data || selectedRow.part_name || "");
         setShotTime(buildShotTimeFromRow(selectedRow));
         setCycleHistory(prev => {
@@ -280,10 +281,8 @@ function PLCDashboard() {
         Object.entries(nextReadings).forEach(([name, item]) => {
           if (item?.value !== undefined && item.value !== null) pushSpark(name, item.value);
         });
-      } catch (error) {
-        if (!cancelled) {
-          setConfigMessage(error.response?.data?.message || "Latest PLC auto refresh failed.");
-        }
+      } catch {
+        // Keep the dashboard on the last good live/DB snapshot; the next poll/socket event will refresh it.
       } finally {
         inFlight = false;
       }
@@ -432,9 +431,8 @@ function PLCDashboard() {
       setDraftConfig({ ip, port: String(port) });
       setReadings(r);
       rememberSelectedSnapshot(r, { observedAt: observedTimestamp, source: "live" });
-      if (!liveOnly && eventTimestamp) {
-        setLastTimestamp(new Date(eventTimestamp));
-      }
+      setLastTimestamp(toValidDate(eventTimestamp) || toValidDate(observedTimestamp));
+      setConfigMessage("");
       setPartName(eventPartName);
       setShotTime(nextShotTime || "");
       Object.entries(r).forEach(([name, item]) => {
@@ -480,6 +478,7 @@ function PLCDashboard() {
       setReadings(r);
       rememberSelectedSnapshot(r, { observedAt: eventTimestamp, source: "live" });
       setLastTimestamp(toValidDate(eventTimestamp));
+      setConfigMessage("");
       setPartName(eventPartName);
       setShotTime(nextShotTime || "");
       setCycleHistory(prev => [historyItem, ...prev].slice(0, 100));
