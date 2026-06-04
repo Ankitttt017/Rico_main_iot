@@ -964,7 +964,16 @@ async function getLatestReadingsForMachines(machineSnapshots = getMachines()) {
         ORDER BY recorded_at DESC, id DESC`,
         [machineKey, machineIp, machineKey]
       );
-      if (rows[0]) rowByKey.set(String(machineKey), rows[0]);
+      if (rows[0]) {
+        const latestRow = rows[0];
+        if (latestRow.minor_stoppage_machine === null || latestRow.minor_stoppage_machine === undefined) {
+          const completedMinorStoppage = await calculateCompletedMinorStoppageMachine(machine, {
+            shot_datetime: latestRow.shot_datetime || latestRow.recorded_at,
+          });
+          if (completedMinorStoppage) latestRow.minor_stoppage_machine = completedMinorStoppage.value;
+        }
+        rowByKey.set(String(machineKey), latestRow);
+      }
     }
   }
 
