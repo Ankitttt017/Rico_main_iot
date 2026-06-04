@@ -147,14 +147,13 @@ function PLCDashboard() {
         setCycleHistory([historyItem]);
         setCycleCount(1);
         setLastTimestamp(toValidDate(timestamp));
+        setConfigMessage("");
         setPartName(row.part_qr_code || row.scan_data || row.part_name || "");
         setShotTime(buildShotTimeFromRow(row));
         setPlcConfig({ key: rowKey, ip: row.plc_ip, port: Number(row.plc_port || rowMachine?.port || 5002), kind: rowMachine?.kind });
         setDraftConfig({ ip: row.plc_ip, port: String(row.plc_port || rowMachine?.port || 5002) });
       })
-      .catch((error) => {
-        setConfigMessage(error.response?.data?.message || "Latest PLC DB data load failed.");
-      });
+      .catch(() => {});
 
     return () => {
       cancelled = true;

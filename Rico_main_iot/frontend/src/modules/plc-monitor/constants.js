@@ -1,4 +1,4 @@
-export const PLC_LATEST_POLL_MS = Number(import.meta.env.VITE_PLC_LATEST_POLL_MS || 2000);
+export const PLC_LATEST_POLL_MS = Number(import.meta.env.VITE_PLC_LATEST_POLL_MS || 1000);
 
 export const MACHINE_NAMES = {
   "192.168.117.201": "UBE 850T-2",

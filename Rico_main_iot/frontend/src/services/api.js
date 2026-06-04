@@ -93,7 +93,7 @@ export const getLineMachines = (id)     => cachedGet(ENDPOINTS.lineMachines(id))
 export const createLineMachine = (id, data) => mutate(api.post(ENDPOINTS.lineMachines(id), data));
 export const updateLineMachine = (lineId, machineId, data) => mutate(api.put(ENDPOINTS.lineMachine(lineId, machineId), data));
 export const removeLineMachine = (lineId, machineId, params) => mutate(api.delete(ENDPOINTS.lineMachine(lineId, machineId), { params }));
-export const getPlcLatestReadings = () => cachedGet(ENDPOINTS.plcLatestReadings, { ttl: LIVE_CACHE_TTL, staleWhileRefresh: false });
+export const getPlcLatestReadings = () => api.get(ENDPOINTS.plcLatestReadings, { params: { _: Date.now() } });
 export const getPlcReadingHistory = (params) => cachedGet(ENDPOINTS.plcReadingHistory, { params, ttl: LIVE_CACHE_TTL, staleWhileRefresh: false });
 export const getPlcConnectionEvents = (params) => cachedGet(ENDPOINTS.plcConnectionEvents, { params, ttl: LIVE_CACHE_TTL, staleWhileRefresh: false });
 export const getPartSheetDownloadUrl = (partId, type, sheetId) => buildApiUrl(ENDPOINTS.partSheetDownload(partId, type, sheetId));
