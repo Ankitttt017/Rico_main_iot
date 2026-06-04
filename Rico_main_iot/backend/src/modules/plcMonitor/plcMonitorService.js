@@ -1748,8 +1748,7 @@ BEGIN
       [cycle_time],
       [minor_stoppage_machine]
     FROM ${TABLE}
-    WHERE COALESCE([shot_datetime], [recorded_at]) >= DATEADD(day, -7, SYSDATETIME())
-    ORDER BY COALESCE([shot_datetime], [recorded_at]) DESC, [id] DESC
+    ORDER BY [id] DESC
   ),
   ordered AS (
     SELECT
@@ -1960,8 +1959,8 @@ END
 
 async function hasUsablePlcSchema() {
   const { rows } = await db.query(`
-    SELECT
-      CASE WHEN OBJECT_ID(N'${TABLE}', N'U') IS NOT NULL THEN 1 ELSE 0 END AS has_plc_table,
+SELECT
+  CASE WHEN OBJECT_ID(N'${TABLE}', N'U') IS NOT NULL THEN 1 ELSE 0 END AS has_plc_table,
       CASE WHEN OBJECT_ID(N'${LEAK_TEST_TABLE}', N'U') IS NOT NULL THEN 1 ELSE 0 END AS has_leak_table,
       CASE WHEN COL_LENGTH('${TABLE}', 'recorded_at') IS NOT NULL THEN 1 ELSE 0 END AS has_recorded_at,
       CASE WHEN COL_LENGTH('${TABLE}', 'machine_key') IS NOT NULL THEN 1 ELSE 0 END AS has_machine_key,
@@ -1996,11 +1995,51 @@ async function hasUsablePlcSchema() {
   ].every((key) => Number(schema[key]) === 1);
 }
 
+async function backfillRecentMinorStoppageMachine() {
+  await db.run(`
+IF OBJECT_ID(N'${TABLE}', N'U') IS NOT NULL
+   AND COL_LENGTH('${TABLE}', 'minor_stoppage_machine') IS NOT NULL
+BEGIN
+  ;WITH recent_rows AS (
+    SELECT TOP (5000)
+      [id],
+      COALESCE([shot_datetime], [recorded_at]) AS shot_at,
+      [machine_key],
+      [plc_ip],
+      [cycle_time]
+    FROM ${TABLE}
+    ORDER BY [id] DESC
+  ),
+  ordered AS (
+    SELECT
+      [id],
+      [shot_at],
+      TRY_CONVERT(DECIMAL(18,2), [cycle_time]) AS cycle_time_value,
+      LEAD([shot_at]) OVER (
+        PARTITION BY COALESCE([machine_key], [plc_ip])
+        ORDER BY [shot_at] ASC, [id] ASC
+      ) AS next_shot_at
+    FROM recent_rows
+    WHERE [shot_at] IS NOT NULL
+  )
+  UPDATE target
+  SET [minor_stoppage_machine] = CAST(
+    CASE
+      WHEN ordered.next_shot_at IS NULL OR ordered.cycle_time_value IS NULL THEN NULL
+      WHEN DATEDIFF(second, ordered.shot_at, ordered.next_shot_at) - ordered.cycle_time_value < 0 THEN 0
+      ELSE DATEDIFF(second, ordered.shot_at, ordered.next_shot_at) - ordered.cycle_time_value
+    END AS DECIMAL(18,2)
+  )
+  FROM ${TABLE} target
+  INNER JOIN ordered ON target.[id] = ordered.[id]
+END`);
+}
+
 function ensureTableOnce() {
   if (!schemaReadyPromise) {
     schemaReadyPromise = (async () => {
-      if (await hasUsablePlcSchema()) return;
-      await ensureTable();
+      if (!(await hasUsablePlcSchema())) await ensureTable();
+      await backfillRecentMinorStoppageMachine();
     })().catch((err) => {
       schemaReadyPromise = null;
       throw err;
