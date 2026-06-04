@@ -610,7 +610,7 @@ function chooseFreshestReading(dbReading, machine = {}) {
 
   const liveTime = new Date(liveReading.recorded_at || liveReading.created_at || 0).getTime();
   const dbTime = new Date(dbReading.recorded_at || dbReading.created_at || 0).getTime();
-  if (Number.isFinite(liveTime) && Number.isFinite(dbTime) && liveTime > dbTime) return liveReading;
+  if (Number.isFinite(liveTime) && (!Number.isFinite(dbTime) || liveTime > dbTime)) return liveReading;
 
   return dbReading;
 }
@@ -1076,16 +1076,60 @@ async function getReadingHistory({ ip, limit = 200, from, to } = {}) {
     return rows.map(formatDbRowForClient);
   }
 
-  const filters = ["(machine_key = ? OR plc_ip = ? OR plc_ip = ?)"];
-  const values = [targetId, targetId, targetMachine?.ip || targetId];
-  if (from) { filters.push("recorded_at >= ?"); values.push(from); }
-  if (to) { filters.push("recorded_at < DATEADD(day, 1, CAST(? AS date))"); values.push(to); }
+  const machineKey = targetMachine?.key || targetMachine?.machine_key || targetId;
+  const machineIp = targetMachine?.ip || targetMachine?.plc_ip || targetId;
+  const legacyKey = targetId;
+  const buildDateFilter = () => {
+    const filters = [];
+    const values = [];
+    if (from) { filters.push("recorded_at >= ?"); values.push(from); }
+    if (to) { filters.push("recorded_at < DATEADD(day, 1, CAST(? AS date))"); values.push(to); }
+    return { sql: filters.length ? ` AND ${filters.join(" AND ")}` : "", values };
+  };
+  const byMachineKey = buildDateFilter();
+  const byPlcIp = buildDateFilter();
+  const byLegacyKey = buildDateFilter();
 
   const { rows } = await db.query(
-    `SELECT TOP (${safeLimit}) * FROM ${TABLE}
-     WHERE ${filters.join(" AND ")}
+    `WITH candidates AS (
+       SELECT * FROM (
+         SELECT TOP (${safeLimit}) * FROM ${TABLE}
+         WHERE machine_key = ?${byMachineKey.sql}
+         ORDER BY recorded_at DESC, id DESC
+       ) by_machine_key
+       UNION ALL
+       SELECT * FROM (
+         SELECT TOP (${safeLimit}) * FROM ${TABLE}
+         WHERE plc_ip = ?${byPlcIp.sql}
+         ORDER BY recorded_at DESC, id DESC
+       ) by_plc_ip
+       UNION ALL
+       SELECT * FROM (
+         SELECT TOP (${safeLimit}) * FROM ${TABLE}
+         WHERE plc_ip = ?${byLegacyKey.sql}
+         ORDER BY recorded_at DESC, id DESC
+       ) by_legacy_key
+     ),
+     ranked AS (
+       SELECT *,
+         ROW_NUMBER() OVER (
+           PARTITION BY id
+           ORDER BY recorded_at DESC, id DESC
+         ) AS history_rank
+       FROM candidates
+     )
+     SELECT TOP (${safeLimit}) *
+     FROM ranked
+     WHERE history_rank = 1
      ORDER BY recorded_at DESC, id DESC`,
-    values
+    [
+      machineKey,
+      ...byMachineKey.values,
+      machineIp,
+      ...byPlcIp.values,
+      legacyKey,
+      ...byLegacyKey.values,
+    ]
   );
   return rows.map(formatDbRowForClient);
 }
