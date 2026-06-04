@@ -55,6 +55,7 @@ const EXCEL_PARAMETERS = [
   { name: "SHOT TIME", type: "text", computed: "shotTime" },
   { name: "SHOT NO.", device: "D1120", type: "int" },
   { name: "CYCLE TIME sec.", device: "D1127", type: "decimal", scale: 0.1 },
+  { name: "MINOR STOPPAGE sec.", device: "D1304", type: "decimal", scale: 1 },
  { name: "HIGH SHOT COUNT", device: "D947", type: "int" },
   { name: "NG COUNTER", device: "D955", type: "int" },
   { name: "DIE-CLOSE CORE IN TIME sec", device: "D1128", type: "decimal", scale: 0.1 },
@@ -154,6 +155,7 @@ const PARAMETER_BY_NAME = new Map(ALL_PARAMETERS.map((p) => [p.name, p]));
 const LEGACY_COLUMNS_BY_PARAMETER = {
   "SHOT NO.": "shot_number",
   "CYCLE TIME sec.": "cycle_time",
+  "MINOR STOPPAGE sec.": "minor_stoppage",
   "HIGH SHOT COUNT": "ok_shot",
   "DIE-CLOSE CORE IN TIME sec": "die_close_core_in_time",
   "POURING TIME sec": "pouring_time",
@@ -335,6 +337,7 @@ const UBE_CLIENT_READING_NAMES = new Set([
   "shot_number",
   "ok_shot",
   "cycle_time",
+  "minor_stoppage",
   ...EXCEL_PARAMETERS.map((p) => p.name),
   ...Object.values(LEGACY_COLUMNS_BY_PARAMETER),
 ]);
