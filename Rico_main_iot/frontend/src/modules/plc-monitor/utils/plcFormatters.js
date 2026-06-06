@@ -172,6 +172,7 @@ export function rowToReadings(row = {}, machineKind = getMachineKindFromRow(row)
   return Object.fromEntries(
     names.map((name) => {
       let value = row[name] ?? null;
+      if (name === "part_name") value = row.part_name ?? row.part_qr_code ?? row.scan_data ?? null;
       if (name === "part_qr_code") value = row.part_qr_code ?? row.scan_data ?? row.part_name ?? null;
       if (name === "machine") value = row.machine ?? row.machine_name ?? null;
       if (name === "ip") value = row.ip ?? row.plc_ip ?? null;

@@ -928,6 +928,22 @@ async function getLatestReadingsForMachines(machineSnapshots = getMachines()) {
   await ensureTableOnce();
 
   const machines = machineSnapshots.length ? machineSnapshots : getMachines();
+  const liveFreshMs = Number(process.env.PLC_LATEST_LIVE_FRESH_MS || 15000);
+  const now = Date.now();
+  const hasFreshLiveData = machines.some((machine) => {
+    const liveReading = machine.latestReading;
+    if (!liveReading?.has_data) return false;
+    const liveTime = new Date(liveReading.created_at || liveReading.recorded_at || 0).getTime();
+    return Number.isFinite(liveTime) && now - liveTime <= liveFreshMs;
+  });
+
+  if (hasFreshLiveData) {
+    return machines.map((machine) => {
+      if (machine.latestReading?.has_data) return machine.latestReading;
+      return formatDbReading(null, machine);
+    });
+  }
+
   const ubeMachines = machines.filter((m) => isUbeMachine(m));
   const leakMachines = machines.filter((m) => isLeakTestMachine(m));
   const rowByKey = new Map();
@@ -2350,6 +2366,7 @@ function startPlcMonitor(io) {
     const cycleTimestamp = shotDateTime;
 
     reportSerial += 1;
+    readings.part_name = partName;
     readings.shot_date = buildShotDateValue(shotYearRaw, shotMonthRaw, shotDayRaw);
     readings.shot_time = shotTime;
     readings.shot_datetime = shotDateTime;
@@ -2398,8 +2415,12 @@ function startPlcMonitor(io) {
       }
     }
 
-    const completedMinorStoppage = await calculateCompletedMinorStoppageMachine(machine, readings);
-    readings.minor_stoppage_machine = completedMinorStoppage?.value ?? null;
+    if (liveOnly) {
+      readings.minor_stoppage_machine = null;
+    } else {
+      const completedMinorStoppage = await calculateCompletedMinorStoppageMachine(machine, readings);
+      readings.minor_stoppage_machine = completedMinorStoppage?.value ?? null;
+    }
 
     // â”€â”€ machineKey + machineType always in payload â”€â”€
     const machineKey = machine.key || machine.ip;

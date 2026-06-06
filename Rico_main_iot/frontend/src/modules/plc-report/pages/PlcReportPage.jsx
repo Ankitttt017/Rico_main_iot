@@ -18,6 +18,8 @@ const DEFAULT_MACHINE = {
 const REPORT_AUTO_REFRESH_MS = Number(import.meta.env.VITE_PLC_REPORT_REFRESH_MS || 5000);
 
 const HIDDEN_COLUMNS = new Set([
+  "id",
+  "history_rank",
   "recorded_at",
   "shot_datetime",
   "shot_day",

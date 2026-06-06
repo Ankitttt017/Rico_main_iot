@@ -337,6 +337,7 @@ const UBE_CLIENT_READING_NAMES = new Set([
   "shot_second",
   "shot_number",
   "ok_shot",
+  "part_name",
   "cycle_time",
   "minor_stoppage",
   "minor_stoppage_machine",
