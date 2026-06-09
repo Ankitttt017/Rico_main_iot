@@ -10,6 +10,7 @@ const pageMeta = {
   "/machines": { title: "Machine Tracking", subtitle: "Live machine state and active operation view" },
   "/operations": { title: "Operation Master", subtitle: "Part routing, process steps and logs" },
   "/plc-monitor": { title: "Real Time Monitor", subtitle: "" },
+  "/ube-machine-setup": { title: "Add Machine", subtitle: "PLC connection setup for UBE 850T machines" },
   "/plc-report": { title: "My Report", subtitle: "Machine production history and exports" },
 };
 

@@ -1,12 +1,8 @@
 export const PLC_LATEST_POLL_MS = Number(import.meta.env.VITE_PLC_LATEST_POLL_MS || 1000);
 
-export const MACHINE_NAMES = {
-  "192.168.117.201": "UBE 850T-2",
-};
+export const MACHINE_NAMES = {};
 
-export const DEFAULT_MACHINES = [
-  { key: "ube-850t-2", ip: "192.168.117.201", port: 5002, name: "UBE 850T-2", kind: "ube" },
-];
+export const DEFAULT_MACHINES = [];
 
 export function getMachineKey(machine = {}) {
   return machine.key || machine.machine_key || machine.ip;
@@ -18,8 +14,8 @@ export function mergeMachineList(list = []) {
     const key = getMachineKey(machine);
     const defaultMachine = byKey.get(key);
     byKey.set(key, {
-      ...machine,
       ...(defaultMachine || {}),
+      ...machine,
       connected: machine.connected,
       error: machine.error,
       lastCycleAt: machine.lastCycleAt,
@@ -54,7 +50,6 @@ export const REGISTER_GROUPS = [
       { name: "shot_number", unit: "" },
       { name: "cycle_time", unit: "sec" },
       { name: "minor_stoppage", unit: "sec" },
-      { name: "minor_stoppage_machine", unit: "sec" },
     ],
   },
   {

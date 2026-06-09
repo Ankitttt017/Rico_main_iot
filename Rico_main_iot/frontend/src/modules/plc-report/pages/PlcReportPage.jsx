@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CheckCircle2, Download } from "lucide-react";
 import AppLayout from "../../../components/common/AppLayout";
 import ricoLogo from "../../../assets/rico-logo.png";
+import { DISPLAY_LABELS } from "../../plc-monitor/constants";
 import {
   getLineMachines,
   getLines,
@@ -17,19 +19,47 @@ const DEFAULT_MACHINE = {
 
 const REPORT_AUTO_REFRESH_MS = Number(import.meta.env.VITE_PLC_REPORT_REFRESH_MS || 5000);
 
+const LIMIT_STATUS_BY_COLUMN = {
+  die_close_core_in_time: "die_close_core_in_time_status",
+  pouring_time: "pouring_time_status",
+  shot_fwd_time: "shot_fwd_time_status",
+  curing_time: "curing_time_status",
+  die_open_core_out_time: "die_open_core_out_time_status",
+  ejector_time: "ejector_time_status",
+  extract_time: "extract_time_status",
+  spray_time: "spray_time_status",
+  v1_speed: "v1_speed_status",
+  v2_speed: "v2_speed_status",
+  v3_speed: "v3_speed_status",
+  v4_speed: "v4_speed_status",
+  metal_pressure: "metal_pressure_status",
+  furnace_metal_temp: "furnace_metal_temp_status",
+  cooling_water_mov: "cooling_water_mov_status",
+  cooling_water_sta: "cooling_water_sta_status",
+  accel_point: "accel_point_status",
+  deaccel_point: "deaccel_point_status",
+  intensification_time: "intensification_time_status",
+  biscuit_thickness: "biscuit_thickness_status",
+  jet_cooling_pressure: "jet_cooling_pressure_status",
+  clamp_tonnage_he_low_pct: "clamp_tonnage_he_low_pct_status",
+  clamp_tonnage_he_low_mn: "clamp_tonnage_he_low_mn_status",
+  clamp_tonnage_op_up_pct: "clamp_tonnage_op_up_pct_status",
+  clamp_tonnage_op_low_pct: "clamp_tonnage_op_low_pct_status",
+  clamp_tonnage_he_up_pct: "clamp_tonnage_he_up_pct_status",
+  vacuum_pressure: "vacuum_pressure_status",
+};
+
 const HIDDEN_COLUMNS = new Set([
   "id",
   "history_rank",
   "recorded_at",
   "shot_datetime",
   "shot_day",
-  "shot_fwd_time",
   "shot_fwd_time_sec",
   "shot_fwd_time_sec_value",
   "shot_hour",
   "shot_minute",
   "shot_month",
-  "ok_shot",
   "shot_second",
   "shot_year",
   "machine_name",
@@ -39,12 +69,14 @@ const HIDDEN_COLUMNS = new Set([
   "cycle_start",
   "cycle_end",
   "cycle_end_time",
+  "minor_stoppage_machine",
   "raw_readings_json",
   "created_at",
   "machine_type",
   "has_data",
   "is_online",
   "error",
+  ...Object.values(LIMIT_STATUS_BY_COLUMN),
 ]);
 
 const SERIAL_COLUMN = "serial_number";
@@ -61,6 +93,8 @@ const PREFERRED_COLUMNS = [
   SHIFT_COLUMN,
   "shot_number",
   "shot_status",
+  "ok_shot",
+  "ng_counter",
   "cycle_time",
   "minor_stoppage",
   "minor_stoppage_machine",
@@ -69,7 +103,7 @@ const PREFERRED_COLUMNS = [
 const SHOT_STATUS = {
   1: { label: "OK Shot", tone: "emerald" },
   3: { label: "Warm Up Shot", tone: "amber" },
-  5: { label: "Off Shot", tone: "rose" },
+  5: { label: "Parameter NG", tone: "rose" },
 };
 
 const QUICK_DATE_FILTERS = [
@@ -85,6 +119,115 @@ const SHIFT_FILTERS = [
   { key: "B", label: "B Shift" },
   { key: "C", label: "C Shift" },
 ];
+
+const SHOT_RESULT_FILTERS = [
+  { key: "all", label: "All Result" },
+  { key: "ok", label: "OK Shot", status: 1 },
+  { key: "warm", label: "Warm Up Shot", status: 3 },
+  { key: "ng", label: "Parameter NG", status: 5 },
+];
+
+const REPORT_LABELS = {
+  ...DISPLAY_LABELS,
+  shot_status: "Shot Result",
+  ok_shot: "High Shot Count",
+  ng_counter: "NG Counter",
+  die_close_core_in_time: "Die-Close Core In Time",
+  shot_fwd_time: "Shot FWD Time",
+  curing_time: "Curing Time (Cooling Time)",
+  die_open_core_out_time: "Die Open Core Out Time",
+  extract_time: "Extract Time",
+  v1_speed: "V1",
+  v2_speed: "V2",
+  v3_speed: "V3",
+  v4_speed: "V4",
+  metal_pressure: "Metal Press.",
+  furnace_metal_temp: "Furnace Metal Temp.",
+  cooling_water_mov: "Cooling Water Flow Rate (Mov.)",
+  cooling_water_sta: "Cooling Water Flow Rate (Sta.)",
+  accel_point: "Accel. Point",
+  deaccel_point: "Deaccel. Point",
+  intensification_time: "Inten. Time",
+  biscuit_thickness: "Biscuit Thickness",
+  jet_cooling_pressure: "Jet Cooling Pressure",
+  clamp_tonnage_he_low_pct: "Clamp Tonnage (HE.Low)",
+  clamp_tonnage_he_low_mn: "Clamp Tonnage (HE.Low)",
+  clamp_tonnage_op_up_pct: "Clamp Tonnage (OP.Up)",
+  clamp_tonnage_op_low_pct: "Clamp Tonnage (OP.Low)",
+  clamp_tonnage_he_up_pct: "Clamp Tonnage (HE.Up)",
+  vacuum_pressure: "Vacuum Pressure",
+  clamp_force_pct: "Clamp Force",
+  clamp_tonnage: "Clamp Tonnage",
+  shot_acc_pressure: "Shot Acc. Pressure",
+  intensification_acc_pressure: "Intensification Acc. Pressure",
+  fixed_die_temp_f1: "Fixed Die Temp (F-1)",
+  fixed_die_temp_f2: "Fixed Die Temp (F-2)",
+  moving_die_temp_m1: "Moving Die Temp (M-1)",
+  moving_die_temp_m2: "Moving Die Temp (M-2)",
+  slide_temp_s1: "Slide Temp -1 (S-1)",
+  fix_1_flow: "FIX. 1 Flow",
+  fix_2_flow: "FIX. 2 Flow",
+  fix_3_flow: "FIX. 3 Flow",
+  mov_1_flow: "Mov. 1 Flow",
+  mov_2_flow: "Mov. 2 Flow",
+  mov_3_flow: "Mov. 3 Flow",
+  vacuum_pressure_mmhg: "Vacuum Pressure",
+  average_die_clamp_tonnage_count: "Average Die Clamp Tonnage Count",
+  time_for_stroke: "Time for Stroke",
+  stroke: "Stroke",
+};
+
+const REPORT_UNITS = {
+  cycle_time: "sec",
+  minor_stoppage: "sec",
+  minor_stoppage_machine: "sec",
+  die_close_core_in_time: "sec",
+  pouring_time: "sec",
+  shot_fwd_time: "sec",
+  curing_time: "sec",
+  die_open_core_out_time: "sec",
+  ejector_time: "sec",
+  extract_time: "sec",
+  spray_time: "sec",
+  v1_speed: "m/sec",
+  v2_speed: "m/sec",
+  v3_speed: "m/sec",
+  v4_speed: "m/sec",
+  metal_pressure: "MPa",
+  furnace_metal_temp: "°C",
+  cooling_water_mov: "L/min",
+  cooling_water_sta: "L/min",
+  accel_point: "mm",
+  deaccel_point: "mm",
+  intensification_time: "msec",
+  biscuit_thickness: "mm",
+  jet_cooling_pressure: "kgf/cm2",
+  clamp_tonnage_he_low_pct: "%",
+  clamp_tonnage_he_low_mn: "MN",
+  clamp_tonnage_op_up_pct: "%",
+  clamp_tonnage_op_low_pct: "%",
+  clamp_tonnage_he_up_pct: "%",
+  vacuum_pressure: "mbar",
+  clamp_force_pct: "%",
+  clamp_tonnage: "T",
+  shot_acc_pressure: "MPa",
+  intensification_acc_pressure: "MPa",
+  fixed_die_temp_f1: "°C",
+  fixed_die_temp_f2: "°C",
+  moving_die_temp_m1: "°C",
+  moving_die_temp_m2: "°C",
+  slide_temp_s1: "°C",
+  fix_1_flow: "Lpm",
+  fix_2_flow: "Lpm",
+  fix_3_flow: "Lpm",
+  mov_1_flow: "Lpm",
+  mov_2_flow: "Lpm",
+  mov_3_flow: "Lpm",
+  vacuum_pressure_mmhg: "mmHg",
+  average_die_clamp_tonnage_count: "T",
+  time_for_stroke: "ms",
+  stroke: "mm",
+};
 
 function toInputDate(date) {
   const offset = date.getTimezoneOffset();
@@ -139,6 +282,10 @@ function getShiftFilterLabel(key) {
   return SHIFT_FILTERS.find((filter) => filter.key === key)?.label || "All Shift";
 }
 
+function getShotResultFilterLabel(key) {
+  return SHOT_RESULT_FILTERS.find((filter) => filter.key === key)?.label || "All Result";
+}
+
 function formatDisplayDate(value) {
   if (!value) return "-";
   const [year, month, day] = String(value).split("-");
@@ -158,9 +305,12 @@ function labelize(key) {
   if (key === SERIAL_COLUMN) return "S No";
   if (key === SHIFT_COLUMN) return "Shift";
   if (normalizeColumnKey(key) === "shot_number") return "Machine Shot Number";
-  return String(key || "")
+  const normalizedKey = normalizeColumnKey(key);
+  const baseLabel = REPORT_LABELS[normalizedKey] || String(key || "")
     .replace(/_/g, " ")
     .replace(/\b\w/g, (char) => char.toUpperCase());
+  const unit = REPORT_UNITS[normalizedKey];
+  return unit ? `${baseLabel} (${unit})` : baseLabel;
 }
 
 function normalizeColumnKey(key) {
@@ -352,23 +502,27 @@ function getRowProductionDate(row = {}) {
   return calendarDate;
 }
 
-function isRowInProductionFilter(row = {}, fromDate, toDate, shiftFilter) {
+function isRowInProductionFilter(row = {}, fromDate, toDate, shiftFilter, shotResultFilter = "all") {
   const productionDate = getRowProductionDate(row);
   if (!productionDate || productionDate < fromDate || productionDate > toDate) return false;
   const rowShift = getRowShift(row);
-  return shiftFilter === "all" || rowShift === shiftFilter;
+  if (shiftFilter !== "all" && rowShift !== shiftFilter) return false;
+  const resultFilter = SHOT_RESULT_FILTERS.find((filter) => filter.key === shotResultFilter);
+  if (!resultFilter?.status) return true;
+  return Number(row.shot_status ?? row["Shot Status"]) === resultFilter.status;
 }
 
 function shotStatusLabel(value) {
   const status = Number(value);
   if (status === 1) return "OK Shot";
   if (status === 3) return "Warm Up Shot";
-  if (status === 5) return "Off Shot";
+  if (status === 5) return "Parameter NG";
   return "-";
 }
 
 function formatValue(value, key) {
   if (value === null || value === undefined || value === "") return "-";
+  if (normalizeColumnKey(key) === "biscuit_thickness") return String(value);
   if (key === "recorded_at" || key === "cycle_end_time") return formatDateTime(value);
   if (key === "shot_date") return formatDateOnly(value);
   if (key === "shot_time") return formatTimeOnly(value);
@@ -382,6 +536,30 @@ function formatReportCell(row, key, rowIndex = 0, rowCount = 0) {
   if (key === SERIAL_COLUMN) return Math.max(1, rowCount - rowIndex);
   if (key === SHIFT_COLUMN) return getRowShift(row);
   return formatValue(row[key], key);
+}
+
+function isLimitAlarmStatus(value) {
+  const status = Number(value);
+  return status === 1 || status === 2;
+}
+
+function getLimitStatus(row = {}, key) {
+  const statusKey = LIMIT_STATUS_BY_COLUMN[normalizeColumnKey(key)];
+  return statusKey ? row[statusKey] : null;
+}
+
+function rowHasLimitAlarm(row = {}) {
+  return Object.values(LIMIT_STATUS_BY_COLUMN).some((statusKey) => isLimitAlarmStatus(row[statusKey]));
+}
+
+function isHighlightedReportCell(row = {}, key) {
+  const normalizedKey = normalizeColumnKey(key);
+  if (normalizedKey === "shot_number") return rowHasLimitAlarm(row);
+  return isLimitAlarmStatus(getLimitStatus(row, key));
+}
+
+function reportCellHtmlAttrs(row, key) {
+  return isHighlightedReportCell(row, key) ? ' class="alarm-cell"' : "";
 }
 
 function escapeHtml(value) {
@@ -493,17 +671,19 @@ function getColumnWidth(key) {
 
 function KpiCard({ title, value, tone }) {
   const toneClass = {
-    emerald: "border-emerald-200 bg-emerald-50 text-emerald-700",
-    amber: "border-amber-200 bg-amber-50 text-amber-700",
-    rose: "border-rose-200 bg-rose-50 text-rose-700",
-    blue: "border-blue-200 bg-blue-50 text-blue-700",
-    indigo: "border-indigo-200 bg-indigo-50 text-indigo-700",
+    emerald: "border-emerald-200 bg-emerald-50 text-emerald-700 ring-emerald-100",
+    amber: "border-amber-200 bg-amber-50 text-amber-700 ring-amber-100",
+    rose: "border-rose-200 bg-rose-50 text-rose-700 ring-rose-100",
+    blue: "border-blue-200 bg-blue-50 text-blue-700 ring-blue-100",
+    indigo: "border-indigo-200 bg-indigo-50 text-indigo-700 ring-indigo-100",
   }[tone] || "border-slate-200 bg-white text-slate-700";
 
   return (
-    <div className={`rounded-lg border p-3 shadow-sm ${toneClass}`}>
-      <p className="text-xs font-extrabold uppercase tracking-[0.16em] opacity-75">{title}</p>
-      <p className="mt-1 text-2xl font-black sm:text-3xl">{value}</p>
+    <div className={`flex min-h-[104px] flex-col items-center justify-center rounded-lg border px-4 py-4 text-center shadow-sm ring-1 ${toneClass}`}>
+      <p className="text-[11px] font-black uppercase tracking-[0.12em] opacity-80">{title}</p>
+      <p className="mt-2 flex min-h-[38px] items-center justify-center text-3xl font-black leading-none sm:text-[34px]">
+        {value}
+      </p>
     </div>
   );
 }
@@ -520,10 +700,12 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   const [toDate, setToDate] = useState(todayInput());
   const [activeQuickFilter, setActiveQuickFilter] = useState("today");
   const [shiftFilter, setShiftFilter] = useState("all");
+  const [shotResultFilter, setShotResultFilter] = useState("all");
   const [draftFromDate, setDraftFromDate] = useState(fromDate);
   const [draftToDate, setDraftToDate] = useState(toDate);
   const [draftQuickFilter, setDraftQuickFilter] = useState(activeQuickFilter);
   const [draftShiftFilter, setDraftShiftFilter] = useState(shiftFilter);
+  const [draftShotResultFilter, setDraftShotResultFilter] = useState(shotResultFilter);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -660,7 +842,8 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     setFromDate(draftFromDate);
     setToDate(draftToDate);
     setShiftFilter(draftShiftFilter);
-  }, [draftFromDate, draftLineId, draftMachineId, draftQuickFilter, draftShiftFilter, draftToDate]);
+    setShotResultFilter(draftShotResultFilter);
+  }, [draftFromDate, draftLineId, draftMachineId, draftQuickFilter, draftShiftFilter, draftShotResultFilter, draftToDate]);
 
   const loadReport = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setLoading(true);
@@ -691,8 +874,8 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   }, [loadReport]);
 
   const filteredRows = useMemo(
-    () => rows.filter((row) => isRowInProductionFilter(row, fromDate, toDate, shiftFilter)),
-    [fromDate, rows, shiftFilter, toDate]
+    () => rows.filter((row) => isRowInProductionFilter(row, fromDate, toDate, shiftFilter, shotResultFilter)),
+    [fromDate, rows, shiftFilter, shotResultFilter, toDate]
   );
 
   const columns = useMemo(() => buildColumns(filteredRows), [filteredRows]);
@@ -707,9 +890,9 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       tableScrollRef.current.scrollLeft = 0;
       tableScrollRef.current.scrollTop = 0;
     }
-  }, [columns.length, fromDate, selectedMachineId, shiftFilter, toDate]);
+  }, [columns.length, fromDate, selectedMachineId, shiftFilter, shotResultFilter, toDate]);
   const kpis = useMemo(() => {
-    const counts = { ok: 0, warm: 0, off: 0, shift: shiftFilter === "all" ? "All" : shiftFilter };
+    const counts = { ok: 0, warm: 0, off: 0, totalProduction: reportRows.length, shift: shiftFilter === "all" ? "All" : shiftFilter };
     reportRows.forEach((row) => {
       const value = Number(row.shot_status ?? row["Shot Status"]);
       if (value === 1) counts.ok += 1;
@@ -723,6 +906,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   const reportRangeLabel = `${formatDisplayDate(fromDate)} to ${formatDisplayDate(toDate)}`;
   const reportFilterLabel = getQuickFilterLabel(activeQuickFilter);
   const reportShiftLabel = getShiftFilterLabel(shiftFilter);
+  const reportShotResultLabel = getShotResultFilterLabel(shotResultFilter);
   const activeLineLabel = selectedLineId === "all"
     ? "All Lines"
     : getLineLabel(lines.find((line) => getLineId(line) === String(selectedLineId)) || { line_name: "Selected Line" });
@@ -732,6 +916,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     slugify(machineLabel),
     slugify(reportFilterLabel),
     slugify(reportShiftLabel),
+    slugify(reportShotResultLabel),
     fromDate,
     toDate,
   ].filter(Boolean).join("-");
@@ -741,7 +926,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     const generatedAt = formatDateTime(new Date());
     const header = columns.map((key) => `<th>${escapeHtml(labelize(key))}</th>`).join("");
     const body = reportRows.map((row, index) => (
-      `<tr>${columns.map((key) => `<td>${escapeHtml(formatReportCell(row, key, index, reportRows.length))}</td>`).join("")}</tr>`
+      `<tr>${columns.map((key) => `<td${reportCellHtmlAttrs(row, key)}>${escapeHtml(formatReportCell(row, key, index, reportRows.length))}</td>`).join("")}</tr>`
     )).join("");
     const popup = window.open("", "_blank", "width=1200,height=800");
     if (!popup) return;
@@ -777,6 +962,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     table{width:100%;border-collapse:collapse;font-size:9px}
     th,td{border:1px solid #cbd5e1;padding:5px 6px;text-align:left;vertical-align:top;white-space:nowrap}
     th{background:#dbeafe;color:#1e3a5f;font-weight:800;text-transform:uppercase;letter-spacing:.04em}
+    .alarm-cell{background:#fee2e2!important;color:#991b1b!important;font-weight:900}
     tbody tr:nth-child(even){background:#f8fafc}
     .table-title{background:#f8fafc;border-bottom:1px solid #cbd5e1;padding:9px 14px;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:#334155}
     .footer{display:flex;justify-content:space-between;border-top:1px solid #cbd5e1;padding:8px 12px;font-size:10px;font-weight:700;color:#64748b}
@@ -790,7 +976,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       <div>
         <div class="company">Rico Auto Industries Limited</div>
         <h1>${escapeHtml(title)}</h1>
-        <div class="meta">${escapeHtml(reportFilterLabel)} | ${escapeHtml(reportShiftLabel)} | ${escapeHtml(reportRangeLabel)} | ${reportRows.length} records</div>
+        <div class="meta">${escapeHtml(reportFilterLabel)} | ${escapeHtml(reportShiftLabel)} | ${escapeHtml(reportShotResultLabel)} | ${escapeHtml(reportRangeLabel)} | ${reportRows.length} records</div>
       </div>
       <div class="doc">
         <div><span>Report</span><strong>Production</strong></div>
@@ -802,13 +988,13 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       <div class="detail"><span>Machine</span><strong>${escapeHtml(machineLabel)}</strong></div>
       <div class="detail"><span>PLC IP</span><strong>${escapeHtml(selectedMachine?.plc_ip || "-")}</strong></div>
       <div class="detail"><span>Date Range</span><strong>${escapeHtml(reportRangeLabel)}</strong></div>
-      <div class="detail"><span>Filter</span><strong>${escapeHtml(reportFilterLabel)} / ${escapeHtml(reportShiftLabel)}</strong></div>
+      <div class="detail"><span>Filter</span><strong>${escapeHtml(reportFilterLabel)} / ${escapeHtml(reportShiftLabel)} / ${escapeHtml(reportShotResultLabel)}</strong></div>
     </div>
     <div class="summary">
       <div class="kpi"><span>OK Shot</span><strong>${kpis.ok}</strong></div>
       <div class="kpi"><span>Warm Up Shot</span><strong>${kpis.warm}</strong></div>
-      <div class="kpi"><span>Off Shot</span><strong>${kpis.off}</strong></div>
-      <div class="kpi"><span>Total Shot</span><strong>${reportRows.length}</strong></div>
+      <div class="kpi"><span>Parameter NG</span><strong>${kpis.off}</strong></div>
+      <div class="kpi"><span>Total Production</span><strong>${kpis.totalProduction}</strong></div>
       <div class="kpi"><span>Shift</span><strong>${kpis.shift}</strong></div>
     </div>
     <div class="table-title">Detailed Production Records</div>
@@ -826,7 +1012,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     const generatedAt = formatDateTime(new Date());
     const header = columns.map((key) => `<th>${escapeHtml(labelize(key))}</th>`).join("");
     const body = reportRows.map((row, index) => (
-      `<tr>${columns.map((key) => `<td>${escapeHtml(formatReportCell(row, key, index, reportRows.length))}</td>`).join("")}</tr>`
+      `<tr>${columns.map((key) => `<td${reportCellHtmlAttrs(row, key)}>${escapeHtml(formatReportCell(row, key, index, reportRows.length))}</td>`).join("")}</tr>`
     )).join("");
     downloadHtmlFile(`${reportFileBaseName}.xls`, `<!doctype html>
 <html>
@@ -847,6 +1033,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     th{background:#173f78;color:#ffffff;font-weight:800;text-transform:uppercase;text-align:center}
     tbody td{mso-number-format:"\\@";font-weight:600}
     tbody tr:nth-child(even) td{background:#f8fbff}
+    .alarm-cell{background:#fee2e2!important;color:#991b1b!important;font-weight:900}
   </style>
 </head>
 <body>
@@ -870,21 +1057,21 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     </tr>
     <tr>
       <td class="label">Date Range</td><td class="value" colspan="2">${escapeHtml(reportFilterLabel)}</td>
-      <td class="label">Prepared By</td><td class="value" colspan="3">-</td>
+      <td class="label">Shot Result</td><td class="value" colspan="3">${escapeHtml(reportShotResultLabel)}</td>
     </tr>
     <tr><td colspan="${colSpan}" class="section">Production Summary</td></tr>
     <tr>
       <td class="summary-label">OK Shot</td>
       <td class="summary-label">Warm Up Shot</td>
-      <td class="summary-label">Off Shot</td>
-      <td class="summary-label">Total Shot</td>
+      <td class="summary-label">Parameter NG</td>
+      <td class="summary-label">Total Production</td>
       <td class="summary-label">Shift</td>
     </tr>
     <tr>
       <td class="summary-ok">${kpis.ok}</td>
       <td class="summary-warm">${kpis.warm}</td>
       <td class="summary-off">${kpis.off}</td>
-      <td class="summary-total">${reportRows.length}</td>
+      <td class="summary-total">${kpis.totalProduction}</td>
       <td class="summary-shift">${escapeHtml(kpis.shift)}</td>
     </tr>
     <tr><td colspan="${colSpan}" class="section">Detailed Production Records</td></tr>
@@ -918,7 +1105,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
             <div>
               <p className="text-xs font-black uppercase tracking-[0.18em] text-blue-600">Filters</p>
               <p className="mt-1 text-sm font-bold text-slate-600">
-                {reportFilterLabel} | {reportShiftLabel} | {reportRangeLabel}
+                {reportFilterLabel} | {reportShiftLabel} | {reportShotResultLabel} | {reportRangeLabel}
               </p>
             </div>
             <div className="flex items-center gap-3">
@@ -999,6 +1186,18 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                   </select>
                 </label>
                 <label className="block">
+                  <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">Shot Result</span>
+                  <select
+                    value={draftShotResultFilter}
+                    onChange={(event) => setDraftShotResultFilter(event.target.value)}
+                    className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                  >
+                    {SHOT_RESULT_FILTERS.map((filter) => (
+                      <option key={filter.key} value={filter.key}>{filter.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
                   <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">From</span>
                   <input type="date" value={draftFromDate} onChange={handleFromDateChange} className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" />
                 </label>
@@ -1006,13 +1205,12 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                   <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">To</span>
                   <input type="date" value={draftToDate} onChange={handleToDateChange} className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" />
                 </label>
-                <button type="button" onClick={applyReportFilters} className="h-10 rounded-lg bg-blue-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-blue-700 sm:self-end">
+                <button type="button" onClick={applyReportFilters} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-blue-700 sm:self-end">
+                  <CheckCircle2 className="h-4 w-4" />
                   Apply
                 </button>
                 <button type="button" onClick={downloadExcel} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-emerald-700 sm:self-end">
-                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v12m0 0l4-4m-4 4l-4-4M5 21h14" />
-                  </svg>
+                  <Download className="h-4 w-4" />
                   Excel
                 </button>
               </div>
@@ -1020,11 +1218,11 @@ export default function PlcReportPage({ onLogout, currentUser }) {
           )}
         </section>
 
-        <section className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(145px,1fr))]">
+        <section className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(190px,1fr))]">
+          <KpiCard title="Total Production" value={kpis.totalProduction} tone="blue" />
           <KpiCard title="OK Shot" value={kpis.ok} tone="emerald" />
           <KpiCard title="Warm Up Shot" value={kpis.warm} tone="amber" />
-          <KpiCard title="Off Shot" value={kpis.off} tone="rose" />
-          <KpiCard title="Total Shot" value={reportRows.length} tone="blue" />
+          <KpiCard title="Parameter NG" value={kpis.off} tone="rose" />
           <KpiCard title="Shift" value={kpis.shift} tone="indigo" />
         </section>
 
@@ -1057,7 +1255,14 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                 {reportRows.map((row, index) => (
                   <tr key={row.id || `${row.recorded_at}-${index}`} className="border-b border-slate-100 hover:bg-slate-50">
                     {columns.map((key) => (
-                      <td key={key} className="border-r border-slate-100 px-4 py-2.5 text-center align-middle font-semibold leading-tight text-slate-800 last:border-r-0">
+                      <td
+                        key={key}
+                        className={`border-r px-4 py-2.5 text-center align-middle font-semibold leading-tight last:border-r-0 ${
+                          isHighlightedReportCell(row, key)
+                            ? "border-red-200 bg-red-100 text-red-800"
+                            : "border-slate-100 text-slate-800"
+                        }`}
+                      >
                         {formatReportCell(row, key, index, reportRows.length)}
                       </td>
                     ))}

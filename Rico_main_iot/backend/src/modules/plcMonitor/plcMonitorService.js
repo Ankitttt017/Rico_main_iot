@@ -10,8 +10,8 @@ const db = require("../../config/db");
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const {
-  TARGET_MACHINE,
   getMachines,
+  getConfiguredMachines,
 } = require("./config/machineConfig");
 const {
   TABLE,
@@ -27,6 +27,7 @@ const {
   PLC_MAX_CONSECUTIVE_READ_FAILURES,
   PLC_DB_RETRY_MS,
   PLC_DB_RETRY_MAX,
+  PLC_DB_RETRY_BATCH_SIZE,
   PLC_PENDING_SAVE_FILE,
   LEAK_TEST_CONTROL,
   LEAK_DUPLICATE_WINDOW_SEC,
@@ -36,6 +37,7 @@ const {
   PLC_READ_TIMEOUT_MS,
   PLC_RECONNECT_AFTER_TIMEOUT_MS,
   EXCEL_PARAMETERS,
+  UBE_LIMIT_STATUS_PARAMETERS,
   LEAK_TEST_PARAMETERS,
   UBE_READ_PARAMETERS,
   ALL_PARAMETERS,
@@ -114,6 +116,8 @@ const PLC_RECONNECT_MIN_MS = Number(process.env.PLC_RECONNECT_MIN_MS || process.
 const PLC_RECONNECT_MAX_MS = Number(process.env.PLC_RECONNECT_MAX_MS || 30000);
 const PLC_RECONNECT_BACKOFF_FACTOR = Number(process.env.PLC_RECONNECT_BACKOFF_FACTOR || 1.6);
 const PLC_RECONNECT_JITTER_MS = Number(process.env.PLC_RECONNECT_JITTER_MS || 1000);
+const UBE_PART_NAME_DEVICE = process.env.PLC_UBE_PART_NAME_DEVICE || "D100";
+const UBE_PART_NAME_LENGTH = Number(process.env.PLC_UBE_PART_NAME_LENGTH || 12);
 
 function isPlcReadTimeoutError(error) {
   return /PLC read timeout|timed out|timeout/i.test(String(error?.message || error || ""));
@@ -329,11 +333,13 @@ async function readString(sock, startDevice, length) {
     if (high >= 32 && high <= 126) result += String.fromCharCode(high);
   }
 
-  const cleaned = result.trim().replace(/[^A-Za-z0-9\-_]/g, "");
-  if (!cleaned) return "";
+  // PEHLE wala strict filter HATA DIYA:
+  // const strict = cleaned.match(/[A-Za-z0-9\-]+S\d/)?.[0];
+  // return strict || cleaned;
 
-  const strict = cleaned.match(/[A-Za-z0-9\-]+S\d/)?.[0];
-  return strict || cleaned;
+  // SIRF basic clean karo
+  const cleaned = result.trim().replace(/[^A-Za-z0-9\-_]/g, "");
+  return cleaned;
 }
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -383,6 +389,21 @@ function connectPLC(machine) {
 
 function scaleValue(parameter, value) {
   if (value === null || value === undefined) return null;
+  const normalizedName = String(parameter.name || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_");
+  const normalizedDevice = String(parameter.device || "").trim().toUpperCase();
+  const isBiscuitThickness =
+    normalizedDevice === "D6916" ||
+    normalizedName === "biscuit_thickness_mm" ||
+    normalizedName === "biscuit_thickness" ||
+    (normalizedName.includes("biscuit") && normalizedName.includes("thickness"));
+  if (isBiscuitThickness) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+    return Number(n.toFixed(2));
+  }
+
   if (parameter.type === "int") return Number.parseInt(value, 10) || 0;
   if (parameter.type === "dword") return Number.parseInt(value, 10) || 0;
   if (parameter.type === "real32") return Number(Number(value).toFixed(3));
@@ -518,7 +539,9 @@ function addInsertValue(columns, values, column, value) {
 }
 
 function getReadingNames() {
-  return EXCEL_PARAMETERS.map((p) => p.name).filter((name) => !DROPPED_READING_COLUMNS.has(name));
+  return [...EXCEL_PARAMETERS, ...UBE_LIMIT_STATUS_PARAMETERS]
+    .map((p) => p.name)
+    .filter((name) => !DROPPED_READING_COLUMNS.has(name));
 }
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -530,6 +553,9 @@ function formatDbRowForClient(row = {}) {
 
   if (next.scan_data && !next.part_qr_code) next.part_qr_code = next.scan_data;
   if (next.part_qr_code && !next.scan_data) next.scan_data = next.part_qr_code;
+  if (next["BISCUIT THICKNESS mm"] !== null && next["BISCUIT THICKNESS mm"] !== undefined) {
+    next.biscuit_thickness = next["BISCUIT THICKNESS mm"];
+  }
 
   if (Object.prototype.hasOwnProperty.call(next, "result")) {
     next.result = normalizeLeakResult(next.result) || next.result;
@@ -928,22 +954,6 @@ async function getLatestReadingsForMachines(machineSnapshots = getMachines()) {
   await ensureTableOnce();
 
   const machines = machineSnapshots.length ? machineSnapshots : getMachines();
-  const liveFreshMs = Number(process.env.PLC_LATEST_LIVE_FRESH_MS || 15000);
-  const now = Date.now();
-  const hasFreshLiveData = machines.some((machine) => {
-    const liveReading = machine.latestReading;
-    if (!liveReading?.has_data) return false;
-    const liveTime = new Date(liveReading.created_at || liveReading.recorded_at || 0).getTime();
-    return Number.isFinite(liveTime) && now - liveTime <= liveFreshMs;
-  });
-
-  if (hasFreshLiveData) {
-    return machines.map((machine) => {
-      if (machine.latestReading?.has_data) return machine.latestReading;
-      return formatDbReading(null, machine);
-    });
-  }
-
   const ubeMachines = machines.filter((m) => isUbeMachine(m));
   const leakMachines = machines.filter((m) => isLeakTestMachine(m));
   const rowByKey = new Map();
@@ -981,14 +991,7 @@ async function getLatestReadingsForMachines(machineSnapshots = getMachines()) {
         [machineKey, machineIp, machineKey]
       );
       if (rows[0]) {
-        const latestRow = rows[0];
-        if (latestRow.minor_stoppage_machine === null || latestRow.minor_stoppage_machine === undefined) {
-          const completedMinorStoppage = await calculateCompletedMinorStoppageMachine(machine, {
-            shot_datetime: latestRow.shot_datetime || latestRow.recorded_at,
-          });
-          if (completedMinorStoppage) latestRow.minor_stoppage_machine = completedMinorStoppage.value;
-        }
-        rowByKey.set(String(machineKey), latestRow);
+        rowByKey.set(String(machineKey), rows[0]);
       }
     }
   }
@@ -1054,10 +1057,27 @@ async function getReadingHistory({ ip, limit = 200, from, to } = {}) {
   await ensureTableOnce();
 
   const safeLimit = clampLimit(limit);
-  const targetId = ip || TARGET_MACHINE.key || TARGET_MACHINE.ip;
-  const targetMachine = getMachines().find(
+  const targetId = ip || "";
+  const configuredMachines = await getConfiguredMachines();
+  const targetMachine = configuredMachines.find(
     (m) => (m.key || m.ip) === targetId || m.ip === targetId
   );
+
+  if (!targetId) {
+    const filters = [];
+    const values = [];
+    if (from) { filters.push("recorded_at >= ?"); values.push(from); }
+    if (to) { filters.push("recorded_at < DATEADD(day, 1, CAST(? AS date))"); values.push(to); }
+    const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+    const { rows } = await db.query(
+      `SELECT TOP (${safeLimit}) *
+       FROM ${TABLE}
+       ${where}
+       ORDER BY recorded_at DESC, id DESC`,
+      values
+    );
+    return rows.map(formatDbRowForClient);
+  }
 
   if (targetMachine?.kind === "leaktest") {
     const filters = ["PLC_IP = ?"];
@@ -1186,6 +1206,9 @@ async function getConnectionEvents({ ip, limit = 200, from, to } = {}) {
 const inFlightUbeSaveKeys = new Set();
 
 async function calculateCompletedMinorStoppageMachine(machine, readings = {}) {
+  if (String(process.env.PLC_MINOR_STOPPAGE_MACHINE_ENABLED || "false").toLowerCase() !== "true") {
+    return null;
+  }
   const currentShotAt = normalizeReadingForDB("shot_datetime", readings.shot_datetime);
   if (!currentShotAt) return null;
 
@@ -1225,6 +1248,9 @@ async function calculateCompletedMinorStoppageMachine(machine, readings = {}) {
 }
 
 async function updatePreviousMinorStoppageMachine(machine, readings = {}) {
+  if (String(process.env.PLC_MINOR_STOPPAGE_MACHINE_ENABLED || "false").toLowerCase() !== "true") {
+    return null;
+  }
   const completed = await calculateCompletedMinorStoppageMachine(machine, readings);
   if (!completed) return null;
 
@@ -1509,6 +1535,16 @@ BEGIN
   ${dynamicSql(`UPDATE ${TABLE} SET [ng_shot] = COALESCE([ng_shot], TRY_CONVERT(INT, [ng_counter])) WHERE [ng_shot] IS NULL`)}
 END
 
+IF COL_LENGTH('${TABLE}', 'ng_counter') IS NOT NULL AND COL_LENGTH('${TABLE}', 'ng_shot') IS NOT NULL
+BEGIN
+  ${dynamicSql(`UPDATE ${TABLE} SET [ng_counter] = COALESCE([ng_counter], TRY_CONVERT(INT, [ng_shot])) WHERE [ng_counter] IS NULL`)}
+END
+
+IF COL_LENGTH('${TABLE}', 'ng_counter') IS NOT NULL AND COL_LENGTH('${TABLE}', 'NG COUNTER value') IS NOT NULL
+BEGIN
+  ${dynamicSql(`UPDATE ${TABLE} SET [ng_counter] = COALESCE([ng_counter], TRY_CONVERT(INT, [NG COUNTER value])) WHERE [ng_counter] IS NULL`)}
+END
+
 IF COL_LENGTH('${TABLE}', 'ng_shot') IS NOT NULL AND COL_LENGTH('${TABLE}', 'NG COUNTER value') IS NOT NULL
 BEGIN
   ${dynamicSql(`UPDATE ${TABLE} SET [ng_shot] = COALESCE([ng_shot], TRY_CONVERT(INT, [NG COUNTER value])) WHERE [ng_shot] IS NULL`)}
@@ -1763,6 +1799,7 @@ BEGIN
 END
 
 IF COL_LENGTH('${TABLE}', 'minor_stoppage_machine') IS NOT NULL
+   AND '${String(process.env.PLC_MINOR_STOPPAGE_MACHINE_ENABLED || "false").replace(/'/g, "''").toLowerCase()}' = 'true'
 BEGIN
   ;WITH recent_rows AS (
     SELECT TOP (5000)
@@ -2021,6 +2058,9 @@ SELECT
 }
 
 async function backfillRecentMinorStoppageMachine() {
+  if (String(process.env.PLC_MINOR_STOPPAGE_MACHINE_ENABLED || "false").toLowerCase() !== "true") {
+    return;
+  }
   await db.run(`
 IF OBJECT_ID(N'${TABLE}', N'U') IS NOT NULL
    AND COL_LENGTH('${TABLE}', 'minor_stoppage_machine') IS NOT NULL
@@ -2098,7 +2138,7 @@ function createInitialMachineState(machines) {
 }
 
 function startPlcMonitor(io) {
-  const machines = getMachines();
+  let machines = getMachines();
   const machineState = createInitialMachineState(machines);
   const bitOnState = new Map();
   const openConnectionEvents = new Map();
@@ -2262,7 +2302,7 @@ function startPlcMonitor(io) {
   const flushPendingUbeSaves = async () => {
     if (!pendingUbeSaves.size) return;
 
-    for (const [key, item] of Array.from(pendingUbeSaves.entries())) {
+    for (const [key, item] of Array.from(pendingUbeSaves.entries()).slice(0, PLC_DB_RETRY_BATCH_SIZE)) {
       try {
         await saveToDB(item.machine, item.partName, item.readings);
         pendingUbeSaves.delete(key);
@@ -2346,8 +2386,14 @@ function startPlcMonitor(io) {
     const readings = {};
     const rawCache = new Map();
     const now = new Date();
+    const readParameters = Array.isArray(machine.registerConfig) && machine.registerConfig.length
+      ? [
+          ...machine.registerConfig.filter((parameter) => parameter.enabled !== false),
+          ...UBE_LIMIT_STATUS_PARAMETERS,
+        ]
+      : UBE_READ_PARAMETERS;
 
-    const partName = await readString(sock, "D100", 11).catch(() => "");
+    const partName = await readString(sock, UBE_PART_NAME_DEVICE, UBE_PART_NAME_LENGTH).catch(() => "");
     const shotYearRaw = await readWord(sock, SHOT_DATE_TIME_DEVICES.year).catch(() => null);
     const shotMonthRaw = await readWord(sock, SHOT_DATE_TIME_DEVICES.month).catch(() => null);
     const shotDayRaw = await readWord(sock, SHOT_DATE_TIME_DEVICES.day).catch(() => null);
@@ -2377,7 +2423,7 @@ function startPlcMonitor(io) {
     readings.shot_minute = pad2(shotMinute);
     readings.shot_second = pad2(shotSecond);
 
-    for (const parameter of UBE_READ_PARAMETERS) {
+    for (const parameter of readParameters) {
       const { name, device, computed } = parameter;
       try {
         if (computed === "serial") { readings[name] = reportSerial; continue; }
@@ -2407,6 +2453,7 @@ function startPlcMonitor(io) {
 
     readings.shot_number = readings["SHOT NO."] ?? null;
     readings.ok_shot = readings["HIGH SHOT COUNT"] ?? null;
+    readings.ng_counter = readings["NG COUNTER"] ?? null;
     delete readings.ng_shot;
 
     for (const [parameterName, legacyColumn] of Object.entries(LEGACY_COLUMNS_BY_PARAMETER)) {
@@ -2415,12 +2462,7 @@ function startPlcMonitor(io) {
       }
     }
 
-    if (liveOnly) {
-      readings.minor_stoppage_machine = null;
-    } else {
-      const completedMinorStoppage = await calculateCompletedMinorStoppageMachine(machine, readings);
-      readings.minor_stoppage_machine = completedMinorStoppage?.value ?? null;
-    }
+    readings.minor_stoppage_machine = null;
 
     // â”€â”€ machineKey + machineType always in payload â”€â”€
     const machineKey = machine.key || machine.ip;
@@ -2577,8 +2619,11 @@ function startPlcMonitor(io) {
     const machineKey = machine.key || machine.ip;
     const machineType = "leaktest";
     const currentState = machineState.get(machineKey) || {};
+    const readParameters = Array.isArray(machine.registerConfig) && machine.registerConfig.length
+      ? machine.registerConfig.filter((parameter) => parameter.enabled !== false)
+      : LEAK_TEST_PARAMETERS;
 
-    for (const parameter of LEAK_TEST_PARAMETERS) {
+    for (const parameter of readParameters) {
       const { name, device, stringDevice, stringLength } = parameter;
       try {
         if (stringDevice) {
@@ -2890,12 +2935,14 @@ function startPlcMonitor(io) {
 
   // â”€â”€ Main Machine Monitor Loop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-  const monitorMachine = async (machine) => {
+  const monitorTokens = new Map();
+  const monitorMachine = async (machine, token) => {
     const machineKey = machine.key || machine.ip;
     const machineLabel = `[${isLeakTestMachine(machine) ? "LEAKTEST" : "UBE"}] ${machine.name} (${machine.ip})`;
     let reconnectAttempt = 0;
+    const isMonitorCurrent = () => monitorTokens.get(machineKey) === token;
 
-    while (true) {
+    while (isMonitorCurrent()) {
       let sock = null;
       try {
         updateMachineState(machine, {
@@ -2946,7 +2993,7 @@ function startPlcMonitor(io) {
           let lastCycleEndBit = 0; // Fixed: always start fresh, not from PLC state
           let consecutiveReadFailures = 0;
 
-          while (true) {
+          while (isMonitorCurrent()) {
             if (!monitoringRunning) { await sleep(1000); continue; }
 
             let cycleStart = lastCycleStartBit;
@@ -3075,7 +3122,7 @@ function startPlcMonitor(io) {
         let lastSeenShotNumber = null;
         let consecutiveReadFailures = 0;
 
-        while (true) {
+        while (isMonitorCurrent()) {
           if (!monitoringRunning) { await sleep(UBE_CYCLE_END_POLL_MS); continue; }
 
           const loopStartedAt = Date.now();
@@ -3193,6 +3240,7 @@ function startPlcMonitor(io) {
           lastCycleEndBit = cycleEnd;
           await sleep(UBE_CYCLE_END_POLL_MS);
         }
+        if (!isMonitorCurrent()) closeSocket(sock);
       } catch (error) {
         reconnectAttempt += 1;
         const reconnectDelay = reconnectDelayMs(reconnectAttempt);
@@ -3209,23 +3257,89 @@ function startPlcMonitor(io) {
     }
   };
 
-  let monitorsStarted = false;
-
   const startMachineMonitors = async () => {
-    if (monitorsStarted) return;
-    monitorsStarted = true;
     for (let i = 0; i < machines.length; i++) {
       const machine = machines[i];
+      const machineKey = machine.key || machine.ip;
+      if (monitorTokens.has(machineKey)) continue;
+      const token = Symbol(machineKey);
+      monitorTokens.set(machineKey, token);
       const label = isLeakTestMachine(machine) ? "LEAKTEST" : "UBE";
       console.log(`Starting [${label}]: ${machine.name} (${machine.ip})`);
-      monitorMachine(machine); // intentionally not awaited
+      monitorMachine(machine, token); // intentionally not awaited
       if (i < machines.length - 1) await sleep(500);
     }
+  };
+
+  const refreshConfiguredMachines = async () => {
+    const configuredMachines = await getConfiguredMachines();
+    const configuredByKey = new Map(configuredMachines.map((machine) => [machine.key || machine.ip, machine]));
+    let changed = false;
+
+    for (const [machineKey] of Array.from(monitorTokens.entries())) {
+      if (configuredByKey.has(machineKey)) continue;
+      monitorTokens.delete(machineKey);
+      machineState.delete(machineKey);
+      changed = true;
+    }
+
+    machines = configuredMachines;
+
+    configuredMachines.forEach((machine) => {
+      const machineKey = machine.key || machine.ip;
+      if (!machineKey) return;
+      const currentState = machineState.get(machineKey);
+      const configChanged = currentState && (
+        currentState.ip !== machine.ip ||
+        Number(currentState.port) !== Number(machine.port) ||
+        currentState.name !== machine.name
+      );
+
+      if (configChanged) {
+        monitorTokens.delete(machineKey);
+        machineState.delete(machineKey);
+      }
+
+      if (machineState.has(machineKey)) {
+        machineState.set(machineKey, {
+          ...machineState.get(machineKey),
+          ...machine,
+          machine_key: machineKey,
+        });
+        return;
+      }
+
+      machineState.set(machineKey, {
+        ...machine,
+        connected: false,
+        error: null,
+        lastCycleAt: null,
+        lastShotNumber: null,
+        partName: "",
+        cycleTime: null,
+        shotStatus: "Machine added from setup; starting monitor.",
+        machineType: isLeakTestMachine(machine) ? "leaktest" : "ube",
+      });
+      changed = true;
+    });
+
+    if (changed) {
+      io.emit("machines", machines);
+      emitMachineState();
+    }
+    await startMachineMonitors();
   };
 
   const ensureSchemaAndStart = async () => {
     try {
       await ensureTableOnce();
+      if (!monitorTokens.size) {
+        machines = await getConfiguredMachines();
+        machineState.clear();
+        createInitialMachineState(machines).forEach((value, key) => {
+          machineState.set(key, value);
+        });
+      }
       console.log("PLC monitor table ready — starting machine monitors");
       await startMachineMonitors();
     } catch (error) {
@@ -3244,6 +3358,77 @@ function startPlcMonitor(io) {
     console.error("PLC monitor startup failed:", error.message);
   });
 
+  const machineConfigRefreshTimer = setInterval(() => {
+    refreshConfiguredMachines().catch((error) => {
+      console.error("PLC machine config refresh failed:", error.message);
+    });
+  }, Number(process.env.PLC_MACHINE_CONFIG_REFRESH_MS || 15000));
+  machineConfigRefreshTimer.unref?.();
+
+  const isLiveReadingInHistoryRange = (liveReading = {}, { from, to } = {}) => {
+    const timestamp = liveReading.recorded_at || liveReading.shot_datetime || liveReading.created_at;
+    const liveTime = timestamp ? new Date(timestamp).getTime() : Date.now();
+    if (!Number.isFinite(liveTime)) return true;
+
+    if (from) {
+      const fromTime = new Date(from).getTime();
+      if (Number.isFinite(fromTime) && liveTime < fromTime) return false;
+    }
+
+    if (to) {
+      const toDate = new Date(to);
+      if (!Number.isNaN(toDate.getTime())) {
+        toDate.setHours(23, 59, 59, 999);
+        if (liveTime > toDate.getTime()) return false;
+      }
+    }
+
+    return true;
+  };
+
+  const mergeLiveReadingsIntoHistory = (rows = [], args = {}) => {
+    const targetId = args.ip || "";
+    const liveMachines = Array.from(machineState.values()).filter((machine) => {
+      if (!machine.latestReading?.has_data) return false;
+      const key = machine.key || machine.ip;
+      return !targetId || key === targetId || machine.ip === targetId;
+    });
+    if (!liveMachines.length) return rows;
+
+    let nextRows = [...rows];
+    for (const machine of liveMachines) {
+      const liveReading = formatDbRowForClient(machine.latestReading);
+      if (!isLiveReadingInHistoryRange(liveReading, args)) continue;
+
+      const machineKey = machine.key || machine.ip;
+      const liveShot = getComparableShotNumber(liveReading);
+      let replaced = false;
+
+      nextRows = nextRows.map((row) => {
+        const sameMachine = row.machine_key === machineKey || row.plc_ip === machine.ip;
+        const sameShot = liveShot !== null && getComparableShotNumber(row) === liveShot;
+        if (!sameMachine || !sameShot) return row;
+        replaced = true;
+        return {
+          ...row,
+          ...liveReading,
+          id: row.id ?? liveReading.id,
+          history_rank: row.history_rank,
+        };
+      });
+
+      if (!replaced) nextRows.unshift(liveReading);
+    }
+
+    return nextRows
+      .sort((a, b) => {
+        const aTime = new Date(a.recorded_at || a.shot_datetime || a.created_at || 0).getTime();
+        const bTime = new Date(b.recorded_at || b.shot_datetime || b.created_at || 0).getTime();
+        return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
+      })
+      .slice(0, clampLimit(args.limit || 200));
+  };
+
   return {
     getStatus: () => ({
       running: monitoringRunning,
@@ -3252,18 +3437,7 @@ function startPlcMonitor(io) {
     }),
     getLatestReadings: () =>
       getLatestReadingsForMachines(Array.from(machineState.values())),
-    getReadingHistory: async (args = {}) => {
-      const machinesForCatchup = Array.from(machineState.values()).filter((machine) => {
-        const key = machine.key || machine.ip;
-        return !args.ip || key === args.ip || machine.ip === args.ip;
-      });
-      if (machinesForCatchup.length) {
-        getLatestReadingsForMachines(machinesForCatchup).catch((error) => {
-          console.error("PLC report background catch-up failed:", error.message);
-        });
-      }
-      return getReadingHistory(args);
-    },
+    getReadingHistory: async (args = {}) => mergeLiveReadingsIntoHistory(await getReadingHistory(args), args),
     getConnectionEvents,
     buildReadingsCsv,
     buildReadingsExcelXml,

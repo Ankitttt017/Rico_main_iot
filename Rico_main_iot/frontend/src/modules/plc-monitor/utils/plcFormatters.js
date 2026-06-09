@@ -1,4 +1,4 @@
-import { DEFAULT_MACHINES, DISPLAY_LABELS, HIDDEN_DB_FIELDS, PARAMETER_NAMES_BY_KIND, getMachineKey } from "../constants";
+import { DISPLAY_LABELS, HIDDEN_DB_FIELDS, PARAMETER_NAMES_BY_KIND } from "../constants";
 
 export function isHiddenDbField(name) {
   return HIDDEN_DB_FIELDS.has(name) || name.endsWith(" duration (sec)");
@@ -9,12 +9,7 @@ export function getDisplayLabel(name) {
 }
 
 export function getMachineKindFromRow(row = {}) {
-  const machine = DEFAULT_MACHINES.find((item) =>
-    getMachineKey(item) === row.machine_key ||
-    item.ip === row.plc_ip ||
-    item.ip === row.ip
-  );
-  return machine?.kind || row.kind || "ube";
+  return row.kind || row.machine_type || row.machineType || "ube";
 }
 
 export function getAllowedParameterNames(machineKind = "ube") {

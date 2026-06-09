@@ -30,6 +30,10 @@ function firstReadableValue(...values) {
   return values.find((value) => hasReadableValue(value)) || "";
 }
 
+function hasReadingData(readings = {}) {
+  return Object.values(readings).some((item) => hasReadableValue(item?.value));
+}
+
 function PLCDashboard() {
   const [theme] = useState("light");
   const [plcConnected, setPlcConnected] = useState(false);
@@ -46,8 +50,8 @@ function PLCDashboard() {
   const [machines, setMachines] = useState(DEFAULT_MACHINES);
   const [machineStatuses, setMachineStatuses] = useState({});
   const [monitoringRunning, setMonitoringRunning] = useState(true);
-  const [plcConfig, setPlcConfig] = useState({ key: "ube-850t-2", ip: "192.168.117.201", port: 5002,kind: "ube" });
-  const [draftConfig, setDraftConfig] = useState({ ip: "192.168.117.201", port: "5002" });
+  const [plcConfig, setPlcConfig] = useState({});
+  const [draftConfig, setDraftConfig] = useState({ ip: "", port: "" });
   const [configMessage, setConfigMessage] = useState("");
   const [readingsByIp, setReadingsByIp] = useState({});
   const [historyByIp, setHistoryByIp] = useState({});
@@ -59,6 +63,11 @@ function PLCDashboard() {
   const disconnectTimerRef = useRef(null);
   const lastSocketDataAtRef = useRef(0);
   const lastDbRenderSignatureRef = useRef("");
+  const readingsHasDataRef = useRef(false);
+
+  useEffect(() => {
+    readingsHasDataRef.current = hasReadingData(readings);
+  }, [readings]);
 
   const rememberSelectedSnapshot = useCallback((readingsSnapshot = {}, { observedAt, source } = {}) => {
     const shotNumber = getReadingShotNumber(readingsSnapshot);
@@ -111,7 +120,12 @@ function PLCDashboard() {
     let inFlight = false;
 
     const syncLatestDbSnapshot = async () => {
-      if (Date.now() - lastSocketDataAtRef.current < Math.max(PLC_LATEST_POLL_MS * 2, 3000)) return;
+      if (
+        readingsHasDataRef.current &&
+        Date.now() - lastSocketDataAtRef.current < Math.max(PLC_LATEST_POLL_MS * 2, 3000)
+      ) {
+        return;
+      }
       if (inFlight) return;
       inFlight = true;
 
@@ -132,7 +146,7 @@ function PLCDashboard() {
 
         rows.forEach((item) => {
           const key = item.machine_key || item.plc_ip;
-          const machine = DEFAULT_MACHINES.find((entry) => getMachineKey(entry) === key || entry.ip === item.plc_ip);
+          const machine = machines.find((entry) => getMachineKey(entry) === key || entry.ip === item.plc_ip);
           const itemKind = machine?.kind || getMachineKindFromRow(item);
           const itemTimestamp = getRowTimestamp(item);
           const itemReadings = rowToReadings(item, itemKind);
@@ -183,7 +197,7 @@ function PLCDashboard() {
         if (!selectedRow) return;
 
         const rowKey = selectedRow.machine_key || selectedRow.plc_ip;
-        const rowMachine = DEFAULT_MACHINES.find((machine) => getMachineKey(machine) === rowKey || machine.ip === selectedRow.plc_ip);
+        const rowMachine = machines.find((machine) => getMachineKey(machine) === rowKey || machine.ip === selectedRow.plc_ip);
         const nextReadings = rowToReadings(selectedRow, rowMachine?.kind || getMachineKindFromRow(selectedRow));
         const timestamp = getRowTimestamp(selectedRow);
         const cycleTime = selectedRow.cycle_time ?? null;
@@ -260,8 +274,7 @@ function PLCDashboard() {
 
   const normalizeConfig = useCallback((config = {}) => {
     const key = config.key || config.machine_key || config.ip;
-    const localMachine = DEFAULT_MACHINES.find((machine) => getMachineKey(machine) === key)
-      || machines.find((machine) => getMachineKey(machine) === key || machine.ip === config.ip);
+    const localMachine = machines.find((machine) => getMachineKey(machine) === key || machine.ip === config.ip);
     const machineKey = localMachine ? getMachineKey(localMachine) : key;
     return {
       key: machineKey,
@@ -309,7 +322,20 @@ function PLCDashboard() {
     });
 
     socket.on("machines", (list = []) => {
-      setMachines(list.length ? mergeMachineList(list) : DEFAULT_MACHINES);
+      const nextMachines = list.length ? mergeMachineList(list) : DEFAULT_MACHINES;
+      setMachines(nextMachines);
+      if (!selectedKeyRef.current && nextMachines[0]) {
+        const first = nextMachines[0];
+        const nextConfig = {
+          key: getMachineKey(first),
+          ip: first.ip,
+          port: Number(first.port || 5002),
+          kind: first.kind || "ube",
+        };
+        selectedKeyRef.current = nextConfig.key;
+        setPlcConfig(nextConfig);
+        setDraftConfig({ ip: nextConfig.ip, port: String(nextConfig.port) });
+      }
     });
 
     socket.on("monitoring_status", ({ running }) => {
@@ -337,7 +363,8 @@ function PLCDashboard() {
       const observedTimestamp = observedAt || new Date().toISOString();
       const eventPartName = firstReadableValue(r?.part_name?.value, r?.part_qr_code?.value, r?.scan_data?.value, nextPartName);
 
-      setReadingsByIp(prev => ({ ...prev, [key]: r, [ip]: r }));
+      const packetHasData = hasReadingData(r);
+      setReadingsByIp(prev => packetHasData ? { ...prev, [key]: r, [ip]: r } : prev);
       setMetaByIp(prev => ({
         ...prev,
         [key]: {
@@ -373,8 +400,10 @@ function PLCDashboard() {
 
       setPlcConfig({ key, ip, port, kind: config?.kind });
       setDraftConfig({ ip, port: String(port) });
-      setReadings(r);
-      rememberSelectedSnapshot(r, { observedAt: observedTimestamp, source: "live" });
+      if (packetHasData) {
+        setReadings(r);
+        rememberSelectedSnapshot(r, { observedAt: observedTimestamp, source: "live" });
+      }
       setLastTimestamp(toValidDate(eventTimestamp) || toValidDate(observedTimestamp));
       setConfigMessage("");
       setPartName(prev => eventPartName || prev);
@@ -395,7 +424,8 @@ function PLCDashboard() {
       const eventPartName = firstReadableValue(r?.part_name?.value, r?.part_qr_code?.value, r?.scan_data?.value, nextPartName);
       const historyItem = { id: `${key}-${eventTimestamp}`, timestamp: toValidDate(eventTimestamp), cycleTime };
 
-      setReadingsByIp(prev => ({ ...prev, [key]: r, [ip]: r }));
+      const packetHasData = hasReadingData(r);
+      setReadingsByIp(prev => packetHasData ? { ...prev, [key]: r, [ip]: r } : prev);
       setMetaByIp(prev => ({
         ...prev,
         [key]: { timestamp: eventTimestamp, cycleTime, partName: eventPartName || prev[key]?.partName || "", shotTime: nextShotTime },
@@ -422,8 +452,10 @@ function PLCDashboard() {
       setPlcConfig({ key, ip, port, kind: config?.kind });
       setDraftConfig({ ip, port: String(port) });
       setCycleStatus("complete");
-      setReadings(r);
-      rememberSelectedSnapshot(r, { observedAt: eventTimestamp, source: "live" });
+      if (packetHasData) {
+        setReadings(r);
+        rememberSelectedSnapshot(r, { observedAt: eventTimestamp, source: "live" });
+      }
       setLastTimestamp(toValidDate(eventTimestamp));
       setConfigMessage("");
       setPartName(prev => eventPartName || prev);
@@ -450,7 +482,6 @@ function PLCDashboard() {
   const shotNumber = readings.shot_number?.value ?? null;
   const cycleTime = readings.cycle_time?.value ?? null;
   const minorStoppage = readings.minor_stoppage?.value ?? null;
-  const minorStoppageMachine = readings.minor_stoppage_machine?.value ?? null;
   const shotForwardTime = readings.shot_fwd_time?.value ?? null;
   const shotDate = readings.shot_date?.value || buildShotDateFromRow(
     Object.fromEntries(Object.entries(readings).map(([name, item]) => [name, item?.value ?? null]))
@@ -459,8 +490,7 @@ function PLCDashboard() {
     Object.fromEntries(Object.entries(readings).map(([name, item]) => [name, item?.value ?? null]))
   );
   const selectedMachineKey = plcConfig.key || plcConfig.ip;
-  const selectedMachine = DEFAULT_MACHINES.find((machine) => getMachineKey(machine) === selectedMachineKey || machine.ip === plcConfig.ip)
-    || machines.find((machine) => getMachineKey(machine) === selectedMachineKey || machine.ip === plcConfig.ip);
+  const selectedMachine = machines.find((machine) => getMachineKey(machine) === selectedMachineKey || machine.ip === plcConfig.ip);
   const machineName = selectedMachine?.name || MACHINE_NAMES[plcConfig.ip] || "Unknown Machine";
   const selectedMachineKind = selectedMachine?.kind || plcConfig.kind || "ube";
   const isLeakTestMachine = selectedMachineKind === "leaktest";
@@ -468,13 +498,13 @@ function PLCDashboard() {
   const selectedMachineOnline = Boolean(selectedMachineStatus.connected);
   const selectedPlcConnected = Boolean(selectedMachineStatus.connected || selectedMachineStatus.hasRecentData || readings.plc_ip?.value);
   const displayPartName = firstReadableValue(
-    partName,
     readings.part_name?.value,
     readings.part_qr_code?.value,
     readings.scan_data?.value,
     metaByIp[selectedMachineKey]?.partName,
     metaByIp[plcConfig.ip]?.partName,
-    selectedMachineStatus.partName
+    selectedMachineStatus.partName,
+    partName
   );
   const availableGroups = REGISTER_GROUPS
     .filter((group) => group.kind === selectedMachineKind)
@@ -543,6 +573,8 @@ function PLCDashboard() {
   };
 
   const resetDashboardData = () => {
+    lastSocketDataAtRef.current = 0;
+    readingsHasDataRef.current = false;
     setCycleStatus("idle");
     setLastTimestamp(null);
     setPartName("");
@@ -554,8 +586,7 @@ function PLCDashboard() {
   };
 
   const selectMachine = (key) => {
-    const machine = DEFAULT_MACHINES.find(item => getMachineKey(item) === key)
-      || machines.find(item => getMachineKey(item) === key)
+    const machine = machines.find(item => getMachineKey(item) === key)
       || { key, ip: key, port: 5002 };
     const config = { key: getMachineKey(machine), ip: machine.ip, port: Number(machine.port || draftConfig.port || 5002), kind: machine.kind };
     selectedKeyRef.current = config.key;
@@ -589,7 +620,8 @@ function PLCDashboard() {
               <div className="plc-form">
                 <label className="field">
                   <span>Machine</span>
-                  <select value={selectedMachineKey} onChange={(e) => selectMachine(e.target.value)}>
+                  <select value={selectedMachineKey || ""} onChange={(e) => selectMachine(e.target.value)}>
+                    {!machines.length && <option value="">No machines configured</option>}
                     {machines.map(machine => {
                       const key = getMachineKey(machine);
                       const label = machine.name || MACHINE_NAMES[machine.ip] || machine.ip;
@@ -648,9 +680,6 @@ function PLCDashboard() {
             <MetricTile label="Cycle Time" value={cycleTime} unit="sec" tone="green" />
             {!isLeakTestMachine && (
               <MetricTile label="Minor Stoppage" value={minorStoppage} unit="sec" tone="amber" />
-            )}
-            {!isLeakTestMachine && (
-              <MetricTile label="Minor Stoppage Machine" value={minorStoppageMachine} unit="sec" tone="amber" />
             )}
             <MetricTile
               label={isLeakTestMachine ? "Cycle End Time" : "Shot Forward Time"}

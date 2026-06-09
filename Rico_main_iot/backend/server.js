@@ -8,6 +8,7 @@ const db = require("./src/config/db");
 const partRoutes = require("./src/modules/parts/part.routes");
 const lineRoutes = require("./src/modules/lines/line.routes");
 const machineRoutes = require("./src/modules/machines/machine.routes");
+const plcMachineConfigRoutes = require("./src/modules/plcMachineConfigs/plcMachineConfig.routes");
 const createPlcMonitorRoutes = require("./src/modules/plcMonitor/plcMonitorRoutes");
 const { startPlcMonitor } = require("./src/modules/plcMonitor/plcMonitorService");
 
@@ -35,6 +36,7 @@ app.get("/api/health", (_req, res) => {
 app.use("/api", partRoutes);
 app.use("/api", machineRoutes);
 app.use("/api/lines", lineRoutes);
+app.use("/api/plc-machine-configs", plcMachineConfigRoutes);
 
 const plcMonitor = startPlcMonitor(io);
 app.use("/api/plc-monitor", createPlcMonitorRoutes(plcMonitor));

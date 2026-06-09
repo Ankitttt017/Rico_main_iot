@@ -32,6 +32,9 @@ export const ENDPOINTS = {
   plcReadingHistoryExport: "/plc-monitor/readings/history/export",
   plcConnectionEvents: "/plc-monitor/connection-events",
   plcConnectionEventsExport: "/plc-monitor/connection-events/export",
+  plcMachineConfigs: "/plc-machine-configs",
+  plcMachineConfig: (id) => `/plc-machine-configs/${id}`,
+  plcMachineConfigTest: "/plc-machine-configs/test-connection",
 };
 
 export function buildApiUrl(path, query) {

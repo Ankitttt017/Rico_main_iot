@@ -16,6 +16,7 @@ const MachineDashboard = lazy(() => import("./modules/machine/MachineDashboard")
 const MachineProfilePage = lazy(() => import("./modules/machine/MachineProfilePage"));
 const PlcMonitorPage = lazy(() => import("./modules/plc-monitor/PlcMonitorPage"));
 const PlcReportPage = lazy(() => import("./modules/plc-report/PlcReportPage"));
+const UbeMachineSetupPage = lazy(() => import("./pages/UbeMachineSetupPage"));
 
 const PageLoader = () => (
   <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm font-bold text-slate-600">
@@ -165,6 +166,15 @@ const App = () => {
               path="/plc-monitor"
               element={
                 <PlcMonitorPage
+                  onLogout={handleLogout}
+                  currentUser={currentUser}
+                />
+              }
+            />
+            <Route
+              path="/ube-machine-setup"
+              element={
+                <UbeMachineSetupPage
                   onLogout={handleLogout}
                   currentUser={currentUser}
                 />

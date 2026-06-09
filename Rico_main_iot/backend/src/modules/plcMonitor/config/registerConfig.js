@@ -25,8 +25,9 @@ const UBE_CYCLE_END_DELAY_MS = Math.min(
 const UBE_CYCLE_END_POLL_MS = Number(process.env.PLC_UBE_CYCLE_END_POLL_MS || 200);
 const UBE_LIVE_READ_MS = Number(process.env.PLC_UBE_LIVE_READ_MS || 1000);
 const PLC_MAX_CONSECUTIVE_READ_FAILURES = Number(process.env.PLC_MAX_CONSECUTIVE_READ_FAILURES || 5);
-const PLC_DB_RETRY_MS = Number(process.env.PLC_DB_RETRY_MS || 5000);
+const PLC_DB_RETRY_MS = Number(process.env.PLC_DB_RETRY_MS || 30000);
 const PLC_DB_RETRY_MAX = Number(process.env.PLC_DB_RETRY_MAX || 500);
+const PLC_DB_RETRY_BATCH_SIZE = Number(process.env.PLC_DB_RETRY_BATCH_SIZE || 5);
 const PLC_PENDING_SAVE_FILE =
   process.env.PLC_PENDING_SAVE_FILE ||
   path.resolve(__dirname, "../../../../plc-pending-ube-saves.json");
@@ -77,7 +78,7 @@ const EXCEL_PARAMETERS = [
   { name: "ACCEL. POINT mm", device: "D6908", type: "decimal", scale: 1 },
   { name: "DEACEL. POINT mm", device: "D6910", type: "decimal", scale: 1 },
   { name: "INTEN. TIME msec", device: "D6914", type: "decimal", scale: 1 },
-  { name: "BISCUIT THICKNESS mm", device: "D6916", type: "decimal", scale: 0.1 },
+  { name: "BISCUIT THICKNESS mm", device: "D6916", type: "decimal", scale: 1 },
   { name: "JET COOLING PRESSURE kgf/cm2", device: "D6954", type: "decimal", scale: 0.1 },
   { name: "CLAMP TONNAGE(HE.LOW) %", device: "D6918", type: "decimal", scale: 1 },
   { name: "CLAMP TONNAGE(HE.LOW) MN", device: "D6920", type: "decimal", scale: 0.01 },
@@ -106,6 +107,36 @@ const EXCEL_PARAMETERS = [
   { name: "Time for stroke(ms)", device: "D10470", type: "int" },
   { name: "Stroke (mm)", device: "D10356", type: "decimal", scale: 1 },
   { name: "Shot Status", device: "D1301", type: "int" },
+];
+
+const UBE_LIMIT_STATUS_PARAMETERS = [
+  { name: "die_close_core_in_time_status", device: "D6939", type: "int", hidden: true, target: "die_close_core_in_time" },
+  { name: "pouring_time_status", device: "D6941", type: "int", hidden: true, target: "pouring_time" },
+  { name: "shot_fwd_time_status", device: "D6943", type: "int", hidden: true, target: "shot_fwd_time" },
+  { name: "curing_time_status", device: "D6945", type: "int", hidden: true, target: "curing_time" },
+  { name: "die_open_core_out_time_status", device: "D6947", type: "int", hidden: true, target: "die_open_core_out_time" },
+  { name: "ejector_time_status", device: "D6949", type: "int", hidden: true, target: "ejector_time" },
+  { name: "extract_time_status", device: "D6951", type: "int", hidden: true, target: "extract_time" },
+  { name: "spray_time_status", device: "D6953", type: "int", hidden: true, target: "spray_time" },
+  { name: "v1_speed_status", device: "D6901", type: "int", hidden: true, target: "v1_speed" },
+  { name: "v2_speed_status", device: "D6903", type: "int", hidden: true, target: "v2_speed" },
+  { name: "v3_speed_status", device: "D6905", type: "int", hidden: true, target: "v3_speed" },
+  { name: "v4_speed_status", device: "D6907", type: "int", hidden: true, target: "v4_speed" },
+  { name: "metal_pressure_status", device: "D6913", type: "int", hidden: true, target: "metal_pressure" },
+  { name: "furnace_metal_temp_status", device: "D6935", type: "int", hidden: true, target: "furnace_metal_temp" },
+  { name: "cooling_water_mov_status", device: "D6931", type: "int", hidden: true, target: "cooling_water_mov" },
+  { name: "cooling_water_sta_status", device: "D6933", type: "int", hidden: true, target: "cooling_water_sta" },
+  { name: "accel_point_status", device: "D6909", type: "int", hidden: true, target: "accel_point" },
+  { name: "deaccel_point_status", device: "D6911", type: "int", hidden: true, target: "deaccel_point" },
+  { name: "intensification_time_status", device: "D6915", type: "int", hidden: true, target: "intensification_time" },
+  { name: "biscuit_thickness_status", device: "D6917", type: "int", hidden: true, target: "biscuit_thickness" },
+  { name: "jet_cooling_pressure_status", device: "D6955", type: "int", hidden: true, target: "jet_cooling_pressure" },
+  { name: "clamp_tonnage_he_low_pct_status", device: "D6919", type: "int", hidden: true, target: "clamp_tonnage_he_low_pct" },
+  { name: "clamp_tonnage_he_low_mn_status", device: "D6921", type: "int", hidden: true, target: "clamp_tonnage_he_low_mn" },
+  { name: "clamp_tonnage_op_up_pct_status", device: "D6923", type: "int", hidden: true, target: "clamp_tonnage_op_up_pct" },
+  { name: "clamp_tonnage_op_low_pct_status", device: "D6925", type: "int", hidden: true, target: "clamp_tonnage_op_low_pct" },
+  { name: "clamp_tonnage_he_up_pct_status", device: "D6927", type: "int", hidden: true, target: "clamp_tonnage_he_up_pct" },
+  { name: "vacuum_pressure_status", device: "D6929", type: "int", hidden: true, target: "vacuum_pressure" },
 ];
 
 const LEAK_TEST_PARAMETERS = [
@@ -142,14 +173,14 @@ const LEAK_TEST_PARAMETERS = [
   },
 ];
 
-const UBE_READ_PARAMETERS = EXCEL_PARAMETERS.filter((parameter) => {
+const UBE_READ_PARAMETERS = [...EXCEL_PARAMETERS, ...UBE_LIMIT_STATUS_PARAMETERS].filter((parameter) => {
   if (parameter.computed) return true;
   if (!parameter.device) return true;
   if (parameter.device.startsWith("D")) return true;
   return parameter.device.startsWith("M") && UBE_ALLOWED_M_DEVICES.has(parameter.device);
 });
 
-const ALL_PARAMETERS = [...EXCEL_PARAMETERS, ...LEAK_TEST_PARAMETERS];
+const ALL_PARAMETERS = [...EXCEL_PARAMETERS, ...UBE_LIMIT_STATUS_PARAMETERS, ...LEAK_TEST_PARAMETERS];
 const PARAMETER_BY_NAME = new Map(ALL_PARAMETERS.map((p) => [p.name, p]));
 
 const LEGACY_COLUMNS_BY_PARAMETER = {
@@ -157,6 +188,7 @@ const LEGACY_COLUMNS_BY_PARAMETER = {
   "CYCLE TIME sec.": "cycle_time",
   "MINOR STOPPAGE sec.": "minor_stoppage",
   "HIGH SHOT COUNT": "ok_shot",
+  "NG COUNTER": "ng_counter",
   "DIE-CLOSE CORE IN TIME sec": "die_close_core_in_time",
   "POURING TIME sec": "pouring_time",
   "SHOT FWD TIME sec": "shot_fwd_time",
@@ -216,7 +248,6 @@ const DROPPED_READING_COLUMNS = new Set([
   "NG COUNTER value",
   "high_shot_count",
   "high_shot",
-  "ng_counter",
   "off_shot",
   "ng_shot",
   "manual_mode",
@@ -259,7 +290,7 @@ const REPORT_COLUMNS = [
   ...Array.from(new Set(Object.values(LEGACY_COLUMNS_BY_PARAMETER)))
     .filter((name) => name !== "shot_number")
     .map((name) => [name, name]),
-  ...EXCEL_PARAMETERS.filter((p) => !DROPPED_READING_COLUMNS.has(p.name)).map((p) => [p.name, p.name]),
+  ...EXCEL_PARAMETERS.filter((p) => !p.hidden && !DROPPED_READING_COLUMNS.has(p.name)).map((p) => [p.name, p.name]),
   ...LEAK_TEST_PARAMETERS.filter((p) => !p.hidden && p.name !== "part_qr_code").map((p) => [p.name, p.name]),
 ];
 
@@ -311,6 +342,7 @@ const EXTRA_READING_COLUMNS = [
   ["shot_second", "NVARCHAR(2)"],
   ["shot_number", "INT"],
   ["ok_shot", "INT"],
+  ["ng_counter", "INT"],
   ["minor_stoppage_machine", "DECIMAL(18,2)"],
 ];
 
@@ -337,6 +369,7 @@ const UBE_CLIENT_READING_NAMES = new Set([
   "shot_second",
   "shot_number",
   "ok_shot",
+  "ng_counter",
   "part_name",
   "cycle_time",
   "minor_stoppage",
@@ -378,6 +411,7 @@ module.exports = {
   PLC_MAX_CONSECUTIVE_READ_FAILURES,
   PLC_DB_RETRY_MS,
   PLC_DB_RETRY_MAX,
+  PLC_DB_RETRY_BATCH_SIZE,
   PLC_PENDING_SAVE_FILE,
   LEAK_TEST_CONTROL,
   LEAK_DUPLICATE_WINDOW_SEC,
@@ -387,6 +421,7 @@ module.exports = {
   PLC_READ_TIMEOUT_MS,
   PLC_RECONNECT_AFTER_TIMEOUT_MS,
   EXCEL_PARAMETERS,
+  UBE_LIMIT_STATUS_PARAMETERS,
   LEAK_TEST_PARAMETERS,
   UBE_READ_PARAMETERS,
   ALL_PARAMETERS,

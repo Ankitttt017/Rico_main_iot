@@ -13,6 +13,8 @@ jobs:
   deploy:
     name: Build and Deploy
     runs-on: self-hosted
+    env:
+      PM2_HOME: C:\Users\IOT1\.pm2
     defaults:
       run:
         shell: cmd
