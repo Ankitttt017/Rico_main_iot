@@ -87,6 +87,10 @@ const App = () => {
     setWorkstationUser("");
   };
 
+  const requirePermission = (permission, element) => (
+    hasPermission(currentUser, permission) ? element : <Navigate to={currentUser?.landingPath || "/operator-workstation"} />
+  );
+
   const workstationRoute = (
     <Route
       path="/operator-workstation"
@@ -103,10 +107,6 @@ const App = () => {
         )
       }
     />
-  );
-
-  const requirePermission = (permission, element) => (
-    hasPermission(currentUser, permission) ? element : <Navigate to={currentUser?.landingPath || "/operator-workstation"} />
   );
 
   return (
