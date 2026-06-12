@@ -4,14 +4,22 @@ import { useI18n } from "../../context/I18nContext";
 import { useSidebar } from "../../context/SidebarContext";
 
 const pageMeta = {
-  "/lines": { title: "Line Master", subtitle: "Production line, machine and part grouping" },
-  "/operator-workstation": { title: "Digital Workstation", subtitle: "Read-only saved line and machine view" },
-  "/parts": { title: "Part Master", subtitle: "Material and process master data" },
-  "/machines": { title: "Machine Tracking", subtitle: "Live machine state and active operation view" },
-  "/operations": { title: "Operation Master", subtitle: "Part routing, process steps and logs" },
-  "/plc-monitor": { title: "Real Time Monitor", subtitle: "" },
-  "/ube-machine-setup": { title: "Add Machine", subtitle: "PLC connection setup for UBE 850T machines" },
-  "/plc-report": { title: "My Report", subtitle: "Machine production history and exports" },
+  "/dashboard": { title: "Dashboard Overview", subtitle: "IoT production health and setup readiness", hideSearch: true },
+  "/alerts": { title: "Alerts", subtitle: "Production alerts and notifications", hideSearch: true },
+  "/settings/locations": { title: "Plant Manager", subtitle: "Plant and factory location setup", searchPlaceholder: "Search plant...", searchPath: "/settings/locations" },
+  "/settings/departments": { title: "Department Manager", subtitle: "Department and division setup", searchPlaceholder: "Search department...", searchPath: "/settings/departments" },
+  "/lines": { title: "Line Manager", subtitle: "Production line and shopfloor setup", searchPlaceholder: "Search line...", searchPath: "/lines" },
+  "/parts": { title: "Part Manager", subtitle: "Part master, material and process configuration", searchPlaceholder: "Search part...", searchPath: "/parts" },
+  "/operations": { title: "Operation Manager", subtitle: "Part routing, process steps and logs", searchPlaceholder: "Search operation...", searchPath: "/operations" },
+  "/machines": { title: "Machine Manager", subtitle: "Machine assets and production setup", searchPlaceholder: "Search machine...", searchPath: "/machines" },
+  "/operator-workstation": { title: "Digital Workstation", subtitle: "Operator production screen and downtime entry", searchPlaceholder: "Search workstation...", searchPath: "/operator-workstation" },
+  "/downtime-tracker": { title: "Downtime Tracker", subtitle: "Downtime events and loss tracking", hideSearch: true },
+  "/plc-monitor": { title: "Real Time Monitor", subtitle: "", searchPlaceholder: "Search live PLC...", searchPath: "/plc-monitor" },
+  "/machine-plc-setup": { title: "PLC Config / Tags", subtitle: "PLC connection, register mapping and limits", searchPlaceholder: "Search PLC tag...", searchPath: "/machine-plc-setup" },
+  "/ube-machine-setup": { title: "PLC Config / Tags", subtitle: "PLC connection, register mapping and limits", searchPlaceholder: "Search UBE tag...", searchPath: "/ube-machine-setup" },
+  "/plc-report": { title: "Production Reports", subtitle: "Machine production history and exports", searchPlaceholder: "Search report...", searchPath: "/plc-report" },
+  "/access-control": { title: "User & Role Access", subtitle: "Role wise screen access and traceability permissions", searchPlaceholder: "Search user / role...", searchPath: "/access-control" },
+  "/system-settings": { title: "System Settings", subtitle: "Application configuration and preferences", hideSearch: true },
 };
 
 const DAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
@@ -77,7 +85,7 @@ const Navbar = ({ onLogout, currentUser }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const { locale, t } = useI18n();
-  const { collapsed, setMobileOpen } = useSidebar();
+  const { collapsed, hovered, setMobileOpen } = useSidebar();
   const [search, setSearch] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -86,8 +94,12 @@ const Navbar = ({ onLogout, currentUser }) => {
   const profileRef = useRef(null);
 
   const meta = useMemo(() => {
-    if (location.pathname.startsWith("/part/")) return { title: "Part Profile", subtitle: "Configuration, operations and document control" };
-    if (location.pathname.startsWith("/machine/")) return { title: "Machine Profile", subtitle: "Live state, configuration and maintenance view" };
+    if (location.pathname.startsWith("/part/")) {
+      return { title: "Part Profile", subtitle: "Configuration, operations and document control", searchPlaceholder: "Search part...", searchPath: "/parts" };
+    }
+    if (location.pathname.startsWith("/machine/")) {
+      return { title: "Machine Profile", subtitle: "Live state, configuration and maintenance view", searchPlaceholder: "Search machine...", searchPath: "/machines" };
+    }
     return pageMeta[location.pathname] || pageMeta["/lines"];
   }, [location.pathname]);
 
@@ -105,6 +117,10 @@ const Navbar = ({ onLogout, currentUser }) => {
   }, []);
 
   useEffect(() => {
+    setSearch(new URLSearchParams(location.search).get("search") || "");
+  }, [location.pathname, location.search]);
+
+  useEffect(() => {
     if (!pickerOpen && !profileOpen) return;
     const handler = (event) => {
       if (pickerRef.current && !pickerRef.current.contains(event.target)) setPickerOpen(false);
@@ -117,11 +133,22 @@ const Navbar = ({ onLogout, currentUser }) => {
   const handleSearchSubmit = (event) => {
     event.preventDefault();
     const value = search.trim();
-    navigate(value ? `/parts?search=${encodeURIComponent(value)}` : "/parts");
+    const searchPath = meta.searchPath || location.pathname || "/dashboard";
+    navigate(value ? `${searchPath}?search=${encodeURIComponent(value)}` : searchPath);
+  };
+
+  const handleSearchChange = (event) => {
+    const value = event.target.value;
+    setSearch(value);
+    const params = new URLSearchParams(location.search);
+    if (value.trim()) params.set("search", value);
+    else params.delete("search");
+    const query = params.toString();
+    navigate(query ? `${location.pathname}?${query}` : location.pathname, { replace: true });
   };
 
   return (
-    <header className={`app-topbar fixed left-0 right-0 top-0 z-50 h-[78px] border-b px-4 backdrop-blur transition-all duration-300 ease-in-out lg:px-6 ${collapsed ? "lg:left-[72px]" : "lg:left-72"}`}>
+    <header className={`app-topbar fixed left-0 right-0 top-0 z-50 h-[78px] border-b px-4 backdrop-blur transition-all duration-300 ease-in-out lg:px-6 ${collapsed && !hovered ? "lg:left-[60px]" : "lg:left-[220px]"}`}>
       <div className="flex h-full items-center justify-between gap-4">
 
         {/* Left Side */}
@@ -149,17 +176,19 @@ const Navbar = ({ onLogout, currentUser }) => {
 
         {/* Right Side */}
         <div className="flex shrink-0 items-center gap-2.5">
+          {!meta.hideSearch && (
           <form onSubmit={handleSearchSubmit} className="relative hidden md:block">
             <svg className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.7} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg>
             <input
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={handleSearchChange}
               className="h-10 w-64 rounded-lg border border-[#cfdded] bg-[#f8fbff] pl-9 pr-3 text-sm text-slate-800 outline-none transition focus:border-[#007cba] focus:bg-white focus:ring-4 focus:ring-[#007cba]/10"
-              placeholder={t("searchPartPlaceholder")}
+              placeholder={meta.searchPlaceholder || "Search..."}
             />
           </form>
+          )}
 
           <div className="relative hidden sm:block" ref={pickerRef}>
             <button

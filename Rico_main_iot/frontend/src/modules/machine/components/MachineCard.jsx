@@ -1,4 +1,5 @@
 import React from "react";
+import { Power } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 const safeText = (value, fallback) => String(value || "").trim() || fallback;
@@ -26,17 +27,20 @@ const MachineSVG = () => (
   </svg>
 );
 
-const getStatusBar   = s => s === "RUNNING" ? "bg-green-500" : "bg-red-400";
-const getStatusBadge = s => s === "RUNNING"
+const getStatusBar   = (s, active = true) => !active ? "bg-slate-300" : s === "RUNNING" ? "bg-green-500" : "bg-red-400";
+const getStatusBadge = (s, active = true) => !active
+  ? { bg: "bg-slate-100 text-slate-500", label: "Inactive" }
+  : s === "RUNNING"
   ? { bg: "bg-green-100 text-green-700", label: "Active" }
   : s === "STOPPED"
   ? { bg: "bg-red-100 text-red-700",     label: "Stopped" }
   : { bg: "bg-orange-100 text-orange-700", label: "Management Loss" };
 
-const MachineCard = ({ machine, division, line }) => {
+const MachineCard = ({ machine, division, line, onEdit, onToggle }) => {
   const navigate = useNavigate();
   const status = safeText(machine?.status, "IDLE").toUpperCase();
-  const badge  = getStatusBadge(status);
+  const isActive = machine?.is_active !== false;
+  const badge  = getStatusBadge(status, isActive);
 
   return (
     <article
@@ -46,18 +50,40 @@ const MachineCard = ({ machine, division, line }) => {
       <div className="flex h-28 items-center justify-center bg-[linear-gradient(145deg,_#f8fafc_0%,_#eaf2f1_100%)] px-3 pt-3">
         <MachineSVG />
       </div>
-      <div className={`h-1.5 w-full ${getStatusBar(status)}`} />
+      <div className={`h-1.5 w-full ${getStatusBar(status, isActive)}`} />
       <div className="p-2.5">
         <h3 className="line-clamp-2 min-h-[2rem] text-xs font-extrabold leading-snug text-slate-950">
           {safeText(machine?.name, "Unknown Machine")}
         </h3>
         <p className="text-[10px] text-gray-500 mt-1 font-medium">{division || safeText(machine?.category, "Uncategorized")}</p>
         <p className="text-[10px] text-gray-400 mt-0.5">{line || "—"}</p>
-        <div className="mt-3 flex items-center justify-between">
+        <div className="mt-3 flex items-center justify-between gap-2">
           <span className={`text-[9px] font-semibold px-2 py-0.5 rounded-full ${badge.bg}`}>
             {badge.label}
           </span>
-          <span className="text-[10px] font-semibold text-slate-300 transition-colors group-hover:text-teal-600">View</span>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              title={isActive ? "Disable machine" : "Enable machine"}
+              onClick={(event) => {
+                event.stopPropagation();
+                onToggle?.(machine);
+              }}
+              className={`rounded-md border px-1.5 py-1 text-[10px] font-bold ${isActive ? "border-amber-200 text-amber-700 hover:bg-amber-50" : "border-emerald-200 text-emerald-700 hover:bg-emerald-50"}`}
+            >
+              <Power className="h-3 w-3" />
+            </button>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onEdit?.(machine);
+              }}
+              className="rounded-md border border-slate-200 px-2 py-1 text-[10px] font-bold text-slate-500 hover:border-teal-300 hover:text-teal-700"
+            >
+              Edit
+            </button>
+          </div>
         </div>
       </div>
     </article>

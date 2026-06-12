@@ -9,20 +9,31 @@ const LoginPage = lazy(() => import("./pages/LoginPage"));
 const LineMasterPage = lazy(() => import("./pages/LineMasterPage"));
 const OperatorWorkstationLoginPage = lazy(() => import("./pages/OperatorWorkstationLoginPage"));
 const OperatorWorkstationPage = lazy(() => import("./pages/OperatorWorkstationPage"));
+const IotDashboardPage = lazy(() => import("./pages/IotDashboardPage"));
+const LocationMasterPage = lazy(() => import("./modules/locations/pages/LocationMasterPage"));
+const DepartmentMasterPage = lazy(() => import("./modules/departments/pages/DepartmentMasterPage"));
+const MachineDashboard = lazy(() => import("./modules/machine/MachineDashboard"));
+const MachineProfilePage = lazy(() => import("./modules/machine/MachineProfilePage"));
 const PartMasterPage = lazy(() => import("./pages/PartMasterPage"));
 const PartProfilePage = lazy(() => import("./pages/PartProfilePage"));
 const OperationsMasterPage = lazy(() => import("./pages/OperationsMasterPage"));
-const MachineDashboard = lazy(() => import("./modules/machine/MachineDashboard"));
-const MachineProfilePage = lazy(() => import("./modules/machine/MachineProfilePage"));
 const PlcMonitorPage = lazy(() => import("./modules/plc-monitor/PlcMonitorPage"));
 const PlcReportPage = lazy(() => import("./modules/plc-report/PlcReportPage"));
-const UbeMachineSetupPage = lazy(() => import("./pages/UbeMachineSetupPage"));
+const UserAccessPage = lazy(() => import("./modules/access/pages/UserAccessPage"));
+const UnderDevelopmentPage = lazy(() => import("./pages/UnderDevelopmentPage"));
 
 const PageLoader = () => (
   <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm font-bold text-slate-600">
     Loading...
   </div>
 );
+
+const hasPermission = (user, permission) => {
+  if (!permission) return true;
+  const permissions = Array.isArray(user?.permissions) ? user.permissions : [];
+  const managePermission = permission.replace(":view", ":manage");
+  return permissions.includes(permission) || permissions.includes(managePermission) || permissions.includes("roles:manage");
+};
 
 // ─── Auth Helpers ──────────────────────────────────────────────────
 function getSavedUser() {
@@ -50,17 +61,27 @@ const App = () => {
   );
 
   const handleLogin = (username) => {
-    const user = {
-      name: username?.trim() || "Admin",
-      role:
-        username?.trim()?.toLowerCase() === "operator"
-          ? "Operator"
-          : "Administrator",
-    };
+    const user = typeof username === "object"
+      ? username
+      : {
+          name: username?.trim() || "Admin",
+          role: username?.trim()?.toLowerCase() === "operator" ? "Operator" : "Administrator",
+          role_key: username?.trim()?.toLowerCase() === "operator" ? "OPERATOR" : "SYSTEM_ADMIN",
+          permissions: username?.trim()?.toLowerCase() === "operator"
+            ? ["workstation:view", "workstation:operate"]
+            : ["master:manage", "master:view", "plc:manage", "plc:view", "reports:view", "reports:export", "workstation:view", "workstation:operate", "downtime:view", "downtime:manage", "traceability:view", "ng:view", "roles:manage", "system:config"],
+          landingPath: username?.trim()?.toLowerCase() === "operator" ? "/operator-workstation" : "/dashboard",
+        };
     sessionStorage.setItem("rico_auth", "true");
     sessionStorage.setItem("rico_user", JSON.stringify(user));
     setCurrentUser(user);
     setIsLoggedIn(true);
+    if (hasPermission(user, "workstation:view")) {
+      sessionStorage.setItem("rico_workstation_auth", "true");
+      sessionStorage.setItem("rico_workstation_user", user.name || user.username || "Operator");
+      setWorkstationUser(user.name || user.username || "Operator");
+      setIsWorkstationLoggedIn(true);
+    }
   };
 
   const handleLogout = () => {
@@ -75,9 +96,20 @@ const App = () => {
   };
 
   const handleWorkstationLogin = (username) => {
-    const name = username?.trim() || "Operator";
+    const user = typeof username === "object" ? username : {
+      name: username?.trim() || "Operator",
+      role: "Operator",
+      role_key: "OPERATOR",
+      permissions: ["workstation:view", "workstation:operate"],
+      landingPath: "/operator-workstation",
+    };
+    const name = user.name || user.username || "Operator";
+    sessionStorage.setItem("rico_auth", "true");
+    sessionStorage.setItem("rico_user", JSON.stringify(user));
     sessionStorage.setItem("rico_workstation_auth", "true");
     sessionStorage.setItem("rico_workstation_user", name);
+    setCurrentUser(user);
+    setIsLoggedIn(true);
     setWorkstationUser(name);
     setIsWorkstationLoggedIn(true);
   };
@@ -91,7 +123,8 @@ const App = () => {
             onLogout={handleLogout}
             currentUser={{
               name: workstationUser || currentUser?.name || "Operator",
-              role: "Operator",
+              role: currentUser?.role || "Operator",
+              permissions: currentUser?.permissions || ["workstation:view", "workstation:operate"],
             }}
           />
         ) : (
@@ -99,6 +132,10 @@ const App = () => {
         )
       }
     />
+  );
+
+  const requirePermission = (permission, element) => (
+    hasPermission(currentUser, permission) ? element : <Navigate to={currentUser?.landingPath || "/operator-workstation"} />
   );
 
   return (
@@ -111,97 +148,165 @@ const App = () => {
           ) : (
             <Routes>
             {/* ── Default redirect ── */}
-            <Route path="/" element={<Navigate to="/lines" />} />
+            <Route path="/" element={<Navigate to={currentUser?.landingPath || "/dashboard"} />} />
 
             {/* ══════════════════════════════════════
                 RICO IOT ROUTES
             ══════════════════════════════════════ */}
             <Route
-              path="/lines"
+              path="/dashboard"
               element={
-                <LineMasterPage
+                requirePermission("reports:view", <IotDashboardPage
                   onLogout={handleLogout}
                   currentUser={currentUser}
-                />
+                />)
+              }
+            />
+            <Route
+              path="/alerts"
+              element={
+                requirePermission("reports:view", <UnderDevelopmentPage
+                  onLogout={handleLogout}
+                  currentUser={currentUser}
+                  title="Alerts"
+                  subtitle="Alerts module is under development. Soon this page will show machine alarms, warning events and unresolved notifications."
+                  type="alerts"
+                />)
+              }
+            />
+            <Route
+              path="/settings/locations"
+              element={
+                requirePermission("master:manage", <LocationMasterPage
+                  onLogout={handleLogout}
+                  currentUser={currentUser}
+                />)
+              }
+            />
+            <Route
+              path="/settings/departments"
+              element={
+                requirePermission("master:manage", <DepartmentMasterPage
+                  onLogout={handleLogout}
+                  currentUser={currentUser}
+                />)
+              }
+            />
+            <Route
+              path="/lines"
+              element={
+                requirePermission("master:manage", <LineMasterPage
+                  onLogout={handleLogout}
+                  currentUser={currentUser}
+                />)
               }
             />
             {workstationRoute}
             <Route
               path="/parts"
               element={
-                <PartMasterPage
+                requirePermission("master:manage", <PartMasterPage
                   onLogout={handleLogout}
                   currentUser={currentUser}
-                />
+                />)
               }
             />
             <Route
               path="/part/:id"
               element={
-                <PartProfilePage
+                requirePermission("master:manage", <PartProfilePage
                   onLogout={handleLogout}
                   currentUser={currentUser}
-                />
+                />)
               }
             />
             <Route
               path="/operations"
               element={
-                <OperationsMasterPage
+                requirePermission("master:manage", <OperationsMasterPage
                   onLogout={handleLogout}
                   currentUser={currentUser}
-                />
+                />)
               }
             />
             <Route
               path="/machines"
               element={
-                <MachineDashboard
+                requirePermission("master:manage", <MachineDashboard
                   onLogout={handleLogout}
                   currentUser={currentUser}
-                />
+                />)
               }
             />
             <Route
               path="/plc-monitor"
               element={
-                <PlcMonitorPage
+                requirePermission("plc:view", <PlcMonitorPage
                   onLogout={handleLogout}
                   currentUser={currentUser}
-                />
+                />)
               }
             />
             <Route
-              path="/ube-machine-setup"
+              path="/downtime-tracker"
               element={
-                <UbeMachineSetupPage
+                requirePermission("downtime:view", <UnderDevelopmentPage
                   onLogout={handleLogout}
                   currentUser={currentUser}
-                />
+                  title="Downtime Tracker"
+                  subtitle="Downtime Tracker is under development. Soon this page will show downtime events, reasons, duration and loss analysis."
+                  type="downtime"
+                />)
               }
+            />
+            <Route
+              path="/machine-plc-setup"
+              element={<Navigate to="/machines" />}
             />
             <Route
               path="/plc-report"
               element={
-                <PlcReportPage
+                requirePermission("reports:view", <PlcReportPage
                   onLogout={handleLogout}
                   currentUser={currentUser}
-                />
+                />)
+              }
+            />
+            <Route
+              path="/access-control"
+              element={
+                requirePermission("roles:manage", <UserAccessPage
+                  onLogout={handleLogout}
+                  currentUser={currentUser}
+                />)
+              }
+            />
+            <Route
+              path="/system-settings"
+              element={
+                requirePermission("system:config", <UnderDevelopmentPage
+                  onLogout={handleLogout}
+                  currentUser={currentUser}
+                  title="System Settings"
+                  subtitle="System Settings is under development. Soon this page will include application preferences, integrations and setup controls."
+                  type="settings"
+                />)
               }
             />
             <Route
               path="/machine/:id"
               element={
-                <MachineProfilePage
+                requirePermission("master:manage", <MachineProfilePage
                   onLogout={handleLogout}
                   currentUser={currentUser}
-                />
+                />)
               }
             />
 
             {/* Legacy redirects */}
             <Route path="/organisation-master/machines" element={<Navigate to="/machines" />} />
-            <Route path="/part-operations/part-master" element={<Navigate to="/parts" />} />
+            <Route path="/part-operations/part-master" element={<Navigate to="/machines" />} />
+            <Route path="/ube-machine-setup" element={<Navigate to="/machine-plc-setup" />} />
 
             <Route path="*" element={<Navigate to="/" />} />
             </Routes>

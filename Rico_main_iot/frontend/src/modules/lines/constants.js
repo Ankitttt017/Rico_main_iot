@@ -20,7 +20,7 @@ export const DIVISION_OPTIONS = [
 ];
 
 export const FILTER_DIVISION_OPTIONS = [
-  { value: "", label: "All Divisions" },
+  { value: "", label: "All Departments" },
   ...DIVISION_OPTIONS,
 ];
 
@@ -37,11 +37,6 @@ export const FILTER_STATUS_OPTIONS = [
 export const PROTOCOL_OPTIONS = [
   { value: "SLMP", label: "SLMP" },
   { value: "TCP/IP", label: "TCP/IP", keywords: "tcp ip ethernet" },
-];
-
-export const FILTER_PROTOCOL_OPTIONS = [
-  { value: "", label: "All Protocols" },
-  ...PROTOCOL_OPTIONS,
 ];
 
 export const FALLBACK_OPERATIONS = [

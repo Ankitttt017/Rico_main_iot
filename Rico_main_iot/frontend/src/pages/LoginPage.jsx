@@ -1,6 +1,7 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import BrandLogo from "../components/common/BrandLogo";
 import { useI18n } from "../context/I18nContext";
+import { loginUser } from "../services/api";
 
 const LoginPage = ({ onLogin }) => {
   const { t } = useI18n();
@@ -10,7 +11,12 @@ const LoginPage = ({ onLogin }) => {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e) => {
+  useEffect(() => {
+    setUsername("");
+    setPassword("");
+  }, []);
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
     if (!username || !password) {
@@ -19,14 +25,13 @@ const LoginPage = ({ onLogin }) => {
     }
 
     setLoading(true);
-    setTimeout(() => {
-      if (password === "admin121") {
-        onLogin(username);
-      } else {
-        setError(t("loginErrorInvalid"));
-        setLoading(false);
-      }
-    }, 800);
+    try {
+      const response = await loginUser({ username, password });
+      onLogin(response.data?.data || username);
+    } catch (err) {
+      setError(err.response?.data?.message || t("loginErrorInvalid"));
+      setLoading(false);
+    }
   };
 
   return (

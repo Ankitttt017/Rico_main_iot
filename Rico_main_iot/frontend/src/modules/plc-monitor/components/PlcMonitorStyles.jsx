@@ -1,7 +1,7 @@
 export default function PlcMonitorStyles() {
   return (
     <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Rajdhani:wght@500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap');
 
         *, *::before, *::after { box-sizing: border-box; }
         * { margin: 0; padding: 0; }
@@ -21,8 +21,8 @@ export default function PlcMonitorStyles() {
           --amber: #e17a00;
           --cyan: #1474b8;
           --overview-card-height: 112px;
-          --mono: 'Inter', system-ui, sans-serif;
-          --sans: 'Inter', system-ui, sans-serif;
+          --mono: 'IBM Plex Sans', system-ui, sans-serif;
+          --sans: 'IBM Plex Sans', system-ui, sans-serif;
         }
 
         body {

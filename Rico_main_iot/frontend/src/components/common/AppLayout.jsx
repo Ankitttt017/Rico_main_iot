@@ -4,15 +4,16 @@ import Sidebar from "./Sidebar";
 import { useSidebar } from "../../context/SidebarContext";
 
 const AppLayout = ({ onLogout, currentUser, children, hideFooter = false }) => {
-  const { collapsed } = useSidebar();
+  const { collapsed, hovered } = useSidebar();
+  const compact = collapsed && !hovered;
 
   return (
     <div className="flex min-h-screen flex-col bg-[#eef4fb] app-page">
       <Navbar onLogout={onLogout} currentUser={currentUser} />
-      <Sidebar />
+      <Sidebar currentUser={currentUser} />
       <main
         className={`flex min-h-screen min-w-0 flex-col pt-[94px] transition-all duration-300 ease-in-out ${
-          collapsed ? "lg:pl-[72px]" : "lg:pl-72"
+          compact ? "lg:pl-[60px]" : "lg:pl-[220px]"
         }`}
       >
         <div className="min-w-0 flex-1 p-4 sm:p-6">{children}</div>

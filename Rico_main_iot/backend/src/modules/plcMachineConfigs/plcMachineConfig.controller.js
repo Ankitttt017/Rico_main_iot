@@ -17,6 +17,18 @@ function cleanInt(value, fallback = null) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+function cleanNumber(value, fallback = null) {
+  if (value === "" || value === null || value === undefined) return fallback;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function cleanBool(value, fallback = false) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  return !["0", "false", "no", "n", "off"].includes(String(value).trim().toLowerCase());
+}
+
 function isValidIpv4(value) {
   const parts = String(value || "").trim().split(".");
   if (parts.length !== 4) return false;
@@ -45,6 +57,14 @@ function protocolType(value) {
 
 function profileForType(type) {
   return type === "leaktest" ? "LEAK_TEST" : "UBE_850T";
+}
+
+function templateKey(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
 }
 
 async function uniqueMachineKey(baseKey, excludeId = null) {
@@ -94,7 +114,29 @@ async function ensureSchema() {
         BEGIN
           ALTER TABLE dbo.plc_machine_configs ADD register_config_json NVARCHAR(MAX) NULL;
         END;
+        IF COL_LENGTH('dbo.plc_machine_configs', 'machine_id') IS NULL
+        BEGIN
+          ALTER TABLE dbo.plc_machine_configs ADD machine_id BIGINT NULL;
+        END;
       `);
+      await db.run(`
+        IF OBJECT_ID('dbo.plc_register_templates', 'U') IS NULL
+        BEGIN
+          CREATE TABLE dbo.plc_register_templates (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            template_key NVARCHAR(80) NOT NULL UNIQUE,
+            template_name NVARCHAR(160) NOT NULL,
+            machine_type NVARCHAR(40) NOT NULL DEFAULT 'ube',
+            register_config_json NVARCHAR(MAX) NOT NULL,
+            notes NVARCHAR(500) NULL,
+            is_active BIT NOT NULL DEFAULT 1,
+            is_system BIT NOT NULL DEFAULT 0,
+            created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+            updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+          );
+        END;
+      `);
+      await seedDefaultTemplates();
     })().catch((error) => {
       schemaReadyPromise = null;
       throw error;
@@ -112,6 +154,7 @@ function normalizeMachine(row = {}) {
   }
   return {
     id: row.id || null,
+    machine_id: row.machine_id || null,
     machine_key: row.machine_key,
     machine_name: row.machine_name,
     machine_type: row.machine_type || "ube",
@@ -122,6 +165,10 @@ function normalizeMachine(row = {}) {
     sequence_no: row.sequence_no ?? null,
     is_active: row.is_active === undefined ? true : Boolean(row.is_active),
     register_config: Array.isArray(registerConfig) ? registerConfig : null,
+    machine_code: row.machine_code || null,
+    asset_machine_name: row.asset_machine_name || null,
+    line_id: row.line_id || null,
+    plant_code: row.plant_code || null,
     notes: row.notes || "",
     created_at: row.created_at || null,
     updated_at: row.updated_at || null,
@@ -141,7 +188,37 @@ function registersForType(type = "ube") {
       scale: parameter.scale ?? 1,
       computed: parameter.computed || "",
       enabled: true,
+      min: null,
+      max: null,
+      warning_min: null,
+      warning_max: null,
+      unit: parameter.unit || "",
+      show_on_monitor: true,
+      show_to_operator: false,
+      log_history: true,
+      alarm_enabled: false,
     }));
+}
+
+function systemTemplates() {
+  return [
+    {
+      template_key: "UBE_850T",
+      template_name: "UBE 850T Die Casting",
+      machine_type: "ube",
+      notes: "System default UBE die casting register map.",
+      register_config: registersForType("ube"),
+      is_system: 1,
+    },
+    {
+      template_key: "LEAK_TEST",
+      template_name: "Leak Test",
+      machine_type: "leaktest",
+      notes: "System default leak test register map.",
+      register_config: registersForType("leaktest"),
+      is_system: 1,
+    },
+  ];
 }
 
 function normalizeRegisters(input) {
@@ -156,9 +233,78 @@ function normalizeRegisters(input) {
       type: cleanText(item.type) || "int",
       scale: item.scale === "" || item.scale === null || item.scale === undefined ? 1 : Number(item.scale),
       computed: cleanText(item.computed) || "",
-      enabled: item.enabled === undefined ? true : Boolean(item.enabled),
+      enabled: cleanBool(item.enabled, true),
+      min: cleanNumber(item.min ?? item.minimum),
+      max: cleanNumber(item.max ?? item.maximum),
+      warning_min: cleanNumber(item.warning_min ?? item.warningMin),
+      warning_max: cleanNumber(item.warning_max ?? item.warningMax),
+      unit: cleanText(item.unit) || "",
+      show_on_monitor: cleanBool(item.show_on_monitor ?? item.showOnMonitor, true),
+      show_to_operator: cleanBool(item.show_to_operator ?? item.showToOperator, false),
+      log_history: cleanBool(item.log_history ?? item.logHistory, true),
+      alarm_enabled: cleanBool(item.alarm_enabled ?? item.alarmEnabled, false),
     }))
     .filter((item) => item.name && (item.computed || item.device || item.stringDevice));
+}
+
+function normalizeTemplate(row = {}) {
+  let registers = [];
+  try {
+    registers = row.register_config_json ? JSON.parse(row.register_config_json) : [];
+  } catch {
+    registers = [];
+  }
+  return {
+    id: row.id,
+    template_key: row.template_key,
+    template_name: row.template_name,
+    machine_type: machineType(row.machine_type),
+    register_config: Array.isArray(registers) ? registers : [],
+    notes: row.notes || "",
+    is_active: row.is_active === undefined ? true : Boolean(row.is_active),
+    is_system: Boolean(row.is_system),
+    created_at: row.created_at || null,
+    updated_at: row.updated_at || null,
+  };
+}
+
+async function seedDefaultTemplates() {
+  for (const template of systemTemplates()) {
+    const normalized = normalizeRegisters(template.register_config) || [];
+    await db.run(`
+      IF NOT EXISTS (SELECT 1 FROM dbo.plc_register_templates WHERE template_key = ?)
+      BEGIN
+        INSERT INTO dbo.plc_register_templates
+          (template_key, template_name, machine_type, register_config_json, notes, is_active, is_system)
+        VALUES (?, ?, ?, ?, ?, 1, 1)
+      END
+    `, [
+      template.template_key,
+      template.template_key,
+      template.template_name,
+      template.machine_type,
+      JSON.stringify(normalized),
+      template.notes,
+    ]);
+  }
+}
+
+async function getTemplatesByType() {
+  await ensureSchema();
+  const { rows } = await db.query(`
+    SELECT *
+    FROM dbo.plc_register_templates
+    WHERE is_active = 1
+    ORDER BY is_system DESC, template_name
+  `);
+  const templates = rows.map(normalizeTemplate);
+  const byType = { ube: [], leaktest: [] };
+  templates.forEach((template) => {
+    const type = machineType(template.machine_type);
+    byType[type] = byType[type] || [];
+    byType[type].push(template);
+  });
+  return { templates, byType };
 }
 
 async function saveMachineRecord(input = {}) {
@@ -170,10 +316,16 @@ async function saveMachineRecord(input = {}) {
   const key = await uniqueMachineKey(input.machine_key || name, id);
   if (!key) throw new Error("Machine key is required");
   const type = machineType(input.machine_type);
-  const profile = cleanText(input.register_profile_key) || profileForType(type);
+  const profile = templateKey(input.register_profile_key) || profileForType(type);
+  const { templates } = await getTemplatesByType();
+  const selectedTemplate = templates.find((template) => template.template_key === profile);
+  const fallbackRegisters = selectedTemplate?.register_config?.length
+    ? selectedTemplate.register_config
+    : registersForType(type);
 
   const payload = {
     machine_key: key,
+    machine_id: cleanInt(input.machine_id),
     machine_name: name,
     machine_type: type,
     ip_address: ip,
@@ -182,7 +334,7 @@ async function saveMachineRecord(input = {}) {
     register_profile_key: profile,
     sequence_no: cleanInt(input.sequence_no),
     is_active: input.is_active === undefined ? 1 : Number(Boolean(input.is_active)),
-    register_config_json: JSON.stringify(normalizeRegisters(input.register_config) || registersForType(type)),
+    register_config_json: JSON.stringify(normalizeRegisters(input.register_config) || fallbackRegisters),
     notes: cleanText(input.notes),
   };
 
@@ -195,11 +347,12 @@ async function saveMachineRecord(input = {}) {
 
     await db.run(`
       UPDATE dbo.plc_machine_configs
-      SET machine_key = ?, machine_name = ?, machine_type = ?, ip_address = ?, port = ?,
+      SET machine_id = ?, machine_key = ?, machine_name = ?, machine_type = ?, ip_address = ?, port = ?,
           protocol = ?, register_profile_key = ?, sequence_no = ?, is_active = ?,
           register_config_json = ?, notes = ?, updated_at = SYSUTCDATETIME()
       WHERE id = ?
     `, [
+      payload.machine_id,
       payload.machine_key,
       payload.machine_name,
       payload.machine_type,
@@ -213,16 +366,24 @@ async function saveMachineRecord(input = {}) {
       payload.notes,
       id,
     ]);
+    if (payload.machine_id) {
+      await db.run(`
+        UPDATE dbo.iot_machines
+        SET ip_address = ?, port = ?, protocol = ?
+        WHERE id = ?
+      `, [payload.ip_address, String(payload.port), payload.protocol, payload.machine_id]);
+    }
     return id;
   }
 
   const result = await db.run(`
     INSERT INTO dbo.plc_machine_configs
-      (machine_key, machine_name, machine_type, ip_address, port, protocol,
+      (machine_id, machine_key, machine_name, machine_type, ip_address, port, protocol,
        register_profile_key, sequence_no, is_active, register_config_json, notes)
     OUTPUT INSERTED.id
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, [
+    payload.machine_id,
     payload.machine_key,
     payload.machine_name,
     payload.machine_type,
@@ -235,6 +396,13 @@ async function saveMachineRecord(input = {}) {
     payload.register_config_json,
     payload.notes,
   ]);
+  if (payload.machine_id) {
+    await db.run(`
+      UPDATE dbo.iot_machines
+      SET ip_address = ?, port = ?, protocol = ?
+      WHERE id = ?
+    `, [payload.ip_address, String(payload.port), payload.protocol, payload.machine_id]);
+  }
   return result.rows[0]?.id;
 }
 
@@ -242,18 +410,21 @@ async function listMachines(_req, res) {
   try {
     await ensureSchema();
     const { rows } = await db.query(`
-      SELECT *
-      FROM dbo.plc_machine_configs
+      SELECT pc.*, m.machine_code, m.name AS asset_machine_name, m.line_id, m.plant_code
+      FROM dbo.plc_machine_configs pc
+      LEFT JOIN dbo.iot_machines m ON m.id = pc.machine_id
       ORDER BY sequence_no, machine_name
     `);
+    const { templates, byType } = await getTemplatesByType();
     res.json({
       success: true,
       data: rows.map(normalizeMachine),
       default_registers: registersForType("ube"),
       default_registers_by_type: {
-        ube: registersForType("ube"),
-        leaktest: registersForType("leaktest"),
+        ube: byType.ube?.[0]?.register_config || registersForType("ube"),
+        leaktest: byType.leaktest?.[0]?.register_config || registersForType("leaktest"),
       },
+      register_templates: templates,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -265,6 +436,54 @@ async function saveMachine(req, res) {
     await ensureSchema();
     const id = await saveMachineRecord(req.body || {});
     res.json({ success: true, id });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+}
+
+async function listTemplates(_req, res) {
+  try {
+    await ensureSchema();
+    const { templates } = await getTemplatesByType();
+    res.json({ success: true, data: templates });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+async function saveTemplate(req, res) {
+  try {
+    await ensureSchema();
+    const input = req.body || {};
+    const name = cleanText(input.template_name || input.name);
+    if (!name) return res.status(400).json({ success: false, message: "Template name is required" });
+    const key = templateKey(input.template_key || name);
+    if (!key) return res.status(400).json({ success: false, message: "Template key is required" });
+    const type = machineType(input.machine_type);
+    const registers = normalizeRegisters(input.register_config);
+    if (!registers?.length) return res.status(400).json({ success: false, message: "At least one valid register is required" });
+
+    const existing = await db.query(
+      "SELECT TOP 1 id FROM dbo.plc_register_templates WHERE template_key = ?",
+      [key]
+    );
+    if (existing.rows.length) {
+      await db.run(`
+        UPDATE dbo.plc_register_templates
+        SET template_name = ?, machine_type = ?, register_config_json = ?, notes = ?,
+            is_active = 1, updated_at = SYSUTCDATETIME()
+        WHERE template_key = ?
+      `, [name, type, JSON.stringify(registers), cleanText(input.notes), key]);
+      return res.json({ success: true, id: existing.rows[0].id, template_key: key });
+    }
+
+    const result = await db.run(`
+      INSERT INTO dbo.plc_register_templates
+        (template_key, template_name, machine_type, register_config_json, notes, is_active, is_system)
+      OUTPUT INSERTED.id
+      VALUES (?, ?, ?, ?, ?, 1, 0)
+    `, [key, name, type, JSON.stringify(registers), cleanText(input.notes)]);
+    res.status(201).json({ success: true, id: result.rows[0]?.id, template_key: key });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }
@@ -329,7 +548,9 @@ async function testConnection(req, res) {
 module.exports = {
   ensureSchema,
   listMachines,
+  listTemplates,
   saveMachine,
+  saveTemplate,
   deleteMachine,
   testConnection,
 };

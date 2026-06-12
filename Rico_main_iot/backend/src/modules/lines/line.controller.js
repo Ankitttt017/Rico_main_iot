@@ -89,7 +89,7 @@ function getPlantCode(plant = '') {
   const value = String(plant || '').trim();
   if (value === '1008' || /bawal/i.test(value)) return '1008';
   if (value === '1002' || /gurugram|gurgaon/i.test(value)) return '1002';
-  return value || '1002';
+  return value;
 }
 
 function getDivisionPattern(division = '') {
@@ -100,10 +100,25 @@ function getDivisionPattern(division = '') {
   return `%${division}%`;
 }
 
+async function getActivePlant(plantCode) {
+  const code = getPlantCode(plantCode);
+  if (!code) return null;
+
+  const { rows } = await db.query(`
+    IF OBJECT_ID(N'dbo.iot_plants', N'U') IS NULL
+      SELECT CAST(NULL AS VARCHAR(20)) AS code WHERE 1 = 0;
+    ELSE
+      SELECT TOP 1 code, name
+      FROM dbo.iot_plants
+      WHERE code = ? AND COALESCE(is_active, 1) = 1;
+  `, [code]);
+  return rows[0] || null;
+}
+
 const getAllLines = async (req, res) => {
   try {
     await ensureLineSchema();
-    const { plant = '1002', division, status, protocol, search } = req.query;
+    const { plant, division, status, protocol, search } = req.query;
     const params = [];
     const whereParts = [];
 
@@ -229,16 +244,24 @@ const getLinesParts = async (req, res) => {
 const createLine = async (req, res) => {
   try {
     await ensureLineSchema();
-    const { line_code, line_name, plant = 'Gurugram Plant', plant_code = '1002', division, description, part_code, part_name, customer_name, is_active = true } = req.body;
+    const { line_code, line_name, plant, plant_code, division, description, part_code, part_name, customer_name, is_active = true } = req.body;
     if (!String(line_code || '').trim() || !String(line_name || '').trim()) {
       return res.status(400).json({ success: false, message: 'Line code and name are required' });
+    }
+    const resolvedPlantCode = getPlantCode(plant_code || plant);
+    if (!resolvedPlantCode) {
+      return res.status(400).json({ success: false, message: 'Location is required before creating a line' });
+    }
+    const activePlant = await getActivePlant(resolvedPlantCode);
+    if (!activePlant) {
+      return res.status(400).json({ success: false, message: 'Select a valid active location before creating a line' });
     }
     const { rows } = await db.run(
       `INSERT INTO dbo.line_master 
         (line_code, line_name, plant, plant_code, division, description, is_active, part_code, part_name, customer_name)
        OUTPUT INSERTED.line_id
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [line_code, line_name, plant, getPlantCode(plant_code || plant), division, description || null, is_active ? 1 : 0, part_code || null, part_name || null, customer_name || null]
+      [line_code, line_name, activePlant.name || plant || resolvedPlantCode, activePlant.code, division, description || null, is_active ? 1 : 0, part_code || null, part_name || null, customer_name || null]
     );
     res.json({ success: true, line_id: rows[0]?.line_id });
   } catch (err) {
@@ -253,12 +276,24 @@ const updateLine = async (req, res) => {
     const updates = allowed.filter((field) => Object.prototype.hasOwnProperty.call(req.body, field));
     if (!updates.length) return res.status(400).json({ success: false, message: 'No line fields supplied' });
 
+    const normalizedBody = { ...req.body };
+    if (Object.prototype.hasOwnProperty.call(req.body, 'plant_code') || Object.prototype.hasOwnProperty.call(req.body, 'plant')) {
+      const activePlant = await getActivePlant(req.body.plant_code || req.body.plant);
+      if (!activePlant) {
+        return res.status(400).json({ success: false, message: 'Select a valid active location before updating a line' });
+      }
+      normalizedBody.plant = activePlant.name || req.body.plant || activePlant.code;
+      normalizedBody.plant_code = activePlant.code;
+      if (!updates.includes('plant')) updates.push('plant');
+      if (!updates.includes('plant_code')) updates.push('plant_code');
+    }
+
     await db.run(
       `UPDATE dbo.line_master
        SET ${ updates.map((field) => `${field} = ?`).join(', ') },
       updated_at = GETDATE()
        WHERE line_id = ? `,
-      [...updates.map((field) => req.body[field] === '' ? null : req.body[field]), req.params.id]
+      [...updates.map((field) => normalizedBody[field] === '' ? null : normalizedBody[field]), req.params.id]
     );
     res.json({ success: true });
   } catch (err) {
@@ -267,7 +302,19 @@ const updateLine = async (req, res) => {
 };
 
 const getLineOperations = async (_req, res) => {
-  res.json({ success: true, data: OPERATION_MASTER });
+  try {
+    const { rows } = await db.query(`
+      SELECT DISTINCT
+        COALESCE(label, CAST(sr_no AS VARCHAR(50))) AS operation_no,
+        COALESCE(name, CONCAT('Operation ', COALESCE(label, CAST(sr_no AS VARCHAR(50))))) AS operation_name
+      FROM dbo.iot_operations
+      WHERE COALESCE(label, CAST(sr_no AS VARCHAR(50))) IS NOT NULL
+      ORDER BY operation_no
+    `);
+    res.json({ success: true, data: rows.length ? rows : OPERATION_MASTER });
+  } catch (_error) {
+    res.json({ success: true, data: OPERATION_MASTER });
+  }
 };
 
 const deleteLine = async (req, res) => {
@@ -296,7 +343,8 @@ const addLineMachine = async (req, res) => {
 
     const code = String(machine_code).trim();
     const machineName = String(name).trim();
-    const plantCode = lineRows[0].plant_code || '1002';
+    const plantCode = lineRows[0].plant_code;
+    if (!plantCode) return res.status(400).json({ success: false, message: 'Line location is required before adding machines' });
 
     const { rows: existingRows } = await db.query(
       `SELECT TOP 1 id FROM dbo.iot_machines WHERE machine_code = ?`,

@@ -20,7 +20,7 @@ const SHOT_DATE_TIME_DEVICES = {
 const UBE_ALLOWED_M_DEVICES = new Set([CYCLE_START_DEVICE, CYCLE_END_DEVICE]);
 const UBE_CYCLE_END_DELAY_MS = Math.min(
   5000,
-  Math.max(2000, Number(process.env.PLC_CYCLE_END_DELAY_MS || 2000))
+  Math.max(500, Number(process.env.PLC_CYCLE_END_DELAY_MS || 1000))
 );
 const UBE_CYCLE_END_POLL_MS = Number(process.env.PLC_UBE_CYCLE_END_POLL_MS || 200);
 const UBE_LIVE_READ_MS = Number(process.env.PLC_UBE_LIVE_READ_MS || 1000);
@@ -343,6 +343,11 @@ const EXTRA_READING_COLUMNS = [
   ["shot_number", "INT"],
   ["ok_shot", "INT"],
   ["ng_counter", "INT"],
+  ["cycle_start_time", "DATETIME2(3)"],
+  ["cycle_end_time", "DATETIME2(3)"],
+  ["cycle_duration", "DECIMAL(18,2)"],
+  ["actual_cycle_time", "DECIMAL(18,2)"],
+  ["plc_cycle_time", "DECIMAL(18,2)"],
   ["minor_stoppage_machine", "DECIMAL(18,2)"],
 ];
 
@@ -372,6 +377,11 @@ const UBE_CLIENT_READING_NAMES = new Set([
   "ng_counter",
   "part_name",
   "cycle_time",
+  "cycle_start_time",
+  "cycle_end_time",
+  "cycle_duration",
+  "actual_cycle_time",
+  "plc_cycle_time",
   "minor_stoppage",
   "minor_stoppage_machine",
   ...EXCEL_PARAMETERS.map((p) => p.name),

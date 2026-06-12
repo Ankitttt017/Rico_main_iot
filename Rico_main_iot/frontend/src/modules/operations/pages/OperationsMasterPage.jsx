@@ -1,23 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import Navbar from "../../../components/common/Navbar";
-import Sidebar from "../../../components/common/Sidebar";
-import { getOperationMaster, getParts, getPlants } from "../../../services/api";
-import { useSidebar } from "../../../context/SidebarContext";
+import { useSearchParams } from "react-router-dom";
+import toast from "react-hot-toast";
+import { Plus, Save, X } from "lucide-react";
+import AppLayout from "../../../components/common/AppLayout";
+import { createOperation, getOperationMaster, getParts, getPlants } from "../../../services/api";
+import { DEFAULT_PLANTS } from "../../parts/constants";
+import { normalizePlants } from "../../parts/utils/plantUtils";
+import { sortBySearchRelevance } from "../../../utils/searchRelevance";
 
-const PLANT_NAMES = {
-  "1002": "Gurugram Plant",
-  "1008": "Bawal Plant",
-};
-
-const ALLOWED_PLANT_CODES = ["1002", "1008"];
-
-const normalizePlant = (plant) => {
-  const code = String(plant?.code || plant?.plant_code || "").trim();
-  return {
-    id: plant?.id || code,
-    code,
-    name: PLANT_NAMES[code] || plant?.name || `${code} Plant`,
-  };
+const emptyOperationDraft = {
+  part_code: "",
+  operation_no: "",
+  operation_name: "",
 };
 
 const StatCard = ({ value, label, icon, color = "text-blue-600", accent = "border-t-blue-600" }) => (
@@ -55,7 +49,11 @@ const Dropdown = ({ label, value, options, onChange, placeholder, searchable = f
   const [query, setQuery] = useState("");
   const selected = options.find((option) => option.value === value);
   const filtered = searchable
-    ? options.filter((option) => option.label.toLowerCase().includes(query.toLowerCase()))
+    ? sortBySearchRelevance(
+        options.filter((option) => option.label.toLowerCase().includes(query.toLowerCase())),
+        query,
+        (option) => [option.label, option.value]
+      )
     : options;
 
   return (
@@ -124,7 +122,7 @@ const formatDate = (value) => {
 };
 
 const OperationsMasterPage = ({ onLogout, currentUser }) => {
-  const { collapsed } = useSidebar();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [plants, setPlants] = useState([]);
   const [selectedPlant, setSelectedPlant] = useState("");
   const [parts, setParts] = useState([]);
@@ -132,7 +130,10 @@ const OperationsMasterPage = ({ onLogout, currentUser }) => {
   const [operations, setOperations] = useState([]);
   const [stats, setStats] = useState({ total: 0, types: 0, linked: 0, unlinked: 0 });
   const [total, setTotal] = useState(0);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(searchParams.get("search") || "");
+  const [operationModalOpen, setOperationModalOpen] = useState(false);
+  const [operationDraft, setOperationDraft] = useState(emptyOperationDraft);
+  const [savingOperation, setSavingOperation] = useState(false);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const rowsPerPage = 10;
@@ -140,17 +141,14 @@ const OperationsMasterPage = ({ onLogout, currentUser }) => {
   useEffect(() => {
     getPlants()
       .then((response) => {
-        const list = (response.data.data || [])
-          .map(normalizePlant)
-          .filter((plant) => ALLOWED_PLANT_CODES.includes(plant.code))
-          .sort((a, b) => ALLOWED_PLANT_CODES.indexOf(a.code) - ALLOWED_PLANT_CODES.indexOf(b.code));
+        const list = normalizePlants(response.data.data || []);
         setPlants(list);
         setSelectedPlant(list[0]?.code || "");
       })
       .catch(() => {
-        const fallback = ALLOWED_PLANT_CODES.map((code) => ({ id: code, code, name: PLANT_NAMES[code] }));
+        const fallback = normalizePlants(DEFAULT_PLANTS);
         setPlants(fallback);
-        setSelectedPlant(fallback[0].code);
+        setSelectedPlant(fallback[0]?.code || "");
       });
   }, []);
 
@@ -160,9 +158,20 @@ const OperationsMasterPage = ({ onLogout, currentUser }) => {
       .then((response) => {
         setParts(response.data.data || []);
         setSelectedPart("");
+        setOperationDraft((current) => ({ ...current, part_code: "" }));
       })
       .catch(() => setParts([]));
   }, [selectedPlant]);
+
+  useEffect(() => {
+    setSearch(searchParams.get("search") || "");
+  }, [searchParams]);
+
+  const handleSearchChange = (value) => {
+    setSearch(value);
+    if (value.trim()) setSearchParams({ search: value });
+    else setSearchParams({});
+  };
 
   const fetchOperations = useCallback(() => {
     if (!selectedPlant) return;
@@ -200,6 +209,39 @@ const OperationsMasterPage = ({ onLogout, currentUser }) => {
     ...parts.map((part) => ({ value: part.material_code, label: part.description || part.material_code })),
   ], [parts]);
 
+  const addPartOptions = useMemo(() => parts.map((part) => ({
+    value: part.material_code,
+    label: part.description || part.material_code,
+  })), [parts]);
+
+  const openOperationModal = () => {
+    setOperationDraft({
+      ...emptyOperationDraft,
+      part_code: selectedPart || parts[0]?.material_code || "",
+    });
+    setOperationModalOpen(true);
+  };
+
+  const saveOperation = async () => {
+    if (!operationDraft.part_code || !operationDraft.operation_no.trim() || !operationDraft.operation_name.trim()) {
+      toast.error("Part, operation number aur operation name required hai");
+      return;
+    }
+
+    setSavingOperation(true);
+    try {
+      await createOperation(operationDraft);
+      setOperationModalOpen(false);
+      setOperationDraft(emptyOperationDraft);
+      toast.success("Operation created");
+      fetchOperations();
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Unable to save operation");
+    } finally {
+      setSavingOperation(false);
+    }
+  };
+
   const selectedPlantName = plants.find((plant) => plant.code === selectedPlant)?.name || selectedPlant;
   const selectedPartName = selectedPart
     ? parts.find((part) => part.material_code === selectedPart)?.description || selectedPart
@@ -207,16 +249,84 @@ const OperationsMasterPage = ({ onLogout, currentUser }) => {
   const totalPages = Math.max(1, Math.ceil(total / rowsPerPage));
   const startRow = total === 0 ? 0 : (page - 1) * rowsPerPage + 1;
   const endRow = Math.min(page * rowsPerPage, total);
+  const visibleOperations = useMemo(
+    () => sortBySearchRelevance(operations, search, (operation) => [
+      operation.operation_name,
+      operation.operation_id,
+      operation.part_code,
+      operation.linked_part,
+      operation.type,
+    ]),
+    [operations, search]
+  );
 
   return (
-    <div className="min-h-screen bg-[#f7f7fa] app-page">
-      <Navbar onLogout={onLogout} currentUser={currentUser} />
-      <Sidebar />
+    <AppLayout onLogout={onLogout} currentUser={currentUser}>
+      {operationModalOpen && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-2xl overflow-hidden rounded-xl bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+              <div>
+                <h3 className="text-lg font-extrabold text-slate-950">Add Operation</h3>
+                <p className="mt-1 text-sm font-medium text-slate-500">Select part and enter operation details.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOperationModalOpen(false)}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="grid gap-4 p-5 md:grid-cols-2">
+              <label className="md:col-span-2">
+                <span className="mb-1 block text-xs font-black uppercase tracking-wide text-slate-500">Part</span>
+                <select
+                  className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-50"
+                  value={operationDraft.part_code}
+                  onChange={(event) => setOperationDraft((current) => ({ ...current, part_code: event.target.value }))}
+                >
+                  <option value="">Select part</option>
+                  {addPartOptions.map((part) => (
+                    <option key={part.value} value={part.value}>{part.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span className="mb-1 block text-xs font-black uppercase tracking-wide text-slate-500">Operation No.</span>
+                <input
+                  className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-50"
+                  value={operationDraft.operation_no}
+                  onChange={(event) => setOperationDraft((current) => ({ ...current, operation_no: event.target.value.toUpperCase() }))}
+                  placeholder="OP-10"
+                />
+              </label>
+              <label>
+                <span className="mb-1 block text-xs font-black uppercase tracking-wide text-slate-500">Operation Name</span>
+                <input
+                  className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-50"
+                  value={operationDraft.operation_name}
+                  onChange={(event) => setOperationDraft((current) => ({ ...current, operation_name: event.target.value }))}
+                  placeholder="Machining / Inspection"
+                />
+              </label>
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-5 py-4">
+              <button type="button" onClick={() => setOperationModalOpen(false)} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50">
+                Cancel
+              </button>
+              <button type="button" onClick={saveOperation} disabled={savingOperation} className="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-5 py-2 text-sm font-bold text-white hover:bg-teal-700 disabled:opacity-60">
+                <Save className="h-4 w-4" />
+                {savingOperation ? "Saving..." : "Save Operation"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
-      <main className={`pt-[94px] transition-all duration-300 ease-in-out ${
-        collapsed ? "lg:pl-[72px]" : "lg:pl-72"
-      }`}>
-        <div className="w-full p-4 sm:p-6">
+      <main>
+        <div className="w-full">
           <div className="mb-5 flex flex-wrap items-center gap-2">
             <h1 className="text-xl font-extrabold text-slate-950">Organisation Master</h1>
             <span className="text-slate-300">|</span>
@@ -230,12 +340,22 @@ const OperationsMasterPage = ({ onLogout, currentUser }) => {
           </div>
 
           <section className="app-panel mb-6 w-full rounded-2xl border border-slate-200 bg-white p-5">
-            <h2 className="text-lg font-extrabold text-slate-950">Operation Master</h2>
-            <p className="mt-2 max-w-5xl text-sm leading-relaxed text-slate-500">
-              The operation master is a list of all the existing operations registered in the plant.
-              The operations can be linked to a particular part. Each operation must have a unique
-              reference, and the routing data below is mapped directly from the database.
-            </p>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-extrabold text-slate-950">Operation Master</h2>
+                <p className="mt-2 max-w-5xl text-sm leading-relaxed text-slate-500">
+                  Create operations against a selected part.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={openOperationModal}
+                className="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-teal-700"
+              >
+                <Plus className="h-4 w-4" />
+                Add Operation
+              </button>
+            </div>
 
             <div className="mt-5 flex flex-wrap items-end gap-4">
               <Dropdown
@@ -287,7 +407,7 @@ const OperationsMasterPage = ({ onLogout, currentUser }) => {
                   className="app-field h-10 w-64 rounded-lg border bg-slate-50 pl-9 pr-3 text-sm focus:outline-none focus:ring-4 focus:ring-teal-50"
                   placeholder="Search operations..."
                   value={search}
-                  onChange={(event) => setSearch(event.target.value)}
+                  onChange={(event) => handleSearchChange(event.target.value)}
                 />
               </label>
             </div>
@@ -319,7 +439,7 @@ const OperationsMasterPage = ({ onLogout, currentUser }) => {
                         <p className="mt-3 text-xs text-slate-400">Loading operations...</p>
                       </td>
                     </tr>
-                  ) : operations.length === 0 ? (
+                  ) : visibleOperations.length === 0 ? (
                     <tr>
                       <td colSpan={10} className="py-20 text-center text-slate-400">
                         <BriefcaseIcon className="mx-auto h-10 w-10" />
@@ -328,7 +448,7 @@ const OperationsMasterPage = ({ onLogout, currentUser }) => {
                       </td>
                     </tr>
                   ) : (
-                    operations.map((operation, index) => (
+                    visibleOperations.map((operation, index) => (
                       <tr key={operation.id} className="transition-colors hover:bg-slate-50">
                         <td className="px-5 py-3 text-slate-500">{startRow + index}</td>
                         <td className="px-4 py-3">
@@ -387,7 +507,7 @@ const OperationsMasterPage = ({ onLogout, currentUser }) => {
           </section>
         </div>
       </main>
-    </div>
+    </AppLayout>
   );
 };
 

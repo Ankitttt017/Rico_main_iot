@@ -1,7 +1,6 @@
 import React, { useState } from "react";
 import BrandLogo from "../../../components/common/BrandLogo";
-
-const WORKSTATION_PASSWORD = "admin121";
+import { loginUser } from "../../../services/api";
 
 const OperatorWorkstationLoginPage = ({ onLogin }) => {
   const [username, setUsername] = useState("");
@@ -9,7 +8,7 @@ const OperatorWorkstationLoginPage = ({ onLogin }) => {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
     setError("");
 
@@ -18,16 +17,15 @@ const OperatorWorkstationLoginPage = ({ onLogin }) => {
       return;
     }
 
-    if (password !== WORKSTATION_PASSWORD) {
-      setError("Invalid password. Use admin121 for demo access.");
-      setPassword("");
-      return;
-    }
-
     setLoading(true);
-    window.setTimeout(() => {
-      onLogin(username.trim());
-    }, 500);
+    try {
+      const response = await loginUser({ username: username.trim(), password, role: "operator" });
+      onLogin(response.data?.data || username.trim());
+    } catch (err) {
+      setError(err.response?.data?.message || "Invalid login for workstation access.");
+      setPassword("");
+      setLoading(false);
+    }
   };
 
   return (

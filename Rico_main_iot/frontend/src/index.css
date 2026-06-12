@@ -41,7 +41,7 @@
 
   * { box-sizing: border-box; }
   html {
-    font-family: Inter, "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: "IBM Plex Sans", "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
     text-rendering: geometricPrecision;
     -webkit-font-smoothing: antialiased;
@@ -175,8 +175,8 @@
 .app-page h2,
 .app-page h3 {
   color: var(--app-primary-strong);
-  font-family: Inter, "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-  font-weight: 800;
+  font-family: "IBM Plex Sans", "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 600;
   line-height: 1.16;
   letter-spacing: 0;
 }
@@ -188,7 +188,8 @@
 .app-page .font-bold,
 .app-page .font-extrabold,
 .app-page .font-black {
-  font-family: Inter, "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: "IBM Plex Sans", "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 600;
 }
 
 .app-page p,
@@ -196,7 +197,7 @@
 .app-page input,
 .app-page select,
 .app-page button {
-  font-family: Inter, "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: "IBM Plex Sans", "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   letter-spacing: 0;
 }
 

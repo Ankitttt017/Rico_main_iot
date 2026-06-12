@@ -9,7 +9,7 @@ export default {
         accent: "#0F766E",
       },
       fontFamily: {
-        sans: ["Inter", "system-ui", "sans-serif"],
+        sans: ["IBM Plex Sans", "system-ui", "sans-serif"],
       },
     },
   },

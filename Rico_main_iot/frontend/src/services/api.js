@@ -64,11 +64,21 @@ async function mutate(request) {
 }
 
 export const getPlants      = ()        => cachedGet(ENDPOINTS.plants, { ttl: 300000 });
+export const getLocations   = (params)  => cachedGet(ENDPOINTS.locations, { params, ttl: 300000 });
+export const createLocation = (data)    => mutate(api.post(ENDPOINTS.locations, data));
+export const updateLocation = (id, d)   => mutate(api.put(ENDPOINTS.location(id), d));
+export const deleteLocation = (id)      => mutate(api.delete(ENDPOINTS.location(id)));
+export const getDepartments = (params)  => cachedGet(ENDPOINTS.departments, { params, ttl: 300000 });
+export const createDepartment = (data)  => mutate(api.post(ENDPOINTS.departments, data));
+export const updateDepartment = (id, d) => mutate(api.put(ENDPOINTS.department(id), d));
+export const deleteDepartment = (id)    => mutate(api.delete(ENDPOINTS.department(id)));
 export const getParts       = (params)  => cachedGet(ENDPOINTS.parts, { params });
+export const createPart     = (data)    => mutate(api.post(ENDPOINTS.parts, data));
 export const getPartById    = (id)      => cachedGet(ENDPOINTS.part(id));
 export const updatePart     = (id, d)   => mutate(api.put(ENDPOINTS.part(id), d));
 export const getOperations  = (id)      => cachedGet(ENDPOINTS.partOperations(id));
 export const getOperationMaster = (params) => cachedGet(ENDPOINTS.operations, { params });
+export const createOperation = (data) => mutate(api.post(ENDPOINTS.operations, data));
 export const updateOperation = (partId, operationId, d) => mutate(api.put(ENDPOINTS.partOperation(partId, operationId), d));
 export const deleteOperation = (partId, operationId) => mutate(api.delete(ENDPOINTS.partOperation(partId, operationId)));
 export const getSheets      = (id)      => cachedGet(ENDPOINTS.partSheets(id));
@@ -99,7 +109,22 @@ export const getPlcConnectionEvents = (params) => cachedGet(ENDPOINTS.plcConnect
 export const getPlcMachineConfigs = () => cachedGet(ENDPOINTS.plcMachineConfigs, { ttl: LIVE_CACHE_TTL, staleWhileRefresh: false });
 export const savePlcMachineConfig = (data) => mutate(api.post(ENDPOINTS.plcMachineConfigs, data));
 export const deletePlcMachineConfig = (id) => mutate(api.delete(ENDPOINTS.plcMachineConfig(id)));
+export const getPlcRegisterTemplates = () => cachedGet(ENDPOINTS.plcRegisterTemplates, { ttl: LIVE_CACHE_TTL, staleWhileRefresh: false });
+export const savePlcRegisterTemplate = (data) => mutate(api.post(ENDPOINTS.plcRegisterTemplates, data));
 export const testPlcMachineConfig = (data) => api.post(ENDPOINTS.plcMachineConfigTest, data);
+export const loginUser = (data) => api.post(ENDPOINTS.authLogin, data);
+export const getAuthRoles = () => cachedGet(ENDPOINTS.authRoles, { ttl: 300000 });
+export const getAuthUsers = () => cachedGet(ENDPOINTS.authUsers, { ttl: 5000, staleWhileRefresh: false });
+export const createAuthUser = (data) => mutate(api.post(ENDPOINTS.authUsers, data));
+export const updateAuthUser = (id, data) => mutate(api.patch(ENDPOINTS.authUser(id), data));
+export const deleteAuthUser = (id) => mutate(api.delete(ENDPOINTS.authUser(id)));
+export const toggleAuthUser = (id) => mutate(api.patch(ENDPOINTS.authUserToggle(id)));
+export const resetAuthUserPassword = (id, data) => mutate(api.patch(ENDPOINTS.authUserResetPassword(id), data));
+export const checkAuthUsername = (username) => api.get(ENDPOINTS.authCheckUsername, { params: { u: username } });
+export const getWorkstationSummary = (params) => cachedGet(ENDPOINTS.workstationSummary, { params, ttl: LIVE_CACHE_TTL, staleWhileRefresh: false });
+export const getWorkstationDowntimeEvents = (params) => cachedGet(ENDPOINTS.workstationDowntimeEvents, { params, ttl: LIVE_CACHE_TTL, staleWhileRefresh: false });
+export const createWorkstationDowntimeEvent = (data) => mutate(api.post(ENDPOINTS.workstationDowntimeEvents, data));
+export const closeWorkstationDowntimeEvent = (id, data) => mutate(api.patch(ENDPOINTS.workstationDowntimeEventClose(id), data));
 export const getPartSheetDownloadUrl = (partId, type, sheetId) => buildApiUrl(ENDPOINTS.partSheetDownload(partId, type, sheetId));
 export const getPlcHistoryExportUrl = ({ ip, limit = 2000, from, to } = {}) => {
   const params = new URLSearchParams();

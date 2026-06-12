@@ -24,7 +24,7 @@ import {
   safe,
 } from "../components/profile/MachineProfileSections";
 const MachineProfilePage = ({ onLogout, currentUser }) => {
-  const { collapsed } = useSidebar();
+  const { collapsed, hovered } = useSidebar();
   const { id } = useParams();
   const navigate = useNavigate();
   const [machine, setMachine] = useState(null);
@@ -77,9 +77,9 @@ const MachineProfilePage = ({ onLogout, currentUser }) => {
     );
   }
 
-  const division = getDivision(machine.name);
-  const line     = getLine(machine.name);
-  const type     = getMachineType(machine.name);
+  const division = machine.line_division || machine.category || getDivision(machine.name);
+  const line     = machine.line_name || machine.line_code || getLine(machine.name);
+  const type     = machine.asset || getMachineType(machine.name);
   const shop     = getShop(machine.name);
 
   const renderTab = () => {
@@ -94,7 +94,7 @@ const MachineProfilePage = ({ onLogout, currentUser }) => {
   return (
     <div className="min-h-screen app-page">
       <Navbar onLogout={onLogout} currentUser={currentUser} />
-      <Sidebar />
+      <Sidebar currentUser={currentUser} />
 
       {/* Edit Modal */}
       {editModal && (
@@ -107,7 +107,7 @@ const MachineProfilePage = ({ onLogout, currentUser }) => {
       )}
 
       <main className={`pt-[94px] transition-all duration-300 ease-in-out ${
-        collapsed ? "lg:pl-[72px]" : "lg:pl-72"
+        collapsed && !hovered ? "lg:pl-[60px]" : "lg:pl-[220px]"
       }`}>
         <div className="p-4 sm:p-6">
 
@@ -139,7 +139,7 @@ const MachineProfilePage = ({ onLogout, currentUser }) => {
                   </h2>
                   <p className="text-[11px] text-gray-400 text-center mb-4 font-medium">Machine Profile</p>
 
-                  <InfoRow label="Division"        value={getVal("Division", division)}                          highlight onEdit={handleEdit} />
+                  <InfoRow label="Department"      value={getVal("Department", division)}                        highlight onEdit={handleEdit} />
                   <InfoRow label="Line"            value={getVal("Line", line)}                                  highlight onEdit={handleEdit} />
                   <InfoRow label="Type"            value={getVal("Type", type)}                                            onEdit={handleEdit} />
                   <InfoRow label="Shop"            value={getVal("Shop", shop)}                                            onEdit={handleEdit} />

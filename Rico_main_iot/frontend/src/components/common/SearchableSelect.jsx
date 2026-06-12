@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { sortBySearchRelevance } from "../../utils/searchRelevance";
 
 const defaultInputClass =
   "h-11 w-full rounded-lg border border-slate-200 bg-white px-3 pr-10 text-sm font-medium text-slate-800 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-50";
@@ -42,12 +43,12 @@ const SearchableSelect = ({
     const selectedLabel = normalize(selected?.label);
     const shouldFilter = term && term !== selectedLabel;
     const rows = shouldFilter
-      ? options.filter((option) => {
+      ? sortBySearchRelevance(options.filter((option) => {
           const haystack = normalize(
             `${option.label} ${option.value} ${option.keywords || ""}`
           );
           return haystack.includes(term);
-        })
+        }), term, (option) => [option.label, option.value, option.keywords, option.description])
       : options;
     return rows.slice(0, maxVisible);
   }, [maxVisible, options, query]);

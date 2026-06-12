@@ -453,6 +453,11 @@ function normalizeReadingForDB(name, value) {
     if (Number.isNaN(date.getTime())) return null;
     return date.toISOString().slice(0, 19).replace("T", " ");
   }
+  if (name === "cycle_start_time" || name === "cycle_end_time") {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    return systemDateTimeString(date);
+  }
   if (TWO_DIGIT_READING_COLUMNS.has(name)) return pad2(value);
 
   const parameter = PARAMETER_BY_NAME.get(name);
@@ -462,6 +467,23 @@ function normalizeReadingForDB(name, value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return null;
   return Number(n.toFixed(parameter?.type === "real32" ? 3 : 2));
+}
+
+function systemDateTimeString(value = new Date(), { iso = false } = {}) {
+  const date = value instanceof Date ? value : new Date(value);
+  const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
+  const pad = (number, size = 2) => String(number).padStart(size, "0");
+  const datePart = [
+    safeDate.getFullYear(),
+    pad(safeDate.getMonth() + 1),
+    pad(safeDate.getDate()),
+  ].join("-");
+  const timePart = [
+    pad(safeDate.getHours()),
+    pad(safeDate.getMinutes()),
+    pad(safeDate.getSeconds()),
+  ].join(":");
+  return `${datePart}${iso ? "T" : " "}${timePart}.${pad(safeDate.getMilliseconds(), 3)}`;
 }
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -494,6 +516,13 @@ function buildLeakSignature(readings, { includeCycleTime = false } = {}) {
   };
   if (includeCycleTime) signature.cycle_time = Number.parseInt(readings.cycle_time, 10) || null;
   return JSON.stringify(signature);
+}
+
+function getFallbackDevices(envName, defaults = []) {
+  return String(process.env[envName] || defaults.join(","))
+    .split(",")
+    .map((item) => item.trim().toUpperCase())
+    .filter(Boolean);
 }
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -737,9 +766,9 @@ function getShotTime(row = {}) {
 
 function getShotStatusLabel(value) {
   const status = Number(value);
-  if (status === 1) return "OK Shot";
-  if (status === 3) return "Warm Up Shot";
-  if (status === 5) return "Off Shot";
+  if (status === 1) return "OK";
+  if (status === 3) return "Warm Up";
+  if (status === 5) return "NG";
   return value;
 }
 
@@ -963,31 +992,12 @@ async function getLatestReadingsForMachines(machineSnapshots = getMachines()) {
       const machineKey = machine.key || machine.ip;
       const machineIp = machine.ip || machine.key;
       const { rows } = await db.query(
-        `WITH candidates AS (
-          SELECT * FROM (
-            SELECT TOP 1 *
-            FROM ${TABLE}
-            WHERE machine_key = ?
-            ORDER BY recorded_at DESC, id DESC
-          ) by_machine_key
-          UNION ALL
-          SELECT * FROM (
-            SELECT TOP 1 *
-            FROM ${TABLE}
-            WHERE plc_ip = ?
-            ORDER BY recorded_at DESC, id DESC
-          ) by_plc_ip
-          UNION ALL
-          SELECT * FROM (
-            SELECT TOP 1 *
-            FROM ${TABLE}
-            WHERE plc_ip = ?
-            ORDER BY recorded_at DESC, id DESC
-          ) by_legacy_key
-        )
-        SELECT TOP 1 *
-        FROM candidates
-        ORDER BY recorded_at DESC, id DESC`,
+        `SELECT TOP 1 *
+         FROM ${TABLE}
+         WHERE machine_key = ?
+            OR plc_ip = ?
+            OR plc_ip = ?
+         ORDER BY recorded_at DESC, id DESC`,
         [machineKey, machineIp, machineKey]
       );
       if (rows[0]) {
@@ -997,23 +1007,30 @@ async function getLatestReadingsForMachines(machineSnapshots = getMachines()) {
   }
 
   if (leakMachines.length) {
-    const machineIps = Array.from(new Set(leakMachines.map((m) => m.ip).filter(Boolean)));
-    const valuesSql = machineIps.map(() => "(?)").join(", ");
+    const machineTargets = Array.from(
+      new Map(
+        leakMachines
+          .filter((m) => m.ip)
+          .map((m) => [m.ip, { ip: m.ip, port: Number(m.port || 1027) }])
+      ).values()
+    );
+    const valuesSql = machineTargets.map(() => "(?, ?)").join(", ");
+    const values = machineTargets.flatMap((target) => [target.ip, target.port]);
 
     const { rows } = await db.query(
-      `WITH target_machines(plc_ip) AS (
-        SELECT * FROM (VALUES ${valuesSql}) AS target(plc_ip)
+      `WITH target_machines(plc_ip, plc_port) AS (
+        SELECT * FROM (VALUES ${valuesSql}) AS target(plc_ip, plc_port)
       )
       SELECT latest.*
       FROM target_machines target
       OUTER APPLY (
-        SELECT
+        SELECT TOP 1
           leak.[Id] AS id,
           CAST(leak.[Cycle_End_Time] AS DATETIME2(3)) AS recorded_at,
           CAST(leak.[Cycle_End_Time] AS DATETIME2(3)) AS cycle_end_time,
           leak.[Machine] AS machine_name,
           leak.[PLC_IP] AS plc_ip,
-          1027 AS plc_port,
+          target.plc_port AS plc_port,
           leak.[Machine] AS machine,
           leak.[PLC_IP] AS ip,
           leak.[Status] AS status,
@@ -1030,13 +1047,13 @@ async function getLatestReadingsForMachines(machineSnapshots = getMachines()) {
           leak.[Wey] AS wey,
           leak.[Both] AS both,
           leak.[Cycle_Time] AS cycle_time
-        FROM ${LEAK_TEST_TABLE}
+        FROM ${LEAK_TEST_TABLE} leak
         WHERE leak.[PLC_IP] = target.plc_ip
         ORDER BY leak.[Cycle_End_Time] DESC, leak.[Id] DESC
       ) latest
       WHERE latest.id IS NOT NULL
       ORDER BY latest.plc_ip`,
-      machineIps
+      values
     );
     rows.forEach((row) => rowByKey.set(String(row.plc_ip), row));
   }
@@ -1084,6 +1101,7 @@ async function getReadingHistory({ ip, limit = 200, from, to } = {}) {
     const values = [targetMachine.ip || targetId];
     if (from) { filters.push("CAST(Cycle_End_Time AS DATETIME2(3)) >= ?"); values.push(from); }
     if (to) { filters.push("CAST(Cycle_End_Time AS DATETIME2(3)) < DATEADD(day, 1, CAST(? AS date))"); values.push(to); }
+    values.push(Number(targetMachine.port || 1027));
 
     const { rows } = await db.query(
       `WITH leak_rows AS (
@@ -1106,7 +1124,7 @@ async function getReadingHistory({ ip, limit = 200, from, to } = {}) {
         [Id] AS id,
         CAST([Cycle_End_Time] AS DATETIME2(3)) AS recorded_at,
         CAST([Cycle_End_Time] AS DATETIME2(3)) AS cycle_end_time,
-        [Machine] AS machine_name, [PLC_IP] AS plc_ip, 1027 AS plc_port,
+        [Machine] AS machine_name, [PLC_IP] AS plc_ip, ? AS plc_port,
         [Machine] AS machine, [PLC_IP] AS ip, [Status] AS status,
         [Part_QR_Code] AS part_name, [Part_QR_Code] AS part_qr_code,
         [Part_QR_Code] AS scan_data, [Body_Leak_Value] AS body_leak_value,
@@ -1274,8 +1292,46 @@ function buildUbeTimestampSaveKey(machine, readings = {}) {
   const shotTime = normalizeReadingForDB("shot_time", readings.shot_time);
   if (shotDate && shotTime) return `${machineKey}:${shotDate}:${shotTime}`;
 
+  const cycleEndTime = normalizeReadingForDB("cycle_end_time", readings.cycle_end_time);
+  if (cycleEndTime) return `${machineKey}:cycle-end:${cycleEndTime}`;
+
   const shotDateTime = normalizeReadingForDB("shot_datetime", readings.shot_datetime);
   return shotDateTime ? `${machineKey}:${shotDateTime}` : null;
+}
+
+async function applyCycleMinorStoppage(machine, readings = {}) {
+  readings.minor_stoppage = 0;
+  readings["MINOR STOPPAGE sec."] = 0;
+
+  const currentCycleStart = normalizeReadingForDB("cycle_start_time", readings.cycle_start_time);
+  if (!currentCycleStart) return;
+
+  const { rows } = await db.query(
+    `SELECT TOP 1 cycle_end_time
+     FROM ${TABLE}
+     WHERE (machine_key = ? OR plc_ip = ?)
+       AND cycle_end_time IS NOT NULL
+       AND cycle_end_time <= ?
+     ORDER BY cycle_end_time DESC, id DESC`,
+    [machine.key || machine.ip, machine.ip, currentCycleStart]
+  );
+
+  const previousCycleEnd = rows[0]?.cycle_end_time ? new Date(rows[0].cycle_end_time) : null;
+  const currentStartDate = new Date(currentCycleStart);
+  if (
+    !previousCycleEnd ||
+    Number.isNaN(previousCycleEnd.getTime()) ||
+    Number.isNaN(currentStartDate.getTime())
+  ) {
+    return;
+  }
+
+  const stoppageSeconds = (currentStartDate.getTime() - previousCycleEnd.getTime()) / 1000;
+  if (!Number.isFinite(stoppageSeconds)) return;
+
+  const value = Number(Math.max(0, stoppageSeconds).toFixed(2));
+  readings.minor_stoppage = value;
+  readings["MINOR STOPPAGE sec."] = value;
 }
 
 async function saveToDB(machine, partName, readings) {
@@ -1296,7 +1352,11 @@ async function saveToDB(machine, partName, readings) {
 
 async function saveToDBUnlocked(machine, partName, readings) {
   const columns = ["recorded_at", "machine_key", "machine_name", "plc_ip", "plc_port", "part_name"];
-  const plcRecordedAt = normalizeReadingForDB("shot_datetime", readings.shot_datetime);
+  await applyCycleMinorStoppage(machine, readings);
+
+  const plcRecordedAt =
+    normalizeReadingForDB("cycle_end_time", readings.cycle_end_time) ||
+    normalizeReadingForDB("shot_datetime", readings.shot_datetime);
   const shotDate = normalizeReadingForDB("shot_date", readings.shot_date);
   const shotTime = normalizeReadingForDB("shot_time", readings.shot_time);
   const shotNumber = normalizeReadingForDB("shot_number", readings.shot_number ?? readings["SHOT NO."]);
@@ -1386,7 +1446,8 @@ async function saveToDBUnlocked(machine, partName, readings) {
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function saveLeakTestToDB(machine, partName, readings) {
-  const recordedAt = readings.cycle_end_time ? new Date(readings.cycle_end_time) : new Date();
+  const recordedAtDate = readings.cycle_end_time ? new Date(readings.cycle_end_time) : new Date();
+  const recordedAt = systemDateTimeString(recordedAtDate);
   const runningMode = Number(readings.auto_bit) === 1 ? "AUTO" : "MANUAL";
   const result = normalizeLeakResult(readings.result);
   const status = result || null;
@@ -1452,6 +1513,14 @@ async function saveLeakTestToDB(machine, partName, readings) {
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function ensureTable() {
+  await db.run(`
+IF COL_LENGTH('${TABLE}', 'cycle_start_time') IS NULL ALTER TABLE ${TABLE} ADD [cycle_start_time] DATETIME2(3) NULL;
+IF COL_LENGTH('${TABLE}', 'cycle_end_time') IS NULL ALTER TABLE ${TABLE} ADD [cycle_end_time] DATETIME2(3) NULL;
+IF COL_LENGTH('${TABLE}', 'cycle_duration') IS NULL ALTER TABLE ${TABLE} ADD [cycle_duration] DECIMAL(18,2) NULL;
+IF COL_LENGTH('${TABLE}', 'actual_cycle_time') IS NULL ALTER TABLE ${TABLE} ADD [actual_cycle_time] DECIMAL(18,2) NULL;
+IF COL_LENGTH('${TABLE}', 'plc_cycle_time') IS NULL ALTER TABLE ${TABLE} ADD [plc_cycle_time] DECIMAL(18,2) NULL;
+`);
+
   const columnDefinitions = [
     ...getReadingNames().map((name) => [name, readingSqlType(name)]),
     ...Array.from(new Set(Object.values(LEGACY_COLUMNS_BY_PARAMETER))).map((name) => [
@@ -2057,6 +2126,92 @@ SELECT
   ].every((key) => Number(schema[key]) === 1);
 }
 
+async function ensureCriticalUbeSaveColumns() {
+  await db.run(`
+IF OBJECT_ID(N'${TABLE}', N'U') IS NOT NULL
+BEGIN
+  IF COL_LENGTH('${TABLE}', 'shot_date') IS NULL
+  BEGIN
+    ALTER TABLE ${TABLE} ADD [shot_date] DATE NULL
+  END
+
+  IF COL_LENGTH('${TABLE}', 'shot_time') IS NULL
+  BEGIN
+    ALTER TABLE ${TABLE} ADD [shot_time] TIME(0) NULL
+  END
+
+  IF COL_LENGTH('${TABLE}', 'shot_datetime') IS NULL
+  BEGIN
+    ALTER TABLE ${TABLE} ADD [shot_datetime] DATETIME2(0) NULL
+  END
+
+  IF COL_LENGTH('${TABLE}', 'shot_year') IS NULL
+  BEGIN
+    ALTER TABLE ${TABLE} ADD [shot_year] NVARCHAR(2) NULL
+  END
+
+  IF COL_LENGTH('${TABLE}', 'shot_month') IS NULL
+  BEGIN
+    ALTER TABLE ${TABLE} ADD [shot_month] NVARCHAR(2) NULL
+  END
+
+  IF COL_LENGTH('${TABLE}', 'shot_day') IS NULL
+  BEGIN
+    ALTER TABLE ${TABLE} ADD [shot_day] NVARCHAR(2) NULL
+  END
+
+  IF COL_LENGTH('${TABLE}', 'shot_hour') IS NULL
+  BEGIN
+    ALTER TABLE ${TABLE} ADD [shot_hour] NVARCHAR(2) NULL
+  END
+
+  IF COL_LENGTH('${TABLE}', 'shot_minute') IS NULL
+  BEGIN
+    ALTER TABLE ${TABLE} ADD [shot_minute] NVARCHAR(2) NULL
+  END
+
+  IF COL_LENGTH('${TABLE}', 'shot_second') IS NULL
+  BEGIN
+    ALTER TABLE ${TABLE} ADD [shot_second] NVARCHAR(2) NULL
+  END
+
+  IF COL_LENGTH('${TABLE}', 'shot_number') IS NULL
+  BEGIN
+    ALTER TABLE ${TABLE} ADD [shot_number] INT NULL
+  END
+
+  IF COL_LENGTH('${TABLE}', 'cycle_time') IS NULL
+  BEGIN
+    ALTER TABLE ${TABLE} ADD [cycle_time] DECIMAL(18,2) NULL
+  END
+
+  IF COL_LENGTH('${TABLE}', 'minor_stoppage') IS NULL
+  BEGIN
+    ALTER TABLE ${TABLE} ADD [minor_stoppage] DECIMAL(18,2) NULL
+  END
+
+  IF COL_LENGTH('${TABLE}', 'ok_shot') IS NULL
+  BEGIN
+    ALTER TABLE ${TABLE} ADD [ok_shot] INT NULL
+  END
+
+  IF COL_LENGTH('${TABLE}', 'ng_counter') IS NULL
+  BEGIN
+    ALTER TABLE ${TABLE} ADD [ng_counter] INT NULL
+  END
+
+  IF COL_LENGTH('${TABLE}', 'minor_stoppage_machine') IS NULL
+  BEGIN
+    ALTER TABLE ${TABLE} ADD [minor_stoppage_machine] DECIMAL(18,2) NULL
+  END
+
+  IF COL_LENGTH('${TABLE}', 'raw_readings_json') IS NULL
+  BEGIN
+    ALTER TABLE ${TABLE} ADD [raw_readings_json] NVARCHAR(MAX) NULL
+  END
+END`);
+}
+
 async function backfillRecentMinorStoppageMachine() {
   if (String(process.env.PLC_MINOR_STOPPAGE_MACHINE_ENABLED || "false").toLowerCase() !== "true") {
     return;
@@ -2100,10 +2255,55 @@ BEGIN
 END`);
 }
 
+async function backfillRecentMinorStoppage() {
+  await db.run(`
+IF OBJECT_ID(N'${TABLE}', N'U') IS NOT NULL
+   AND COL_LENGTH('${TABLE}', 'minor_stoppage') IS NOT NULL
+   AND COL_LENGTH('${TABLE}', 'cycle_start_time') IS NOT NULL
+   AND COL_LENGTH('${TABLE}', 'cycle_end_time') IS NOT NULL
+BEGIN
+  ;WITH recent_rows AS (
+    SELECT TOP (5000)
+      [id],
+      [machine_key],
+      [plc_ip],
+      [cycle_start_time],
+      [cycle_end_time]
+    FROM ${TABLE}
+    WHERE [cycle_start_time] IS NOT NULL
+    ORDER BY [id] DESC
+  ),
+  ordered AS (
+    SELECT
+      [id],
+      [cycle_start_time],
+      LAG([cycle_end_time]) OVER (
+        PARTITION BY COALESCE([machine_key], [plc_ip])
+        ORDER BY [cycle_start_time] ASC, [id] ASC
+      ) AS previous_cycle_end_time
+    FROM recent_rows
+  )
+  UPDATE target
+  SET [minor_stoppage] = CAST(
+    CASE
+      WHEN ordered.previous_cycle_end_time IS NULL THEN 0
+      WHEN DATEDIFF(second, ordered.previous_cycle_end_time, ordered.cycle_start_time) < 0 THEN 0
+      ELSE DATEDIFF(second, ordered.previous_cycle_end_time, ordered.cycle_start_time)
+    END AS DECIMAL(18,2)
+  )
+  FROM ${TABLE} target
+  INNER JOIN ordered ON target.[id] = ordered.[id]
+END`);
+}
+
 function ensureTableOnce() {
   if (!schemaReadyPromise) {
     schemaReadyPromise = (async () => {
-      if (!(await hasUsablePlcSchema())) await ensureTable();
+      await ensureCriticalUbeSaveColumns();
+      if (!(await hasUsablePlcSchema())) {
+        await ensureTable();
+      }
+      await backfillRecentMinorStoppage();
       await backfillRecentMinorStoppageMachine();
     })().catch((err) => {
       schemaReadyPromise = null;
@@ -2382,7 +2582,7 @@ function startPlcMonitor(io) {
 
   // â”€â”€ UBE: Read All Registers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-  const readAll = async (machine, sock, { persist = true, emit = true, liveOnly = false } = {}) => {
+  const readAll = async (machine, sock, { persist = true, emit = true, liveOnly = false, cycleTiming = null } = {}) => {
     const readings = {};
     const rawCache = new Map();
     const now = new Date();
@@ -2461,6 +2661,30 @@ function startPlcMonitor(io) {
         readings[legacyColumn] = readings[parameterName];
       }
     }
+
+    if (cycleTiming?.startedAt && cycleTiming?.endedAt) {
+      const startedAt = cycleTiming.startedAt instanceof Date
+        ? cycleTiming.startedAt
+        : new Date(cycleTiming.startedAt);
+      const endedAt = cycleTiming.endedAt instanceof Date
+        ? cycleTiming.endedAt
+        : new Date(cycleTiming.endedAt);
+      const durationSec = Number.isFinite(Number(cycleTiming.durationSec))
+        ? Number(cycleTiming.durationSec)
+        : Number(((endedAt - startedAt) / 1000).toFixed(2));
+
+      if (Number.isFinite(durationSec) && durationSec >= 0) {
+        readings.plc_cycle_time = readings.cycle_time ?? readings["CYCLE TIME sec."] ?? null;
+        readings.cycle_start_time = startedAt.toISOString();
+        readings.cycle_end_time = endedAt.toISOString();
+        readings.cycle_duration = durationSec;
+        readings.actual_cycle_time = durationSec;
+        readings.cycle_time = durationSec;
+        readings["CYCLE TIME sec."] = durationSec;
+      }
+    }
+
+    await applyCycleMinorStoppage(machine, readings);
 
     readings.minor_stoppage_machine = null;
 
@@ -2616,15 +2840,22 @@ function startPlcMonitor(io) {
     const readings = {};
     const rawCache = new Map();
     const now = cycleEndAt instanceof Date ? cycleEndAt : new Date(cycleEndAt);
+    const timestamp = systemDateTimeString(now, { iso: true });
     const machineKey = machine.key || machine.ip;
     const machineType = "leaktest";
     const currentState = machineState.get(machineKey) || {};
     const readParameters = Array.isArray(machine.registerConfig) && machine.registerConfig.length
       ? machine.registerConfig.filter((parameter) => parameter.enabled !== false)
       : LEAK_TEST_PARAMETERS;
+    let configuredQrDevice = "";
+    let configuredQrLength = 14;
 
     for (const parameter of readParameters) {
       const { name, device, stringDevice, stringLength } = parameter;
+      if (name === "part_qr_code") {
+        configuredQrDevice = stringDevice || device || configuredQrDevice;
+        configuredQrLength = Number(stringLength || configuredQrLength || 14);
+      }
       try {
         if (stringDevice) {
           readings[name] = await readString(sock, stringDevice, stringLength || 11);
@@ -2657,6 +2888,23 @@ function startPlcMonitor(io) {
       }
     }
 
+    if (!String(readings.part_qr_code || "").trim()) {
+      const qrFallbackDevices = getFallbackDevices("PLC_LEAK_SCAN_FALLBACK_DEVICES", [
+        configuredQrDevice || "D101",
+        "D100",
+        "D102",
+      ]);
+      for (const fallbackDevice of qrFallbackDevices) {
+        if (!fallbackDevice || fallbackDevice === configuredQrDevice) continue;
+        const fallbackQr = await readString(sock, fallbackDevice, configuredQrLength || 14).catch(() => "");
+        if (String(fallbackQr || "").trim()) {
+          readings.part_qr_code = fallbackQr;
+          readings.scan_source_device = fallbackDevice;
+          break;
+        }
+      }
+    }
+
     readings.scan_data = readings.part_qr_code || "";
     readings.part_qr_code = readings.scan_data;
     readings.result = normalizeLeakResult(readings.result);
@@ -2665,8 +2913,8 @@ function startPlcMonitor(io) {
     readings.ip = machine.ip;
     readings.status = readings.result || "CYCLE COMPLETE";
     readings.cycle_end_time = liveOnly
-      ? currentState.lastCycleAt || null
-      : now.toISOString();
+      ? currentState.lastCycleAt || timestamp
+      : timestamp;
     readings.running_mode = Number(readings.auto_bit) === 1 ? "Auto" : "Manual";
 
     const payload = {
@@ -2679,8 +2927,8 @@ function startPlcMonitor(io) {
       }),
       readings: formatReadingsForClient(readings, machine.kind),
       cycleTime: readings.cycle_time,
-      timestamp: liveOnly ? currentState.lastCycleAt || null : now.toISOString(),
-      observedAt: now.toISOString(),
+      timestamp: liveOnly ? currentState.lastCycleAt || timestamp : timestamp,
+      observedAt: timestamp,
       liveOnly,
       config: {
         key: machineKey,
@@ -2820,6 +3068,8 @@ function startPlcMonitor(io) {
       readings: finalReadings,
       partName: lastPayload.partName,
       observedAt: lastPayload.observedAt || lastPayload.timestamp,
+      firstObservedAt: lastPayload.observedAt || lastPayload.timestamp,
+      signature,
       saved: true,
     });
 
@@ -2858,19 +3108,24 @@ function startPlcMonitor(io) {
 
   // â”€â”€ Leak Test: Persist Snapshot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-  const persistLeakSnapshot = async (machine, snapshot, cycleEndAt, trigger = "transition") => {
+  const persistLeakSnapshot = async (machine, snapshot, cycleEndAt, trigger = "transition", options = {}) => {
     if (!snapshot?.readings || snapshot.saved) return { skipped: true, reason: "empty-snapshot" };
 
     const readings = {
       ...snapshot.readings,
-      cycle_end_time: (cycleEndAt instanceof Date ? cycleEndAt : new Date(cycleEndAt)).toISOString(),
+      cycle_end_time: systemDateTimeString(
+        cycleEndAt instanceof Date ? cycleEndAt : new Date(cycleEndAt),
+        { iso: true }
+      ),
     };
     const machineKey = machine.key || machine.ip;
     const machineType = "leaktest";
     const signature = buildLeakSignature(readings);
     const previousSaved = lastLeakSnapshots.get(machineKey);
 
-    if (previousSaved?.signature === signature) return { skipped: true, reason: "duplicate-signature" };
+    if (!options.allowSameSignature && previousSaved?.signature === signature) {
+      return { skipped: true, reason: "duplicate-signature" };
+    }
     if (!hasStableLeakReadings(readings)) return { skipped: true, reason: "unstable-snapshot" };
 
     const saveResult = await saveLeakTestToDB(machine, snapshot.partName, readings);
@@ -3067,6 +3322,10 @@ function startPlcMonitor(io) {
 
                 if (hasStableLeakReadings(probeReadings)) {
                   const previousLive = lastLeakLiveSnapshots.get(machineKey);
+                  const currentSignature = buildLeakSignature(probeReadings);
+                  const previousSignature = previousLive?.signature ||
+                    (previousLive?.readings ? buildLeakSignature(previousLive.readings) : null);
+                  const sameLiveSignature = previousSignature === currentSignature;
                   const currentQr = String(probeReadings.part_qr_code || "").trim();
                   const previousQr = String(previousLive?.readings?.part_qr_code || "").trim();
                   const currentCycleTime = Number(probeReadings.cycle_time || 0);
@@ -3076,6 +3335,15 @@ function startPlcMonitor(io) {
                     previousCycleTime >
                     Number(process.env.PLC_LEAK_MIN_COMPLETE_CYCLE_TIME_SEC || 3) &&
                     currentCycleTime + 1 < previousCycleTime;
+                  const fallbackSaveMs = Number(process.env.PLC_LEAK_PERIODIC_SAVE_MS || 60000);
+                  const previousObservedMs = previousLive?.firstObservedAt || previousLive?.observedAt
+                    ? new Date(previousLive.firstObservedAt || previousLive.observedAt).getTime()
+                    : 0;
+                  const fallbackDue =
+                    fallbackSaveMs > 0 &&
+                    previousObservedMs > 0 &&
+                    Date.now() - previousObservedMs >= fallbackSaveMs &&
+                    previousCycleTime >= Number(process.env.PLC_LEAK_MIN_COMPLETE_CYCLE_TIME_SEC || 3);
 
                   if (LEAK_CHANGE_SAVE_ENABLED && previousLive && (qrChanged || cycleTimeReset)) {
                     await persistLeakSnapshot(
@@ -3093,12 +3361,33 @@ function startPlcMonitor(io) {
                         error.message
                       );
                     });
+                  } else if (previousLive && fallbackDue) {
+                    await persistLeakSnapshot(
+                      machine,
+                      previousLive,
+                      new Date(previousLive.observedAt || Date.now()),
+                      "timed-fallback",
+                      { allowSameSignature: true }
+                    ).catch((error) => {
+                      updateMachineState(machine, {
+                        connected: true,
+                        error: `DB save failed: ${error.message}`,
+                      });
+                      console.error(
+                        `Leak test timed fallback save failed for ${machineKey}:`,
+                        error.message
+                      );
+                    });
                   }
 
                   lastLeakLiveSnapshots.set(machineKey, {
                     readings: probeReadings,
                     partName: probePayload.partName || currentQr || "",
                     observedAt: probePayload.observedAt || new Date().toISOString(),
+                    firstObservedAt: sameLiveSignature && !previousLive?.saved
+                      ? previousLive.firstObservedAt || previousLive.observedAt || probePayload.observedAt || new Date().toISOString()
+                      : probePayload.observedAt || new Date().toISOString(),
+                    signature: currentSignature,
                     saved: false,
                   });
                 }
@@ -3116,6 +3405,8 @@ function startPlcMonitor(io) {
 
         // â”€ UBE LOOP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+        let lastCycleStartBit = await readBit(sock, CYCLE_START_DEVICE).catch(() => 0);
+        let cycleStartAt = lastCycleStartBit === 1 ? new Date() : null;
         let lastCycleEndBit = 0;
         let cycleEndHandled = false;
         let lastLiveReadAt = 0;
@@ -3126,13 +3417,15 @@ function startPlcMonitor(io) {
           if (!monitoringRunning) { await sleep(UBE_CYCLE_END_POLL_MS); continue; }
 
           const loopStartedAt = Date.now();
+          let cycleStart = lastCycleStartBit;
           let cycleEnd = lastCycleEndBit;
           try {
+            cycleStart = await readBit(sock, CYCLE_START_DEVICE);
             cycleEnd = await readBit(sock, CYCLE_END_DEVICE);
             consecutiveReadFailures = 0;
           } catch (error) {
             if (isPlcReadTimeoutError(error)) {
-              await refreshSocketAfterTimeout(`cycle-end ${CYCLE_END_DEVICE}`);
+              await refreshSocketAfterTimeout(`cycle bits ${CYCLE_START_DEVICE}/${CYCLE_END_DEVICE}`);
               consecutiveReadFailures = 0;
               lastLiveReadAt = 0;
               await sleep(UBE_CYCLE_END_POLL_MS);
@@ -3147,21 +3440,42 @@ function startPlcMonitor(io) {
               throw new Error(`PLC connection stale after ${consecutiveReadFailures} read failures: ${error.message}`);
             }
           }
+          const cycleStartedNow = cycleStart === 1 && lastCycleStartBit !== 1;
           const cycleEndedNow = cycleEnd === 1 && lastCycleEndBit !== 1;
           const shouldCaptureCycle = cycleEnd === 1 && !cycleEndHandled;
 
-          if (shouldCaptureCycle) {
-            cycleEndHandled = true;
+          if (cycleStartedNow) {
+            cycleStartAt = new Date(loopStartedAt);
+            cycleEndHandled = false;
             updateMachineState(machine, {
               connected: true,
               error: null,
+              shotStatus: `Cycle started on ${CYCLE_START_DEVICE}; waiting for ${CYCLE_END_DEVICE}.`,
+            });
+          }
+
+          if (shouldCaptureCycle) {
+            cycleEndHandled = true;
+            const cycleEndAt = new Date();
+            const durationSec = cycleStartAt
+              ? Number(((cycleEndAt - cycleStartAt) / 1000).toFixed(2))
+              : null;
+            updateMachineState(machine, {
+              connected: true,
+              error: cycleStartAt ? null : `Cycle end received without ${CYCLE_START_DEVICE} start timestamp.`,
               shotStatus: cycleEndedNow
-                ? "Cycle ended; waiting 2 seconds before PLC snapshot."
-                : "Cycle end is ON; waiting 2 seconds before PLC snapshot.",
+                ? `Cycle ended; duration ${durationSec ?? "-"} sec. Waiting before PLC snapshot.`
+                : `Cycle end is ON; duration ${durationSec ?? "-"} sec. Waiting before PLC snapshot.`,
             });
 
             await sleep(UBE_CYCLE_END_DELAY_MS);
-            await readAll(machine, sock, { persist: true, emit: true }).catch(async (error) => {
+            await readAll(machine, sock, {
+              persist: true,
+              emit: true,
+              cycleTiming: cycleStartAt && durationSec !== null
+                ? { startedAt: cycleStartAt, endedAt: cycleEndAt, durationSec }
+                : null,
+            }).catch(async (error) => {
               if (isPlcReadTimeoutError(error)) {
                 await refreshSocketAfterTimeout("cycle snapshot");
                 return;
@@ -3171,6 +3485,7 @@ function startPlcMonitor(io) {
                 error: `Cycle snapshot failed: ${error.message}`,
               });
             });
+            cycleStartAt = null;
           } else if (loopStartedAt - lastLiveReadAt >= UBE_LIVE_READ_MS) {
             lastLiveReadAt = loopStartedAt;
             let liveReadError = null;
@@ -3203,40 +3518,19 @@ function startPlcMonitor(io) {
             if (currentShotNumber !== null && currentShotNumber !== undefined) {
               if (lastSeenShotNumber === null) {
                 lastSeenShotNumber = currentShotNumber;
-                await readAll(machine, sock, { persist: true, emit: true }).catch(async (error) => {
-                  if (isPlcReadTimeoutError(error)) {
-                    await refreshSocketAfterTimeout("initial shot snapshot");
-                    return;
-                  }
-                  updateMachineState(machine, {
-                    connected: true,
-                    error: `Shot snapshot failed: ${error.message}`,
-                  });
-                });
               } else if (currentShotNumber !== lastSeenShotNumber) {
                 lastSeenShotNumber = currentShotNumber;
                 updateMachineState(machine, {
                   connected: true,
                   error: null,
-                  shotStatus: "Shot number changed; waiting before PLC snapshot.",
-                });
-                await sleep(UBE_CYCLE_END_DELAY_MS);
-                await readAll(machine, sock, { persist: true, emit: true }).catch(async (error) => {
-                  if (isPlcReadTimeoutError(error)) {
-                    await refreshSocketAfterTimeout("shot-change snapshot");
-                    return;
-                  }
-                  updateMachineState(machine, {
-                    connected: true,
-                    error: `Shot snapshot failed: ${error.message}`,
-                  });
+                  shotStatus: "Shot number changed; waiting for cycle end signal.",
                 });
               }
             }
           }
 
           if (cycleEnd === 0) cycleEndHandled = false;
-
+          lastCycleStartBit = cycleStart;
           lastCycleEndBit = cycleEnd;
           await sleep(UBE_CYCLE_END_POLL_MS);
         }

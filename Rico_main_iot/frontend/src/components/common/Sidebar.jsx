@@ -1,250 +1,259 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
+import {
+  Activity,
+  AlertTriangle,
+  Bell,
+  Building,
+  Building2,
+  ChevronLeft,
+  ChevronRight,
+  Cpu,
+  LayoutDashboard,
+  LayoutGrid,
+  ListChecks,
+  Monitor,
+  Settings,
+  Wrench,
+  Users,
+  FileText,
+  Map,
+} from "lucide-react";
 import BrandLogo from "./BrandLogo";
 import { getStats } from "../../services/api";
 import { useSidebar } from "../../context/SidebarContext";
-import { externalApps, productionItems, ricoOrganisationItems } from "../../config/navigation";
 
-const iconClass = "h-5 w-5";
-
-const isItemActive = (item, location) => {
-  const [pathname, search = ""] = item.to.split("?");
-  const searchStr = search ? "?" + search : "";
-  if (searchStr) return location.pathname === pathname && location.search === searchStr;
-  if (item.exact) return location.pathname === pathname && !location.search;
-  return location.pathname === pathname;
+const badgeStyles = {
+  gray: "bg-gray-100 text-gray-600",
+  blue: "bg-blue-100 text-blue-700",
+  green: "bg-green-100 text-green-700",
+  amber: "bg-amber-100 text-amber-700",
 };
 
-const NavRow = ({ item, count, collapsed }) => {
+const navSections = [
+  {
+    title: "Overview",
+    items: [
+      { label: "Dashboard", to: "/dashboard", icon: LayoutDashboard, permission: "reports:view" },
+      { label: "Alerts", to: "/alerts", icon: Bell, badge: { text: "3", type: "amber" }, permission: "reports:view" },
+      { label: "Digital Workstation", to: "/operator-workstation", icon: Monitor, badgeKey: "workstations", badgeType: "gray", permission: "workstation:view", newTab: true },
+      { label: "Real Time Monitor", to: "/plc-monitor", icon: Activity, badge: { text: "Live", type: "green" }, permission: "plc:view" },
+      { label: "Downtime Tracker", to: "/downtime-tracker", icon: AlertTriangle, permission: "downtime:view" },
+      { label: "My Report", to: "/plc-report", icon: FileText, permission: "reports:view" },
+    ],
+  },
+  {
+    title: "Master Setup",
+    items: [
+      { label: "Plant Manager", to: "/settings/locations", icon: Building2, permission: "master:manage" },
+      { label: "Department Manager", to: "/settings/departments", icon: Building, permission: "master:manage" },
+      { label: "Line Manager", to: "/lines", icon: LayoutGrid, badgeKey: "lines", badgeType: "gray", permission: "master:manage" },
+      { label: "Machine Manager", to: "/machines", activePaths: ["/machine"], icon: Cpu, badgeKey: "machines", badgeType: "blue", permission: "master:manage" },
+      { label: "Part Manager", to: "/parts", activePaths: ["/part"], icon: Wrench, badgeKey: "parts", badgeType: "gray", permission: "master:manage" },
+      { label: "Operation Manager", to: "/operations", icon: ListChecks, permission: "master:manage" },
+    ],
+  },
+  {
+    title: "Administration",
+    items: [
+      { label: "User & Role Access", to: "/access-control", icon: Users, permission: "roles:manage" },
+      { label: "System Settings", to: "/system-settings", icon: Settings, permission: "system:config" },
+    ],
+  },
+  {
+    title: "External Apps",
+    items: [
+      { label: "Traceability", href: "http://192.168.100.137:9090", icon: Map, permission: "traceability:view", external: true },
+    ],
+  },
+];
+
+function hasPermission(user, permission) {
+  if (!permission) return true;
+  const permissions = Array.isArray(user?.permissions) ? user.permissions : [];
+  const managePermission = permission.replace(":view", ":manage");
+  return permissions.includes(permission) || permissions.includes(managePermission) || permissions.includes("roles:manage");
+}
+
+function isActivePath(item, location) {
+  if (!item.to) return false;
+  if (item.activePaths?.some((path) => location.pathname === path || location.pathname.startsWith(`${path}/`))) return true;
+  if (item.to === "/dashboard") return location.pathname === "/dashboard";
+  return location.pathname === item.to || location.pathname.startsWith(`${item.to}/`);
+}
+
+function Badge({ badge }) {
+  if (!badge) return null;
+  return (
+    <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${badgeStyles[badge.type] || badgeStyles.gray}`}>
+      {badge.text}
+    </span>
+  );
+}
+
+function NavItem({ item, badge, collapsed }) {
   const location = useLocation();
   const { setMobileOpen } = useSidebar();
-  const active = isItemActive(item, location);
+  const Icon = item.icon;
+  const active = isActivePath(item, location);
+  const baseClass = `group relative flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors ${
+    collapsed ? "justify-center" : ""
+  }`;
+  const stateClass = item.disabled
+    ? "cursor-not-allowed text-gray-300"
+    : active
+      ? "bg-blue-50 font-medium text-blue-700"
+      : "text-gray-600 hover:bg-gray-100";
+  const iconClass = active ? "text-blue-600" : item.disabled ? "text-gray-300" : "text-gray-500";
+  const content = (
+    <>
+      <Icon size={18} className={`shrink-0 ${iconClass}`} strokeWidth={1.8} />
+      {!collapsed && (
+        <>
+          <span className="min-w-0 flex-1 truncate text-left">{item.label}</span>
+          <Badge badge={badge} />
+        </>
+      )}
+      {collapsed && (
+        <span className="pointer-events-none absolute left-full z-50 ml-2 whitespace-nowrap rounded-md bg-gray-900 px-2.5 py-1.5 text-xs font-semibold text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
+          {item.label}
+        </span>
+      )}
+    </>
+  );
+
+  if (item.external && item.href) {
+    return (
+      <a
+        href={item.href}
+        target="_blank"
+        rel="noreferrer"
+        title={collapsed ? item.label : ""}
+        onClick={() => setMobileOpen(false)}
+        className={`${baseClass} ${stateClass}`}
+      >
+        {content}
+      </a>
+    );
+  }
+
+  if (item.disabled || !item.to) {
+    return (
+      <button type="button" title={collapsed ? item.label : ""} disabled className={`${baseClass} ${stateClass}`}>
+        {content}
+      </button>
+    );
+  }
 
   return (
     <NavLink
       to={item.to}
-      title={item.label}
+      title={collapsed ? item.label : ""}
       target={item.newTab ? "_blank" : undefined}
       rel={item.newTab ? "noreferrer" : undefined}
       onClick={() => setMobileOpen(false)}
-      className={
-        "group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200 " +
-        (collapsed ? "justify-center " : "") +
-        (active
-          ? "bg-[#1976b8] text-white shadow-lg shadow-[#061a2e]/35"
-          : "text-[#b7c8dc] hover:bg-white/8 hover:text-white")
-      }
+      className={`${baseClass} ${stateClass}`}
     >
-      <span
-        className={
-          "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors " +
-          (active ? "bg-white/20 text-white" : "text-[#b7c8dc] group-hover:text-white")
-        }
-      >
-        <svg className={iconClass} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} d={item.icon} />
-        </svg>
-      </span>
-
-      {!collapsed && (
-        <>
-          <span className="min-w-0 flex-1 truncate">{item.label}</span>
-          {typeof count === "number" && count > 0 && (
-            <span
-              className={
-                "rounded-full px-2 py-0.5 text-[10px] font-bold " +
-                (active ? "bg-white/20 text-white" : "bg-white/10 text-[#b7c8dc]")
-              }
-            >
-              {count}
-            </span>
-          )}
-        </>
-      )}
-
-      {collapsed && (
-        <span className="pointer-events-none absolute left-full z-50 ml-3 whitespace-nowrap rounded-lg bg-[#092641] px-3 py-1.5 text-xs font-medium text-white opacity-0 shadow-xl transition-opacity group-hover:opacity-100">
-          {item.label}
-        </span>
-      )}
+      {content}
     </NavLink>
   );
-};
+}
 
-const Section = ({ title, items, counts, collapsed }) => {
-  const location = useLocation();
-  const [open, setOpen] = useState(true);
-  const hasActive = items.some((item) => isItemActive(item, location));
-
-  useEffect(() => {
-    if (hasActive) setOpen(true);
-  }, [hasActive]);
-
-  return (
-    <div className={collapsed ? "px-2" : "px-3"}>
-      {!collapsed && (
-        <button
-          type="button"
-          onClick={() => setOpen((o) => !o)}
-          className="flex w-full items-center justify-between px-3 py-1.5"
-        >
-          <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-[#7f9bb7]">{title}</p>
-          <svg
-            className={"h-3 w-3 text-[#7f9bb7] transition-transform " + (open ? "rotate-180" : "")}
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-          </svg>
-        </button>
-      )}
-      {collapsed && <div className="my-2 border-t border-white/10" />}
-      {(open || collapsed) && (
-        <div className="mt-1 space-y-1">
-          {items.map((item) => (
-            <NavRow
-              key={item.label}
-              item={item}
-              count={counts[item.countKey]}
-              collapsed={collapsed}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-};
-
-const Sidebar = () => {
-  const { collapsed, setCollapsed, mobileOpen, setMobileOpen } = useSidebar();
-  const [counts, setCounts] = useState({ parts: 0, machines: 0, operations: 0, lines: 0 });
+export default function Sidebar({ currentUser }) {
+  const { collapsed, setCollapsed, mobileOpen, setMobileOpen, hovered, setHovered } = useSidebar();
+  const [counts, setCounts] = useState({ lines: 25, machines: 1012, parts: 1129, workstations: 25 });
 
   useEffect(() => {
     let active = true;
-    getStats({ plant: "1002" })
+    getStats()
       .then((response) => {
         if (!active) return;
         const stats = response.data?.data || {};
-        setCounts({
-          parts: Number(stats?.total_parts || 0),
-          machines: Number(stats?.total_machines || 0),
-          operations: 0,
-          lines: Number(stats?.total_lines || 0),
-        });
+        setCounts((current) => ({
+          ...current,
+          lines: Number(stats.total_lines || current.lines),
+          machines: Number(stats.total_machines || current.machines),
+          parts: Number(stats.total_parts || current.parts),
+          workstations: Number(stats.total_lines || current.workstations),
+        }));
       })
       .catch(() => {});
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, []);
 
-  const formattedCounts = useMemo(() => counts, [counts]);
+  const visibleSections = useMemo(
+    () =>
+      navSections
+        .map((section) => ({
+          ...section,
+          items: section.items.filter((item) => hasPermission(currentUser, item.permission)),
+        }))
+        .filter((section) => section.items.length),
+    [currentUser]
+  );
+
+  const visualCollapsed = !mobileOpen && collapsed && !hovered;
+  const widthClass = visualCollapsed ? "w-[60px]" : "w-[220px]";
 
   return (
     <>
-      {/* Mobile Overlay */}
       {mobileOpen && (
-        <div
-          className="fixed inset-0 z-30 bg-black/50 lg:hidden"
-          onClick={() => setMobileOpen(false)}
-        />
+        <div className="fixed inset-0 z-30 bg-black/40 lg:hidden" onClick={() => setMobileOpen(false)} />
       )}
 
-      {/* Sidebar */}
       <aside
-        className={
-          "app-sidebar fixed left-0 top-0 z-40 flex h-screen flex-col border-r border-white/10 transition-all duration-300 ease-in-out " +
-          (collapsed ? "w-[72px] " : "w-72 ") +
-          (mobileOpen ? "translate-x-0 " : "-translate-x-full ") +
-          "lg:translate-x-0"
-        }
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        className={`fixed left-0 top-0 z-[60] flex h-screen flex-col border-r border-gray-200 bg-white transition-all duration-200 ${widthClass} ${
+          mobileOpen ? "translate-x-0" : "-translate-x-full"
+        } lg:translate-x-0`}
       >
-        {/* Header */}
-        <div
-          className={
-            "flex h-[78px] items-center border-b border-white/10 " +
-            (collapsed ? "justify-center px-3" : "justify-between gap-3 px-4")
-          }
-        >
-          {!collapsed && (
-            <div className="flex h-14 min-w-0 flex-1 flex-col items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-white px-4 py-1.5 shadow-lg shadow-black/10">
+        <div className="flex h-[78px] items-center justify-between border-b border-gray-100 px-4 py-4">
+          {!visualCollapsed && (
+            <div className="flex min-w-0 flex-col">
               <BrandLogo wordmark />
-              <span className="mt-0.5 max-w-full text-center text-[9px] font-extrabold uppercase leading-none tracking-[0.08em] text-[#0b4f86]">
+              <p className="mt-0.5 truncate text-[9px] font-extrabold uppercase leading-none tracking-[0.08em] text-[#0b4f86]">
                 Intelligence Manufacturing
-              </span>
+              </p>
             </div>
           )}
           <button
             type="button"
-            title={collapsed ? "Expand" : "Collapse"}
-            onClick={() => setCollapsed(!collapsed)}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#9ec7ec] transition-colors hover:bg-white/10 hover:text-white"
+            onClick={() => setCollapsed((current) => !current)}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100"
+            title={collapsed ? "Pin sidebar open" : "Collapse sidebar"}
           >
-            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2.2}
-                d={collapsed ? "M9 5l7 7-7 7" : "M15 19l-7-7 7-7"}
-              />
-            </svg>
+            {visualCollapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
           </button>
         </div>
 
-        {/* Nav */}
-        <div className="flex-1 overflow-y-auto overflow-x-hidden py-4 space-y-3">
-          <Section title="Organisation" items={ricoOrganisationItems} counts={formattedCounts} collapsed={collapsed} />
-          <Section title="Production" items={productionItems} counts={formattedCounts} collapsed={collapsed} />
-
-          {/* External Apps */}
-          <div className={collapsed ? "px-2" : "px-3"}>
-            {!collapsed && (
-              <div className="flex w-full items-center justify-between px-3 py-1.5">
-                <p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-[#7f9bb7]">
-                  External Apps
+        <nav className="flex-1 space-y-0.5 overflow-y-auto overflow-x-hidden px-2 py-2">
+          {visibleSections.map((section) => (
+            <div key={section.title}>
+              {!visualCollapsed && (
+                <p className="mb-1 mt-4 px-3 text-[10px] font-semibold uppercase tracking-widest text-gray-400">
+                  {section.title}
                 </p>
+              )}
+              <div className="space-y-0.5">
+                {section.items.map((item) => {
+                  const badge = item.badge || (item.badgeKey ? { text: counts[item.badgeKey], type: item.badgeType || "gray" } : null);
+                  return <NavItem key={item.label} item={item} badge={badge} collapsed={visualCollapsed} />;
+                })}
               </div>
-            )}
-            {collapsed && <div className="my-2 border-t border-white/10" />}
-            <div className="mt-1 space-y-1">
-              {externalApps.map((app) => (
-                <a
-                  key={app.label}
-                  href={app.href}
-                  target="_blank"
-                  rel="noreferrer"
-                  title={app.label}
-                  onClick={() => setMobileOpen(false)}
-                  className={
-                    "group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200 text-[#b7c8dc] hover:bg-white/8 hover:text-white " +
-                    (collapsed ? "justify-center" : "")
-                  }
-                >
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#b7c8dc] group-hover:text-white">
-                    <svg className={iconClass} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} d={app.icon} />
-                    </svg>
-                  </span>
-                  {!collapsed && (
-                    <>
-                      <span className="min-w-0 flex-1 truncate">{app.label}</span>
-                      <svg className="h-3.5 w-3.5 text-[#7f9bb7]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                      </svg>
-                    </>
-                  )}
-                  {collapsed && (
-                    <span className="pointer-events-none absolute left-full z-50 ml-3 whitespace-nowrap rounded-lg bg-[#092641] px-3 py-1.5 text-xs font-medium text-white opacity-0 shadow-xl transition-opacity group-hover:opacity-100">
-                      {app.label}
-                    </span>
-                  )}
-                </a>
-              ))}
             </div>
+          ))}
+        </nav>
+
+        {!visualCollapsed && (
+          <div className="border-t border-gray-100 px-4 py-3">
+            <p className="truncate text-sm font-bold capitalize text-gray-800">{currentUser?.name || "Administrator"}</p>
+            <p className="truncate text-xs font-medium text-gray-400">{currentUser?.role || "Administrator"}</p>
           </div>
-        </div>
+        )}
       </aside>
     </>
   );
-};
-
-export default Sidebar;
+}

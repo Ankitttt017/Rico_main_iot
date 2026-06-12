@@ -82,7 +82,7 @@ const LockedIcon = () => (
 
 const PartProfilePage = ({ onLogout, currentUser }) => {
   const { t } = useI18n();
-  const { collapsed } = useSidebar();
+  const { collapsed, hovered } = useSidebar();
   const { id } = useParams();
   const navigate = useNavigate();
   const tabs = [
@@ -155,10 +155,10 @@ const PartProfilePage = ({ onLogout, currentUser }) => {
   return (
     <div className="min-h-screen app-page">
       <Navbar onLogout={onLogout} currentUser={currentUser} />
-      <Sidebar />
+      <Sidebar currentUser={currentUser} />
 
       <main className={`pt-[94px] transition-all duration-300 ease-in-out ${
-        collapsed ? "lg:pl-[72px]" : "lg:pl-72"
+        collapsed && !hovered ? "lg:pl-[60px]" : "lg:pl-[220px]"
       }`}>
         <div className="p-4 sm:p-6 max-w-[1540px] mx-auto">
           <div className="flex items-center gap-1.5 mb-4 text-sm text-gray-500">

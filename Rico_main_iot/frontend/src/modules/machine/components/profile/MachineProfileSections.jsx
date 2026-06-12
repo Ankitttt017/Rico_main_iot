@@ -1,8 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   assignMachineOperation,
+  createOperation,
+  createPart,
   getMachineOperations,
   getMachineStatusHistory,
+  getOperationMaster,
+  getParts,
 } from "../../../../services/api";
 
 export const safe = (v, fb = "—") => String(v || "").trim() || fb;
@@ -460,8 +464,8 @@ export const LiveStateGraph = ({ history = [] }) => {
 
 export const TABS = [
   { id: "live",   label: "Live Status",   icon: "M13 10V3L4 14h7v7l9-11h-7z" },
-  { id: "operation", label: "Operation Setup", icon: "M9 5H7a2 2 0 00-2 2v12h14V7a2 2 0 00-2-2h-2m-6 0a3 3 0 016 0m-6 0h6m-7 7h8m-8 4h5" },
-  { id: "config", label: "Configuration", icon: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z" },
+  { id: "operation", label: "Part / Operation", icon: "M9 5H7a2 2 0 00-2 2v12h14V7a2 2 0 00-2-2h-2m-6 0a3 3 0 016 0m-6 0h6m-7 7h8m-8 4h5" },
+  { id: "config", label: "PLC Config", icon: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z" },
   { id: "stats",  label: "Statistics",    icon: "M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" },
   { id: "down",   label: "Downtime",      icon: "M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" },
   { id: "maint",  label: "Maintenance",   icon: "M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z" },
@@ -559,12 +563,59 @@ export const InfoTile = ({ label, value, valueClass, icon, iconBg }) => (
 );
 
 export const OperationSetupTab = ({ machine }) => {
+  const [parts, setParts] = useState([]);
   const [operations, setOperations] = useState([]);
   const [current, setCurrent] = useState(null);
-  const [selected, setSelected] = useState("");
+  const [selectedPart, setSelectedPart] = useState(machine?.part_code || "");
+  const [selectedOperation, setSelectedOperation] = useState(machine?.operation_no || "");
+  const [partDraft, setPartDraft] = useState({ material_code: "", description: "", material_group: "" });
+  const [operationDraft, setOperationDraft] = useState({ operation_no: "", operation_name: "" });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [savingPart, setSavingPart] = useState(false);
+  const [savingOperation, setSavingOperation] = useState(false);
   const [message, setMessage] = useState("");
+
+  const plantCode = machine?.plant_code || "";
+
+  const loadParts = useCallback(() => {
+    if (!plantCode) return Promise.resolve();
+    return getParts({ plant: plantCode, limit: 500 })
+      .then((res) => {
+        const rows = Array.isArray(res.data?.data) ? res.data.data : [];
+        setParts(rows);
+        if (!selectedPart && (machine?.part_code || rows[0]?.material_code)) {
+          setSelectedPart(machine?.part_code || rows[0]?.material_code || "");
+        }
+      })
+      .catch(() => setParts([]));
+  }, [machine?.part_code, plantCode, selectedPart]);
+
+  const loadPartOperations = useCallback((partCode = selectedPart) => {
+    const code = String(partCode || "").trim();
+    if (!code) {
+      setOperations([]);
+      setSelectedOperation("");
+      return Promise.resolve();
+    }
+    return getOperationMaster({ plant: plantCode, part: code, limit: 500 })
+      .then((res) => {
+        const rows = Array.isArray(res.data?.data) ? res.data.data : [];
+        const mapped = rows.map((row) => ({
+          id: row.id,
+          part_code: row.part_code,
+          operation_no: row.operation_id || row.operation_no || row.sr_no,
+          operation_name: row.operation_name || row.name || "Operation",
+          part_name: row.linked_part,
+        })).filter((row) => row.operation_no);
+        setOperations(mapped);
+        const stillValid = mapped.some((operation) => String(operation.operation_no) === String(selectedOperation));
+        if (!stillValid) {
+          setSelectedOperation(current?.operation_no || machine?.operation_no || mapped[0]?.operation_no || "");
+        }
+      })
+      .catch(() => setOperations([]));
+  }, [current?.operation_no, machine?.operation_no, plantCode, selectedOperation, selectedPart]);
 
   const loadOperations = useCallback(() => {
     if (!machine?.id) return;
@@ -574,27 +625,90 @@ export const OperationSetupTab = ({ machine }) => {
       .then((res) => {
         const rows = Array.isArray(res.data?.data) ? res.data.data : [];
         const active = res.data?.current || null;
-        setOperations(rows);
         setCurrent(active);
-        setSelected(active?.operation_no || rows[0]?.operation_no || "");
+        setSelectedPart(active?.part_code || machine?.part_code || "");
+        setSelectedOperation(active?.operation_no || machine?.operation_no || "");
+        return loadParts().then(() => loadPartOperations(active?.part_code || machine?.part_code || ""));
       })
       .catch(() => {
         setOperations([]);
         setCurrent(null);
-        setMessage("Unable to load operations for this machine.");
+        setMessage("Unable to load part/operation setup for this machine.");
       })
       .finally(() => setLoading(false));
-  }, [machine?.id, machine?.plant_code]);
+  }, [loadPartOperations, loadParts, machine?.id, machine?.operation_no, machine?.part_code, machine?.plant_code]);
 
   useEffect(() => {
     loadOperations();
   }, [loadOperations]);
 
-  const selectedOperation = operations.find((operation) => operation.operation_no === selected);
+  useEffect(() => {
+    if (!loading) loadPartOperations(selectedPart);
+  }, [loadPartOperations, loading, selectedPart]);
+
+  const selectedPartRow = parts.find((part) => String(part.material_code) === String(selectedPart));
+  const selectedOperationRow = operations.find((operation) => String(operation.operation_no) === String(selectedOperation));
+
+  const savePart = async () => {
+    if (!partDraft.material_code.trim() || !partDraft.description.trim()) {
+      setMessage("Part create karne ke liye part code aur part name required hai.");
+      return;
+    }
+    setSavingPart(true);
+    setMessage("");
+    try {
+      await createPart({
+        plant_code: plantCode,
+        material_code: partDraft.material_code,
+        description: partDraft.description,
+        material_group: partDraft.material_group,
+        unit_of_measure: "EA",
+      });
+      const code = String(partDraft.material_code).trim().toUpperCase();
+      setSelectedPart(code);
+      setPartDraft({ material_code: "", description: "", material_group: "" });
+      await loadParts();
+      await loadPartOperations(code);
+      setMessage("Part created and selected for this machine.");
+    } catch (err) {
+      setMessage(err.response?.data?.message || "Unable to save part.");
+    } finally {
+      setSavingPart(false);
+    }
+  };
+
+  const saveOperation = async () => {
+    if (!selectedPart) {
+      setMessage("Operation create karne se pehle part select karo.");
+      return;
+    }
+    if (!operationDraft.operation_no.trim() || !operationDraft.operation_name.trim()) {
+      setMessage("Operation number aur operation name required hai.");
+      return;
+    }
+    setSavingOperation(true);
+    setMessage("");
+    try {
+      await createOperation({
+        part_code: selectedPart,
+        operation_no: operationDraft.operation_no,
+        operation_name: operationDraft.operation_name,
+      });
+      const opNo = String(operationDraft.operation_no).trim();
+      setSelectedOperation(opNo);
+      setOperationDraft({ operation_no: "", operation_name: "" });
+      await loadPartOperations(selectedPart);
+      setMessage("Operation created and selected for this machine.");
+    } catch (err) {
+      setMessage(err.response?.data?.message || "Unable to save operation.");
+    } finally {
+      setSavingOperation(false);
+    }
+  };
 
   const save = async () => {
-    if (!selected) {
-      setMessage("Please select an operation before saving.");
+    if (!selectedPart || !selectedOperation) {
+      setMessage("Machine setup save karne ke liye part aur operation dono select karo.");
       return;
     }
 
@@ -602,14 +716,14 @@ export const OperationSetupTab = ({ machine }) => {
     setMessage("");
     try {
       await assignMachineOperation(machine.id, {
-        operation_no: selected,
-        part_code: selectedOperation?.part_code || current?.part_code || machine?.part_code || null,
+        operation_no: selectedOperation,
+        part_code: selectedPart,
         status: machine?.status || "IDLE",
       });
-      setMessage("Operation saved for this machine.");
+      setMessage("Part and operation saved for this machine.");
       loadOperations();
     } catch (err) {
-      setMessage(err.response?.data?.message || "Unable to save operation.");
+      setMessage(err.response?.data?.message || "Unable to save machine setup.");
     } finally {
       setSaving(false);
     }
@@ -618,13 +732,13 @@ export const OperationSetupTab = ({ machine }) => {
   return (
     <div>
       <div className="mb-5">
-        <h3 className="text-base font-bold text-gray-900">Operation Setup</h3>
+        <h3 className="text-base font-bold text-gray-900">Machine Part / Operation Setup</h3>
         <p className="mt-1 text-xs text-gray-400">
-          Select the operation currently mapped to this machine. The saved operation is recorded in machine status history.
+          Select or create the part and operation for this machine. This is saved as the current machine assignment.
         </p>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+      <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
         <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
           <div className="mb-4 grid gap-3 sm:grid-cols-2">
             <div className="rounded-xl bg-slate-50 px-4 py-3">
@@ -639,22 +753,67 @@ export const OperationSetupTab = ({ machine }) => {
 
           {loading ? (
             <div className="rounded-xl border border-dashed border-slate-200 py-12 text-center text-sm font-semibold text-slate-400">
-              Loading operations...
-            </div>
-          ) : operations.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-slate-200 py-12 text-center">
-              <p className="text-sm font-bold text-slate-500">No operations found</p>
-              <p className="mt-1 text-xs text-slate-400">Assign a part to this machine first, or create operations in Operation Master.</p>
+              Loading machine setup...
             </div>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-4">
+              <label className="block">
+                <span className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">Select Part</span>
+                <select
+                  value={selectedPart}
+                  onChange={(event) => setSelectedPart(event.target.value)}
+                  className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-50"
+                >
+                  <option value="">Select part</option>
+                  {parts.map((part) => (
+                    <option key={part.material_code} value={part.material_code}>
+                      {part.material_code} - {part.description}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <div className="rounded-xl border border-slate-100 bg-slate-50/70 p-4">
+                <p className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-500">Create Part For This Machine</p>
+                <div className="grid gap-3 md:grid-cols-3">
+                  <input
+                    value={partDraft.material_code}
+                    onChange={(event) => setPartDraft((prev) => ({ ...prev, material_code: event.target.value.toUpperCase() }))}
+                    className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold outline-none focus:border-teal-500 focus:ring-4 focus:ring-teal-50"
+                    placeholder="Part Code"
+                  />
+                  <input
+                    value={partDraft.description}
+                    onChange={(event) => setPartDraft((prev) => ({ ...prev, description: event.target.value }))}
+                    className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold outline-none focus:border-teal-500 focus:ring-4 focus:ring-teal-50"
+                    placeholder="Part Name"
+                  />
+                  <input
+                    value={partDraft.material_group}
+                    onChange={(event) => setPartDraft((prev) => ({ ...prev, material_group: event.target.value }))}
+                    className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold outline-none focus:border-teal-500 focus:ring-4 focus:ring-teal-50"
+                    placeholder="Part Group"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={savePart}
+                  disabled={savingPart}
+                  className="mt-3 rounded-lg border border-teal-200 bg-white px-4 py-2 text-sm font-bold text-teal-700 hover:bg-teal-50 disabled:opacity-60"
+                >
+                  {savingPart ? "Saving..." : "Create & Select Part"}
+                </button>
+              </div>
+
               <label className="block">
                 <span className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">Select Operation</span>
                 <select
-                  value={selected}
-                  onChange={(event) => setSelected(event.target.value)}
-                  className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-50"
+                  value={selectedOperation}
+                  onChange={(event) => setSelectedOperation(event.target.value)}
+                  disabled={!selectedPart}
+                  className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-50 disabled:bg-slate-100"
                 >
+                  <option value="">Select operation</option>
                   {operations.map((operation) => (
                     <option key={`${operation.part_code}-${operation.operation_no}-${operation.id}`} value={operation.operation_no}>
                       {operation.operation_no} - {operation.operation_name || "Operation"}
@@ -663,12 +822,38 @@ export const OperationSetupTab = ({ machine }) => {
                 </select>
               </label>
 
-              {selectedOperation && (
+              <div className="rounded-xl border border-slate-100 bg-slate-50/70 p-4">
+                <p className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-500">Create Operation For Selected Part</p>
+                <div className="grid gap-3 md:grid-cols-[0.45fr_1fr]">
+                  <input
+                    value={operationDraft.operation_no}
+                    onChange={(event) => setOperationDraft((prev) => ({ ...prev, operation_no: event.target.value }))}
+                    className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold outline-none focus:border-teal-500 focus:ring-4 focus:ring-teal-50"
+                    placeholder="OP-10"
+                  />
+                  <input
+                    value={operationDraft.operation_name}
+                    onChange={(event) => setOperationDraft((prev) => ({ ...prev, operation_name: event.target.value }))}
+                    className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold outline-none focus:border-teal-500 focus:ring-4 focus:ring-teal-50"
+                    placeholder="Leak Test / Laser Marking"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={saveOperation}
+                  disabled={savingOperation || !selectedPart}
+                  className="mt-3 rounded-lg border border-teal-200 bg-white px-4 py-2 text-sm font-bold text-teal-700 hover:bg-teal-50 disabled:opacity-60"
+                >
+                  {savingOperation ? "Saving..." : "Create & Select Operation"}
+                </button>
+              </div>
+
+              {(selectedPartRow || selectedOperationRow) && (
                 <div className="rounded-xl border border-teal-100 bg-teal-50/60 p-4">
-                  <p className="text-xs font-bold uppercase tracking-wide text-teal-700">Selected Operation</p>
-                  <p className="mt-1 text-sm font-extrabold text-slate-900">{selectedOperation.operation_name || selectedOperation.operation_no}</p>
+                  <p className="text-xs font-bold uppercase tracking-wide text-teal-700">Selected Setup</p>
+                  <p className="mt-1 text-sm font-extrabold text-slate-900">{selectedPartRow?.description || selectedPart || "No part selected"}</p>
                   <p className="mt-1 text-xs font-medium text-slate-500">
-                    Part: {selectedOperation.part_code || "Not linked"} {selectedOperation.part_name ? `- ${selectedOperation.part_name}` : ""}
+                    Operation: {selectedOperationRow?.operation_no || selectedOperation || "Not selected"} {selectedOperationRow?.operation_name ? `- ${selectedOperationRow.operation_name}` : ""}
                   </p>
                 </div>
               )}
@@ -679,7 +864,7 @@ export const OperationSetupTab = ({ machine }) => {
                 disabled={saving}
                 className="rounded-lg bg-teal-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-teal-700 disabled:opacity-60"
               >
-                {saving ? "Saving..." : "Save Operation"}
+                {saving ? "Saving..." : "Save To Machine"}
               </button>
             </div>
           )}

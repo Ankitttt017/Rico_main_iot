@@ -1,22 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import AppLayout from "../../../components/common/AppLayout";
 import Pagination from "../../../components/common/Pagination";
 import SearchableSelect from "../../../components/common/SearchableSelect";
 import {
   createLine,
-  createLineMachine,
   deleteLine,
-  getLineMachines,
-  getLineOperations,
+  getDepartments,
+  getLocations,
   getLines,
-  removeLineMachine,
   updateLine,
-  updateLineMachine,
 } from "../../../services/api";
 import {
-  FALLBACK_OPERATIONS,
-  FILTER_DIVISION_OPTIONS,
-  FILTER_PROTOCOL_OPTIONS,
   FILTER_STATUS_OPTIONS,
   PAGE_SIZE,
   PLANT_OPTIONS,
@@ -29,23 +24,23 @@ import StatBox from "../components/StatBox";
 import {
   divisionMatches,
   getPlantByCode,
-  lineMatchesProtocol,
 } from "../utils/lineUtils";
+import { sortBySearchRelevance } from "../../../utils/searchRelevance";
 
 const LineMasterPage = ({ onLogout, currentUser }) => {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [selectedPlant, setSelectedPlant] = useState(PLANTS[0]);
-  const [operations, setOperations] = useState(FALLBACK_OPERATIONS);
+  const [plants, setPlants] = useState(PLANTS);
+  const [departments, setDepartments] = useState([]);
   const [lines, setLines] = useState([]);
   const [workspace, setWorkspace] = useState(null);
-  const [workspaceMachines, setWorkspaceMachines] = useState([]);
   const [loading, setLoading] = useState(true);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(searchParams.get("search") || "");
   const [divisionFilter, setDivisionFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
-  const [protocolFilter, setProtocolFilter] = useState("");
   const [page, setPage] = useState(1);
 
   const loadLines = useCallback(() => {
@@ -55,21 +50,76 @@ const LineMasterPage = ({ onLogout, currentUser }) => {
       plant: selectedPlant.code,
       division: divisionFilter || undefined,
       status: statusFilter || undefined,
-      protocol: protocolFilter || undefined,
     })
       .then((res) => setLines(Array.isArray(res.data?.data) ? res.data.data : []))
       .catch(() => setError("Unable to load lines. Please check backend connection."))
       .finally(() => setLoading(false));
-  }, [divisionFilter, protocolFilter, selectedPlant.code, statusFilter]);
+  }, [divisionFilter, selectedPlant.code, statusFilter]);
+
+  const loadDepartments = useCallback((plantCode = selectedPlant.code) =>
+    getDepartments({ active: 1, plant: plantCode, _: Date.now() })
+      .then((res) => {
+        setDepartments(Array.isArray(res.data?.data) ? res.data.data : []);
+      })
+      .catch(() => setDepartments([])),
+  [selectedPlant.code]);
 
   useEffect(() => {
-    getLineOperations()
+    getLocations({ active: 1 })
       .then((res) => {
         const rows = Array.isArray(res.data?.data) ? res.data.data : [];
-        if (rows.length) setOperations(rows);
+        const activePlants = rows
+          .filter((row) => row.is_active !== false && row.is_active !== 0 && row.is_active !== "0")
+          .map((row) => ({ code: row.code, name: row.name, location: row.location }));
+        if (!activePlants.length) return;
+        setPlants(activePlants);
+        setSelectedPlant((current) => activePlants.find((plant) => plant.code === current.code) || activePlants[0]);
       })
-      .catch(() => setOperations(FALLBACK_OPERATIONS));
+      .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    loadDepartments(selectedPlant.code);
+  }, [loadDepartments, selectedPlant.code]);
+
+  useEffect(() => {
+    setSearch(searchParams.get("search") || "");
+  }, [searchParams]);
+
+  const handleSearchChange = (value) => {
+    setSearch(value);
+    if (value.trim()) setSearchParams({ search: value });
+    else setSearchParams({});
+  };
+
+  const plantOptions = useMemo(() => plants.map((plant) => ({
+    value: plant.code,
+    label: `${plant.name} (${plant.code})`,
+    description: plant.location || plant.name,
+    keywords: `${plant.name} ${plant.code} ${plant.location || ""}`,
+  })), [plants]);
+
+  const departmentOptions = useMemo(() => {
+    const specificRows = departments.filter((department) =>
+      department.plant_code &&
+      String(department.plant_code).toUpperCase() === String(selectedPlant.code).toUpperCase()
+    );
+    const rows = specificRows.length
+      ? specificRows
+      : departments.filter((department) => !department.plant_code);
+    const options = rows.map((department) => ({
+      value: department.name,
+      label: department.name,
+      description: department.code,
+      keywords: `${department.code} ${department.name} ${department.description || ""}`,
+    }));
+    return options;
+  }, [departments, selectedPlant.code]);
+
+  const filterDepartmentOptions = useMemo(() => [
+    { value: "", label: "All Departments" },
+    ...departmentOptions,
+  ], [departmentOptions]);
 
   useEffect(() => {
     loadLines();
@@ -77,24 +127,16 @@ const LineMasterPage = ({ onLogout, currentUser }) => {
 
   useEffect(() => {
     setPage(1);
-  }, [divisionFilter, protocolFilter, search, selectedPlant.code, statusFilter]);
+  }, [divisionFilter, search, selectedPlant.code, statusFilter]);
 
   const openWorkspace = async (line = null) => {
-    setWorkspace(line || "new");
-    setWorkspaceMachines([]);
-    if (!line?.line_id) return;
     setWorkspaceLoading(true);
-    try {
-      const res = await getLineMachines(line.line_id);
-      setWorkspaceMachines(Array.isArray(res.data?.data) ? res.data.data : []);
-    } catch {
-      setWorkspaceMachines([]);
-    } finally {
-      setWorkspaceLoading(false);
-    }
+    await loadDepartments(line?.plant_code || selectedPlant.code);
+    setWorkspace(line || "new");
+    setWorkspaceLoading(false);
   };
 
-  const saveWorkspace = async ({ line, machines, deletedMachineIds, keepOpen }) => {
+  const saveWorkspace = async ({ line }) => {
     setSaving(true);
     setError("");
     try {
@@ -108,30 +150,9 @@ const LineMasterPage = ({ onLogout, currentUser }) => {
         finalLine = { ...line, line_id: lineId };
       }
 
-      for (const machineId of deletedMachineIds) {
-        await removeLineMachine(lineId, machineId, { mode: "delete" });
-      }
-
-      const persistedMachines = [];
-      for (const machine of machines) {
-        if (machine.id) {
-          await updateLineMachine(lineId, machine.id, machine);
-          persistedMachines.push(machine);
-        } else {
-          const res = await createLineMachine(lineId, machine);
-          persistedMachines.push({ ...machine, id: res.data?.id || machine.id });
-        }
-      }
-
-      if (!keepOpen) {
-        setWorkspace(null);
-        setWorkspaceMachines([]);
-      } else {
-        setWorkspace(finalLine);
-        setWorkspaceMachines(persistedMachines);
-      }
+      setWorkspace(null);
       loadLines();
-      return { line: finalLine, machines: persistedMachines };
+      return { line: finalLine };
     } catch (err) {
       setError(err.response?.data?.message || "Unable to save line setup.");
       throw err;
@@ -155,16 +176,16 @@ const LineMasterPage = ({ onLogout, currentUser }) => {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return lines.filter((line) =>
+    const matches = lines.filter((line) =>
       divisionMatches(line.division, divisionFilter) &&
       (!statusFilter || Boolean(line.is_active) === (statusFilter === "1")) &&
-      lineMatchesProtocol(line, protocolFilter) &&
       (!q ||
         String(line.line_name || "").toLowerCase().includes(q) ||
         String(line.line_code || "").toLowerCase().includes(q) ||
         String(line.division || "").toLowerCase().includes(q))
     );
-  }, [divisionFilter, lines, protocolFilter, search, statusFilter]);
+    return sortBySearchRelevance(matches, q, (line) => [line.line_name, line.line_code, line.division]);
+  }, [divisionFilter, lines, search, statusFilter]);
 
   const pagedLines = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const totalMachines = filtered.reduce((sum, line) => sum + (line.total_machines || 0), 0);
@@ -175,9 +196,14 @@ const LineMasterPage = ({ onLogout, currentUser }) => {
       {workspace && !workspaceLoading && (
         <LineWorkspaceModal
           initialLine={workspace === "new" ? null : workspace}
-          initialMachines={workspaceMachines}
           plant={selectedPlant}
-          operations={operations}
+          plantOptions={plantOptions.length ? plantOptions : PLANT_OPTIONS}
+          departmentOptions={departmentOptions}
+          onPlantChange={(plantCode) => {
+            const nextPlant = plants.find((item) => String(item.code) === String(plantCode));
+            if (nextPlant) setSelectedPlant(nextPlant);
+            return loadDepartments(plantCode);
+          }}
           saving={saving}
           onClose={() => setWorkspace(null)}
           onSave={saveWorkspace}
@@ -208,24 +234,24 @@ const LineMasterPage = ({ onLogout, currentUser }) => {
         <div className="mb-5 flex flex-col gap-1">
           <h2 className="text-lg font-extrabold text-slate-950"></h2>
           <p className="max-w-4xl text-sm leading-relaxed text-slate-500">
-            Manage one line with multiple machines, and assign one operation to every machine from the operation list.
+            Create production lines under the selected plant and department. Add machines separately from Machine Settings.
           </p>
         </div>
 
-        <div className="mb-5 grid gap-4 rounded-xl border border-slate-100 bg-slate-50/70 p-4 sm:grid-cols-2 xl:grid-cols-5">
-          <Field label="Select Plant">
+        <div className="mb-5 grid gap-4 rounded-xl border border-slate-100 bg-slate-50/70 p-4 sm:grid-cols-2 xl:grid-cols-4">
+          <Field label="Location / Plant">
             <SearchableSelect
               value={selectedPlant.code}
-              options={PLANT_OPTIONS}
+              options={plantOptions.length ? plantOptions : PLANT_OPTIONS}
               placeholder="Search plant..."
-              onChange={(value) => setSelectedPlant(getPlantByCode(value))}
+              onChange={(value) => setSelectedPlant(plants.find((plant) => plant.code === value) || getPlantByCode(value))}
             />
           </Field>
-          <Field label="Division">
+          <Field label="Department">
             <SearchableSelect
               value={divisionFilter}
-              options={FILTER_DIVISION_OPTIONS}
-              placeholder="All divisions"
+              options={filterDepartmentOptions}
+              placeholder="All departments"
               onChange={setDivisionFilter}
             />
           </Field>
@@ -237,14 +263,6 @@ const LineMasterPage = ({ onLogout, currentUser }) => {
               onChange={setStatusFilter}
             />
           </Field>
-          <Field label="Protocol">
-            <SearchableSelect
-              value={protocolFilter}
-              options={FILTER_PROTOCOL_OPTIONS}
-              placeholder="All protocols"
-              onChange={setProtocolFilter}
-            />
-          </Field>
           <Field label="Search Lines">
             <div className="relative">
               <svg className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -252,9 +270,9 @@ const LineMasterPage = ({ onLogout, currentUser }) => {
               </svg>
               <input
                 className="app-field h-11 w-full rounded-lg border py-2.5 pl-9 pr-3 text-sm focus:outline-none focus:ring-4 focus:ring-blue-50"
-                placeholder="Search by name, code or division..."
+                placeholder="Search by name, code or department..."
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(e) => handleSearchChange(e.target.value)}
               />
             </div>
           </Field>
@@ -268,7 +286,7 @@ const LineMasterPage = ({ onLogout, currentUser }) => {
             <StatBox value={filtered.length} label="Total Lines" />
             <StatBox value={activeLines} label="Active Lines" />
             <StatBox value={totalMachines} label="Total Machines" />
-            <StatBox value={operations.length} label="Operation Options" />
+            <StatBox value={departmentOptions.length} label="Departments" />
           </div>
         </div>
       </div>

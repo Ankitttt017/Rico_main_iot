@@ -21,6 +21,28 @@ function nullSafeEquals(column, placeholder = '?') {
   return `EXISTS (SELECT ${column} INTERSECT SELECT ${placeholder})`;
 }
 
+function cleanText(value) {
+  const text = String(value ?? '').trim();
+  return text || null;
+}
+
+function cleanCode(value) {
+  return String(value ?? '').trim().toUpperCase();
+}
+
+async function getActivePlant(plantCode) {
+  const code = cleanCode(plantCode);
+  if (!code) return null;
+
+  const { rows } = await db.query(
+    `SELECT TOP 1 code, name
+     FROM ${TABLES.plants}
+     WHERE code = ? AND COALESCE(is_active, 1) = 1`,
+    [code]
+  );
+  return rows[0] || null;
+}
+
 // GET /api/plants
 const getAllPlants = async (req, res) => {
   try {
@@ -157,6 +179,104 @@ const getPartsByPlant = async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// POST /api/parts
+const createPart = async (req, res) => {
+  try {
+    const materialCode = cleanCode(req.body.material_code);
+    const description = cleanText(req.body.description);
+    const plantCode = cleanCode(req.body.plant_code);
+
+    if (!materialCode || !description || !plantCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Material code, part name and location are required',
+      });
+    }
+
+    const activePlant = await getActivePlant(plantCode);
+    if (!activePlant) {
+      return res.status(400).json({ success: false, message: 'Select a valid active location before adding a part' });
+    }
+
+    const materialGroup = cleanText(req.body.material_group);
+    const manufacturingType = cleanText(req.body.manufacturing_type);
+    const storageLocation = cleanText(req.body.storage_location);
+    const unitOfMeasure = cleanText(req.body.unit_of_measure) || 'EA';
+    const customer = cleanText(req.body.customer);
+    const cycleTimeSec = req.body.cycle_time_sec === '' || req.body.cycle_time_sec == null ? null : Number(req.body.cycle_time_sec);
+    const boxQuantity = req.body.box_quantity === '' || req.body.box_quantity == null ? 0 : Number(req.body.box_quantity);
+    const registeredBy = cleanText(req.body.registered_by) || 'Admin';
+    const today = new Date().toISOString().slice(0, 10);
+
+    const { rows: existingRows } = await db.query(
+      `SELECT TOP 1 material_code FROM ${TABLES.parts} WHERE material_code = ?`,
+      [materialCode]
+    );
+
+    if (!existingRows.length) {
+      const { rows: serialRows } = await db.query(`SELECT ISNULL(MAX(sl_no), 0) + 1 AS next_sl_no FROM ${TABLES.parts}`);
+      await db.run(
+        `INSERT INTO ${TABLES.parts}
+          (sl_no, material_code, description, plant_code, storage_location, unit_of_measure,
+           material_group, cycle_time_sec, box_quantity, customer, manufacturing_type,
+           status, registered_on, registered_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ENABLED', ?, ?)`,
+        [
+          serialRows[0]?.next_sl_no || null,
+          materialCode,
+          description,
+          activePlant.code,
+          storageLocation,
+          unitOfMeasure,
+          materialGroup,
+          Number.isFinite(cycleTimeSec) ? cycleTimeSec : null,
+          Number.isFinite(boxQuantity) ? boxQuantity : 0,
+          customer,
+          manufacturingType,
+          today,
+          registeredBy,
+        ]
+      );
+    } else {
+      await db.run(
+        `UPDATE ${TABLES.parts}
+         SET description = COALESCE(?, description),
+             customer = COALESCE(?, customer),
+             manufacturing_type = COALESCE(?, manufacturing_type),
+             status = 'ENABLED'
+         WHERE material_code = ?`,
+        [description, customer, manufacturingType, materialCode]
+      );
+    }
+
+    await db.run(
+      `MERGE ${TABLES.partPlants} AS target
+       USING (
+         SELECT ? AS part_code, ? AS plant_code, ? AS storage_location, ? AS unit_of_measure, ? AS material_group
+       ) AS source
+       ON target.part_code = source.part_code AND target.plant_code = source.plant_code
+       WHEN MATCHED THEN
+         UPDATE SET storage_location = source.storage_location,
+                    unit_of_measure = source.unit_of_measure,
+                    material_group = source.material_group,
+                    updated_at = SYSUTCDATETIME()
+       WHEN NOT MATCHED THEN
+         INSERT (part_code, plant_code, storage_location, unit_of_measure, material_group)
+         VALUES (source.part_code, source.plant_code, source.storage_location, source.unit_of_measure, source.material_group);`,
+      [materialCode, activePlant.code, storageLocation, unitOfMeasure, materialGroup]
+    );
+
+    const { rows } = await db.query(`SELECT * FROM ${TABLES.parts} WHERE material_code = ?`, [materialCode]);
+    res.status(existingRows.length ? 200 : 201).json({
+      success: true,
+      data: rows[0],
+      message: existingRows.length ? 'Part linked to location' : 'Part created',
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Unable to create part', error: err.message });
   }
 };
 
@@ -477,6 +597,57 @@ const getOperationMaster = async (req, res) => {
   }
 };
 
+// POST /api/operations
+const createOperation = async (req, res) => {
+  try {
+    const partCode = cleanCode(req.body.part_code);
+    const operationNo = cleanText(req.body.operation_no || req.body.label);
+    const operationName = cleanText(req.body.operation_name || req.body.name);
+    const type = cleanText(req.body.type) || 'Operation';
+
+    if (!partCode || !operationNo || !operationName) {
+      return res.status(400).json({ success: false, message: 'Part, operation number and operation name are required' });
+    }
+
+    const { rows: partRows } = await db.query(
+      `SELECT TOP 1 material_code FROM ${TABLES.parts} WHERE material_code = ?`,
+      [partCode]
+    );
+    if (!partRows.length) {
+      return res.status(404).json({ success: false, message: 'Part not found' });
+    }
+
+    const { rows: duplicateRows } = await db.query(
+      `SELECT TOP 1 id FROM ${TABLES.operations}
+       WHERE part_code = ?
+         AND UPPER(TRIM(COALESCE(label, ''))) = UPPER(TRIM(?))`,
+      [partCode, operationNo]
+    );
+    if (duplicateRows.length) {
+      return res.status(409).json({ success: false, message: 'Operation already exists for this part' });
+    }
+
+    const { rows: serialRows } = await db.query(
+      `SELECT ISNULL(MAX(sr_no), 0) + 10 AS next_sr_no FROM ${TABLES.operations} WHERE part_code = ?`,
+      [partCode]
+    );
+    const srNo = req.body.sr_no === '' || req.body.sr_no == null
+      ? serialRows[0]?.next_sr_no || null
+      : Number(req.body.sr_no);
+
+    const { rows } = await db.run(
+      `INSERT INTO ${TABLES.operations} (part_code, sr_no, name, type, label, rework)
+       OUTPUT INSERTED.id
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [partCode, Number.isFinite(srNo) ? srNo : null, operationName, type, operationNo, cleanText(req.body.rework) || 'No rework assigned']
+    );
+
+    res.status(201).json({ success: true, id: rows[0]?.id, message: 'Operation created' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Unable to create operation', error: err.message });
+  }
+};
+
 // PUT /api/parts/:id/operations/:operationId
 const updatePartOperation = async (req, res) => {
   try {
@@ -780,8 +951,8 @@ const getStats = async (req, res) => {
 };
 
 module.exports = {
-  getAllPlants, getPartsByPlant, getPartById, updatePartById,
-  getOperationMaster,
+  getAllPlants, getPartsByPlant, createPart, getPartById, updatePartById,
+  getOperationMaster, createOperation,
   getPartOperations, updatePartOperation, deletePartOperation,
   getPartConfiguration, updatePartConfiguration,
   getPartSheets, uploadPartSheet, downloadPartSheet,

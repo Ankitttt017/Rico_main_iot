@@ -25,6 +25,8 @@ import {
   getPlcHistoryExportUrl,
   getPlcLatestReadings,
   getPlcReadingHistory,
+  getWorkstationSummary,
+  createWorkstationDowntimeEvent,
 } from "../../../services/api";
 import { SOCKET_URL } from "../../../services/endpoints";
 
@@ -36,7 +38,7 @@ const PLANTS = [
 ];
 
 const DIVISION_OPTIONS = [
-  { value: "", label: "All Divisions" },
+  { value: "", label: "All Departments" },
   { value: "HPDC", label: "HPDC" },
   { value: "Machining", label: "Machining" },
 ];
@@ -124,12 +126,12 @@ const PLC_REGISTER_GROUPS = [
     keys: [
       { name: "cooling_water_mov", label: "Cooling Water MOV", unit: "L/min" },
       { name: "cooling_water_sta", label: "Cooling Water STA", unit: "L/min" },
-      { name: "furnace_metal_temp", label: "Furnace Metal Temp", unit: "�C" },
-      { name: "fixed_die_temp_f1", label: "Fixed Die Temp F1", unit: "�C" },
-      { name: "fixed_die_temp_f2", label: "Fixed Die Temp F2", unit: "�C" },
-      { name: "moving_die_temp_m1", label: "Moving Die Temp M1", unit: "�C" },
-      { name: "moving_die_temp_m2", label: "Moving Die Temp M2", unit: "�C" },
-      { name: "slide_temp_s1", label: "Slide Temp S1", unit: "�C" },
+      { name: "furnace_metal_temp", label: "Furnace Metal Temp", unit: "°C" },
+      { name: "fixed_die_temp_f1", label: "Fixed Die Temp F1", unit: "°C" },
+      { name: "fixed_die_temp_f2", label: "Fixed Die Temp F2", unit: "°C" },
+      { name: "moving_die_temp_m1", label: "Moving Die Temp M1", unit: "°C" },
+      { name: "moving_die_temp_m2", label: "Moving Die Temp M2", unit: "°C" },
+      { name: "slide_temp_s1", label: "Slide Temp S1", unit: "°C" },
     ],
   },
   {
@@ -282,10 +284,10 @@ const OldPlcMachineCard = ({ reading, machineInfo, lineInfo, theme = "light", cu
     { label: "Shot Number", value: reading?.shot_number, icon: Activity, tone: successTone },
     { label: "OK Shot", value: reading?.ok_shot, icon: Gauge, tone: successTone },
     { label: "Clamp Tonnage", value: reading?.clamp_tonnage, unit: "T", icon: Gauge, tone: dangerTone },
-    { label: "Metal Temp", value: reading?.furnace_metal_temp, unit: "�C", icon: AlertTriangle, tone: dangerTone },
+    { label: "Metal Temp", value: reading?.furnace_metal_temp, unit: "°C", icon: AlertTriangle, tone: dangerTone },
   ];
   const alertMetrics = [
-    { label: "Metal Temp", value: reading?.furnace_metal_temp, unit: "�C" },
+    { label: "Metal Temp", value: reading?.furnace_metal_temp, unit: "°C" },
     { label: "Clamp Tonnage", value: reading?.clamp_tonnage, unit: "T" },
   ].filter((item) => item.value !== null && item.value !== undefined && item.value !== "");
   const timingMetrics = [
@@ -448,20 +450,23 @@ const flattenLivePayload = (payload = {}) => {
   };
 };
 
-const PlcMachineCard = ({ reading, machineInfo, lineInfo, onOpenTable, liveState }) => {
+const PlcMachineCard = ({ reading, machineInfo, lineInfo, onOpenTable, liveState, workstationSummary, onDeclareDowntime }) => {
   const baseMachineName = reading?.machine_name || machineInfo?.name || "UBE 850T-2";
   const machineName = /^rico\b/i.test(baseMachineName) ? baseMachineName : `RICO ${baseMachineName}`;
-  const partLabel = reading?.part_name || lineInfo?.part_name || machineInfo?.part_name || "No part assigned";
+  const partLabel = workstationSummary?.part?.part_name || reading?.part_name || lineInfo?.part_name || machineInfo?.part_name || "No part assigned";
   const isBreakdown = liveState?.status === "breakdown";
   const elapsedMs = liveState?.elapsedMs || 0;
-  const cycleActual = getFirstValue(reading?.cycle_time, reading?.actual_cycle_time, 0);
-  const cycleTarget = getFirstValue(reading?.target_cycle_time, reading?.standard_cycle_time, reading?.ideal_cycle_time, 0);
+  const cycleActual = getFirstValue(workstationSummary?.live?.cycle_time, reading?.cycle_time, reading?.actual_cycle_time, 0);
+  const cycleTarget = getFirstValue(workstationSummary?.part?.cycle_time_sec, reading?.target_cycle_time, reading?.standard_cycle_time, reading?.ideal_cycle_time, 0);
   const loadUnloadActual = getFirstValue(reading?.load_unload_time, reading?.load_unload_actual, 0);
   const loadUnloadTarget = getFirstValue(reading?.load_unload_target, reading?.target_load_unload_time, 0);
-  const mu = getFirstValue(reading?.mu, reading?.machine_utilization, 0);
-  const pu = getFirstValue(reading?.pu, reading?.production_utilization, 0);
-  const averageEfficiency = getFirstValue(reading?.average_efficiency, reading?.efficiency, 0);
+  const mu = getFirstValue(workstationSummary?.kpi?.mu_percent, reading?.mu, reading?.machine_utilization, 0);
+  const pu = getFirstValue(workstationSummary?.kpi?.pu_percent, reading?.pu, reading?.production_utilization, 0);
+  const averageEfficiency = getFirstValue(workstationSummary?.kpi?.average_efficiency, reading?.average_efficiency, reading?.efficiency, 0);
   const progress = Math.max(0, Math.min(Number(getFirstValue(reading?.progress_pct, reading?.progress, pu, 0)) || 0, 100));
+  const hourlyRows = Array.isArray(workstationSummary?.hourly) ? workstationSummary.hourly : [];
+  const totals = workstationSummary?.totals || {};
+  const downtimeReasons = Array.isArray(workstationSummary?.downtimeReasons) ? workstationSummary.downtimeReasons : [];
   const actionButtons = [
     { label: "Checklist", icon: ClipboardCheck, active: true },
     { label: "Analytics", icon: BarChart3, active: true },
@@ -553,33 +558,89 @@ const PlcMachineCard = ({ reading, machineInfo, lineInfo, onOpenTable, liveState
         </div>
         <div className="flex items-center gap-1.5 text-red-400">
           <AlertTriangle className="h-4 w-4" />
-          DT: {formatDurationLabel(reading?.dt || reading?.down_time)}
+          DT: {formatDurationLabel(workstationSummary?.kpi?.downtime || reading?.dt || reading?.down_time)}
         </div>
         <div className="flex items-center gap-1.5 text-red-400">
           <AlertTriangle className="h-4 w-4" />
-          Idle: {formatDurationLabel(reading?.idle_time)}
+          Idle: {formatDurationLabel(workstationSummary?.kpi?.idle || reading?.idle_time)}
         </div>
         <div className="flex items-center gap-1.5 text-red-400">
           <AlertTriangle className="h-4 w-4" />
-          LS: {formatDurationLabel(reading?.ls_time || reading?.line_stop_time)}
+          LS: {formatDurationLabel(workstationSummary?.kpi?.line_stop || reading?.ls_time || reading?.line_stop_time)}
         </div>
         <div className="flex items-center gap-1.5 text-red-400">
           <AlertTriangle className="h-4 w-4" />
-          ES: {formatDurationLabel(reading?.es_time || reading?.emergency_stop_time)}
+          ES: {formatDurationLabel(workstationSummary?.kpi?.emergency_stop || reading?.es_time || reading?.emergency_stop_time)}
         </div>
       </div>
 
       <div className="mt-4 grid gap-2 text-center text-sm font-black text-zinc-300 [grid-template-columns:repeat(auto-fit,minmax(104px,1fr))]">
-        {SHIFT_SLOTS.map((slot) => (
-          <span key={slot}>{slot}</span>
+        {(hourlyRows.length ? hourlyRows : SHIFT_SLOTS.map((slot) => ({ slot }))).map((row) => (
+          <span key={row.slot}>{row.slot}</span>
         ))}
       </div>
 
-      <div className="mt-3 flex h-[42px] w-full max-w-[420px] overflow-hidden rounded-full bg-zinc-900">
-        <div className="flex h-full min-w-[56px] items-center justify-center rounded-full bg-red-600 px-5 text-base font-black text-white transition-[width] duration-500" style={{ width: `${progress}%` }}>
-          {formatPercent(progress)}
-        </div>
+      <div className="mt-3 flex h-[42px] w-full max-w-[860px] overflow-hidden rounded-full bg-zinc-900">
+        {(hourlyRows.length ? hourlyRows : [{ slot: "current", efficiency_percent: progress }]).map((row) => {
+          const value = Math.max(0, Math.min(Number(row.efficiency_percent || 0), 100));
+          return (
+            <div key={row.slot} className={`flex h-full min-w-[68px] flex-1 items-center justify-center px-3 text-base font-black text-white ${value >= 85 ? "bg-green-700" : "bg-red-600"}`}>
+              {formatPercent(value)}
+            </div>
+          );
+        })}
       </div>
+
+      {hourlyRows.length > 0 && (
+        <section className="mt-5">
+          <div className="mb-2 flex items-center justify-between gap-3 text-sm font-black text-zinc-300">
+            <span>Hourly Production Report | प्रति घंटा उत्पादन का विवरण</span>
+            <span>Current Die: {workstationSummary?.part?.die_no || "-"}</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[980px] text-left text-sm">
+              <thead className="bg-zinc-800 text-xs uppercase text-zinc-300">
+                <tr>
+                  <th className="px-4 py-3">Hour</th>
+                  {hourlyRows.map((row) => <th key={row.slot} className="px-4 py-3">{row.slot}</th>)}
+                  <th className="px-4 py-3">Total</th>
+                </tr>
+              </thead>
+              <tbody className="bg-zinc-950/30 text-zinc-100">
+                {[
+                  ["Target", "target", totals.target],
+                  ["Actual", "actual", totals.actual],
+                  ["Rejection", "rejection", totals.rejection],
+                ].map(([label, key, total]) => (
+                  <tr key={label} className="border-t border-zinc-800">
+                    <td className="px-4 py-3 font-bold">{label}</td>
+                    {hourlyRows.map((row) => <td key={`${label}-${row.slot}`} className="px-4 py-3">{row[key] ?? 0}</td>)}
+                    <td className="px-4 py-3 font-black">{total ?? 0}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {downtimeReasons.length > 0 && (
+        <section className="mt-5">
+          <div className="mb-3 text-sm font-black text-zinc-300">Declare Downtime | डाउनटाइम घोषित करें</div>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
+            {downtimeReasons.map((reason) => (
+              <button
+                key={reason}
+                type="button"
+                onClick={() => onDeclareDowntime?.(reason, reading, workstationSummary)}
+                className="h-10 rounded-md bg-[linear-gradient(90deg,#626262,#394040)] px-3 text-sm font-black text-white transition hover:brightness-110"
+              >
+                {reason}
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
     </article>
   );
 };
@@ -800,6 +861,8 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
   const [tableReading, setTableReading] = useState(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [lastLiveByMachine, setLastLiveByMachine] = useState({});
+  const [summaryByMachine, setSummaryByMachine] = useState({});
+  const [downtimeMessage, setDowntimeMessage] = useState("");
   const [breakdownHistory, setBreakdownHistory] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem(BREAKDOWN_HISTORY_KEY) || "[]");
@@ -984,6 +1047,62 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
       }));
   }, [visiblePlcReadings, workstationRows]);
 
+  const getWorkstationRowForReading = useCallback((reading) => {
+    const readingIp = String(reading?.plc_ip || "").trim();
+    return workstationRows.find((item) => String(item.machine?.ip_address || "").trim() === readingIp) || workstationRows[0] || {};
+  }, [workstationRows]);
+
+  const loadWorkstationSummaries = useCallback(async (readings = visibleCardReadings) => {
+    const entries = await Promise.all(readings.filter((reading) => getReadingKey(reading)).map(async (reading) => {
+      const row = getWorkstationRowForReading(reading);
+      const key = getReadingKey(reading);
+      try {
+        const response = await getWorkstationSummary({
+          machine_key: reading.machine_key || key,
+          plc_ip: reading.plc_ip,
+          machine_id: row.machine?.id,
+          operator_name: currentUser?.name,
+        });
+        return [key, response.data?.data || null];
+      } catch {
+        return [key, null];
+      }
+    }));
+    setSummaryByMachine((current) => {
+      const next = { ...current };
+      entries.forEach(([key, summary]) => {
+        if (key && summary) next[key] = summary;
+      });
+      return next;
+    });
+  }, [currentUser?.name, getWorkstationRowForReading, visibleCardReadings]);
+
+  useEffect(() => {
+    if (!visibleCardReadings.length) return;
+    loadWorkstationSummaries();
+    const timer = window.setInterval(() => loadWorkstationSummaries(), 60000);
+    return () => window.clearInterval(timer);
+  }, [loadWorkstationSummaries, visibleCardReadings]);
+
+  const declareDowntime = useCallback(async (reason, reading, summary) => {
+    const key = getReadingKey(reading);
+    setDowntimeMessage("");
+    try {
+      await createWorkstationDowntimeEvent({
+        machine_key: summary?.machine?.machine_key || reading.machine_key || key,
+        machine_name: summary?.machine?.machine_name || reading.machine_name,
+        plc_ip: summary?.machine?.plc_ip || reading.plc_ip,
+        line_id: summary?.machine?.line_id || null,
+        operator_name: currentUser?.name || "Operator",
+        reason,
+      });
+      setDowntimeMessage(`${reason} declared for ${summary?.machine?.machine_name || reading.machine_name || key}.`);
+      await loadWorkstationSummaries([reading]);
+    } catch (err) {
+      setDowntimeMessage(err.response?.data?.message || "Unable to declare downtime.");
+    }
+  }, [currentUser?.name, loadWorkstationSummaries]);
+
   const cardLiveStates = useMemo(() => {
     return Object.fromEntries(visibleCardReadings.map((reading) => {
       const key = getReadingKey(reading);
@@ -1054,11 +1173,6 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
       .reverse();
   }, [breakdownHistory, visibleCardReadings]);
 
-  const getWorkstationRowForReading = useCallback((reading) => {
-    const readingIp = String(reading?.plc_ip || "").trim();
-    return workstationRows.find((item) => String(item.machine?.ip_address || "").trim() === readingIp) || workstationRows[0] || {};
-  }, [workstationRows]);
-
   const isDark = theme === "dark";
 
   return (
@@ -1123,7 +1237,7 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
             </div>
           </div>
           <div className={`rounded-lg border px-3 py-2 text-sm font-bold ${isDark ? "border-zinc-800 bg-white/5 text-zinc-300" : "border-[#c9d8ea] bg-white/80 text-slate-600"}`}>
-            {selectedPlant.name} | {divisionFilter || "All Divisions"} | {selectedLineData?.line_name || "Select Line"}
+            {selectedPlant.name} | {divisionFilter || "All Departments"} | {selectedLineData?.line_name || "Select Line"}
           </div>
         </div>
 
@@ -1134,7 +1248,7 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
           }}>
             {PLANTS.map((plant) => <option key={plant.code} value={plant.code}>{plant.name}</option>)}
           </SelectField>
-          <SelectField theme={theme} label="Select Division" value={divisionFilter} onChange={(value) => {
+          <SelectField theme={theme} label="Select Department" value={divisionFilter} onChange={(value) => {
             setDivisionFilter(value);
             setSelectedLine("");
           }}>
@@ -1154,6 +1268,11 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
         {error && (
           <div className="mb-4 rounded-md border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm font-semibold text-red-200">
             {error}
+          </div>
+        )}
+        {downtimeMessage && (
+          <div className="mb-4 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm font-semibold text-emerald-100">
+            {downtimeMessage}
           </div>
         )}
 
@@ -1197,6 +1316,7 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
                   const row = getWorkstationRowForReading(reading);
                   const key = getReadingKey(reading) || reading.plc_ip || reading.machine_name;
                   const state = cardLiveStates[key];
+                  const summary = summaryByMachine[key];
                   return (
                     <div key={key}>
                       <PlcMachineCard
@@ -1206,6 +1326,8 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
                         theme={theme}
                         currentUser={currentUser}
                         liveState={state}
+                        workstationSummary={summary}
+                        onDeclareDowntime={declareDowntime}
                         onOpenTable={openPlcTable}
                       />
                       <div className="mt-2 flex items-center justify-end">

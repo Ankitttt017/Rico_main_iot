@@ -26,7 +26,9 @@ function cleanMachine(row) {
     line_code: row.line_code || null,
     line_name: row.line_name || null,
     line_division: row.line_division || null,
+    asset: row.asset || null,
     cost_center: row.cost_center || null,
+    is_active: row.is_active === false || row.is_active === 0 ? false : true,
     status: cleanStatus(row.status),
     part: row.part || "No part assigned",
     part_code: row.part_code || null,
@@ -36,9 +38,30 @@ function cleanMachine(row) {
   };
 }
 
+async function ensureMachineSchema() {
+  await db.run(`
+    IF COL_LENGTH('dbo.iot_machines', 'is_active') IS NULL
+      ALTER TABLE dbo.iot_machines ADD is_active BIT NOT NULL CONSTRAINT df_iot_machines_is_active DEFAULT 1;
+  `);
+}
+
+async function getLineForMachine(lineId) {
+  const id = String(lineId || "").trim();
+  if (!id) return null;
+
+  const { rows } = await db.query(
+    `SELECT TOP 1 line_id, line_code, line_name, division, plant_code
+     FROM dbo.line_master
+     WHERE line_id = ? AND COALESCE(is_active, 1) = 1`,
+    [id]
+  );
+  return rows[0] || null;
+}
+
 // GET /api/machines
 const getMachines = async (req, res) => {
   try {
+    await ensureMachineSchema();
     const { plant } = req.query;
     const params = [];
     const where = plant ? "WHERE plant_code = ?" : "";
@@ -57,6 +80,8 @@ const getMachines = async (req, res) => {
           line_name,
           line_division,
           cost_center
+          , is_active
+          , asset
         FROM (
           SELECT
             m.id,
@@ -68,7 +93,9 @@ const getMachines = async (req, res) => {
             lm.line_code,
             lm.line_name,
             lm.division AS line_division,
-            m.cost_center
+            m.cost_center,
+            COALESCE(m.is_active, 1) AS is_active,
+            m.asset
           FROM ${TABLES.machines} m
           LEFT JOIN dbo.line_master lm ON lm.line_id = m.line_id
         ) machine_rows
@@ -124,7 +151,9 @@ const getMachines = async (req, res) => {
         m.line_code,
         m.line_name,
         m.line_division,
+        m.asset,
         m.cost_center,
+        m.is_active,
         COALESCE(ms.status, 'IDLE') AS status,
         COALESCE(po.part_code, ms.part_code) AS part_code,
         COALESCE(p.description, po.part_code, ms.part_code, 'No part assigned') AS part,
@@ -152,27 +181,39 @@ const getMachines = async (req, res) => {
 // POST /api/machines
 const createMachine = async (req, res) => {
   try {
+    await ensureMachineSchema();
     const {
       machine_code,
       name,
       category,
-      plant_code = "1002",
-      line_id = null,
+      line_id,
       asset = null,
       cost_center = null,
+      is_active = true,
     } = req.body;
 
     const code = String(machine_code || "").trim();
     if (!code || !String(name || "").trim()) {
       return res.status(400).json({ success: false, message: "Machine code and name are required" });
     }
+    if (!String(line_id || "").trim()) {
+      return res.status(400).json({ success: false, message: "Line is required before creating a machine" });
+    }
+
+    const line = await getLineForMachine(line_id);
+    if (!line) {
+      return res.status(400).json({ success: false, message: "Select a valid active line before creating a machine" });
+    }
+    if (!String(line.plant_code || "").trim()) {
+      return res.status(400).json({ success: false, message: "Selected line does not have a location assigned" });
+    }
 
     const { rows } = await db.run(
       `INSERT INTO ${TABLES.machines}
-        (machine_code, name, category, plant_code, line_id, asset, cost_center)
+        (machine_code, name, category, plant_code, line_id, asset, cost_center, is_active)
        OUTPUT INSERTED.id
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [code, String(name).trim(), category || null, plant_code, line_id || null, asset, cost_center]
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [code, String(name).trim(), category || line.division || null, line.plant_code, line.line_id, asset, cost_center, is_active === false ? 0 : 1]
     );
 
     res.status(201).json({ success: true, id: rows[0]?.id, message: "Machine created" });
@@ -184,17 +225,51 @@ const createMachine = async (req, res) => {
 // PUT /api/machines/:id
 const updateMachine = async (req, res) => {
   try {
-    const fields = ["machine_code", "name", "category", "plant_code", "line_id", "asset", "cost_center"];
+    await ensureMachineSchema();
+    const fields = ["machine_code", "name", "category", "plant_code", "line_id", "asset", "cost_center", "is_active"];
     const updates = fields.filter((field) => Object.prototype.hasOwnProperty.call(req.body, field));
     if (!updates.length) {
       return res.status(400).json({ success: false, message: "No machine fields supplied" });
+    }
+
+    const nextBody = { ...req.body };
+    if (Object.prototype.hasOwnProperty.call(req.body, "line_id") || Object.prototype.hasOwnProperty.call(req.body, "plant_code")) {
+      let nextLineId = req.body.line_id;
+      if (!Object.prototype.hasOwnProperty.call(req.body, "line_id")) {
+        const { rows } = await db.query(`SELECT TOP 1 line_id FROM ${TABLES.machines} WHERE id = ?`, [req.params.id]);
+        nextLineId = rows[0]?.line_id;
+      }
+
+      if (!String(nextLineId || "").trim()) {
+        return res.status(400).json({ success: false, message: "Line is required before updating a machine" });
+      }
+
+      const line = await getLineForMachine(nextLineId);
+      if (!line) {
+        return res.status(400).json({ success: false, message: "Select a valid active line before updating a machine" });
+      }
+      if (!String(line.plant_code || "").trim()) {
+        return res.status(400).json({ success: false, message: "Selected line does not have a location assigned" });
+      }
+      if (req.body.plant_code && String(req.body.plant_code) !== String(line.plant_code)) {
+        return res.status(400).json({ success: false, message: "Machine location must match the selected line location" });
+      }
+
+      nextBody.line_id = line.line_id;
+      nextBody.plant_code = line.plant_code;
+      if (!updates.includes("line_id")) updates.push("line_id");
+      if (!updates.includes("plant_code")) updates.push("plant_code");
+      if (!nextBody.category && line.division) nextBody.category = line.division;
     }
 
     await db.run(
       `UPDATE ${TABLES.machines}
        SET ${updates.map((field) => `${field} = ?`).join(", ")}
        WHERE id = ?`,
-      [...updates.map((field) => req.body[field] === "" ? null : req.body[field]), req.params.id]
+      [...updates.map((field) => {
+        if (field === "is_active") return nextBody[field] === false || nextBody[field] === 0 || nextBody[field] === "0" ? 0 : 1;
+        return nextBody[field] === "" ? null : nextBody[field];
+      }), req.params.id]
     );
 
     res.json({ success: true, message: "Machine updated" });
@@ -253,7 +328,11 @@ const getMachineOperations = async (req, res) => {
       params.push(current.part_code);
     } else {
       where += " AND p.plant_code = ?";
-      params.push(req.query.plant || "1002");
+      if (req.query.plant) {
+        params.push(req.query.plant);
+      } else {
+        where += " AND 1 = 0";
+      }
     }
 
     const { rows } = await db.query(

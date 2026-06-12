@@ -8,6 +8,10 @@ const db = require("./src/config/db");
 const partRoutes = require("./src/modules/parts/part.routes");
 const lineRoutes = require("./src/modules/lines/line.routes");
 const machineRoutes = require("./src/modules/machines/machine.routes");
+const locationRoutes = require("./src/modules/locations/location.routes");
+const departmentRoutes = require("./src/modules/departments/department.routes");
+const authRoutes = require("./src/modules/auth/auth.routes");
+const workstationRoutes = require("./src/modules/workstation/workstation.routes");
 const plcMachineConfigRoutes = require("./src/modules/plcMachineConfigs/plcMachineConfig.routes");
 const createPlcMonitorRoutes = require("./src/modules/plcMonitor/plcMonitorRoutes");
 const { startPlcMonitor } = require("./src/modules/plcMonitor/plcMonitorService");
@@ -35,6 +39,10 @@ app.get("/api/health", (_req, res) => {
 
 app.use("/api", partRoutes);
 app.use("/api", machineRoutes);
+app.use("/api/auth", authRoutes);
+app.use("/api/workstation", workstationRoutes);
+app.use("/api/locations", locationRoutes);
+app.use("/api/departments", departmentRoutes);
 app.use("/api/lines", lineRoutes);
 app.use("/api/plc-machine-configs", plcMachineConfigRoutes);
 

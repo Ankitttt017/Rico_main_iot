@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useSearchParams } from "react-router-dom";
 import { io } from "socket.io-client";
 import AppLayout from "../../../components/common/AppLayout";
 import { getPlcLatestReadings } from "../../../services/api";
@@ -30,11 +31,21 @@ function firstReadableValue(...values) {
   return values.find((value) => hasReadableValue(value)) || "";
 }
 
+function toValidDate(value) {
+  if (!value) return null;
+  const normalized = typeof value === "string" && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(value)
+    ? value.replace(" ", "T")
+    : value;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 function hasReadingData(readings = {}) {
   return Object.values(readings).some((item) => hasReadableValue(item?.value));
 }
 
 function PLCDashboard() {
+  const [searchParams] = useSearchParams();
   const [theme] = useState("light");
   const [plcConnected, setPlcConnected] = useState(false);
   const [socketConnected, setSocketConnected] = useState(false);
@@ -245,7 +256,7 @@ function PLCDashboard() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [isOlderDbSnapshotForSelectedMachine, plcConfig.ip, plcConfig.key, pushSpark, rememberSelectedSnapshot]);
+  }, [isOlderDbSnapshotForSelectedMachine, machines, plcConfig.ip, plcConfig.key, pushSpark, rememberSelectedSnapshot]);
 
   const loadMachineSnapshot = useCallback((machineOrKey) => {
     const lookupKeys = typeof machineOrKey === "object"
@@ -261,7 +272,7 @@ function PLCDashboard() {
     setCycleHistory(nextHistory);
     setCycleCount(nextHistory.length);
     setSparklines(nextSparks);
-    setLastTimestamp(nextMeta.timestamp ? new Date(nextMeta.timestamp) : null);
+    setLastTimestamp(nextMeta.timestamp ? toValidDate(nextMeta.timestamp) : null);
     setPartName(firstReadableValue(
       nextMeta.partName,
       nextReadings.part_name?.value,
@@ -271,6 +282,12 @@ function PLCDashboard() {
     setShotTime(nextMeta.shotTime || "");
     setCycleStatus("idle");
   }, [historyByIp, metaByIp, readingsByIp, sparkByIp]);
+
+  useEffect(() => {
+    if (!plcConfig.key && !plcConfig.ip) return;
+    if (hasReadingData(readings)) return;
+    loadMachineSnapshot(plcConfig.key || plcConfig.ip);
+  }, [loadMachineSnapshot, plcConfig.ip, plcConfig.key, readings]);
 
   const normalizeConfig = useCallback((config = {}) => {
     const key = config.key || config.machine_key || config.ip;
@@ -598,6 +615,25 @@ function PLCDashboard() {
     socketRef.current?.emit("update_plc_config", config);
   };
 
+  const machineSearch = (searchParams.get("search") || "").trim().toLowerCase();
+  const visibleMachines = useMemo(() => (
+    machineSearch
+      ? machines.filter((machine) => {
+        const key = getMachineKey(machine);
+        const label = machine.name || MACHINE_NAMES[machine.ip] || machine.ip;
+        return [key, label, machine.ip, machine.kind]
+          .some((value) => String(value || "").toLowerCase().includes(machineSearch));
+      })
+      : machines
+  ), [machineSearch, machines]);
+
+  useEffect(() => {
+    if (!machineSearch || !visibleMachines.length) return;
+    const firstMatch = visibleMachines[0];
+    const firstKey = getMachineKey(firstMatch);
+    if (firstKey && firstKey !== selectedKeyRef.current) selectMachine(firstKey);
+  }, [machineSearch, visibleMachines]);
+
   return (
     <>
       <PlcMonitorStyles />
@@ -621,8 +657,8 @@ function PLCDashboard() {
                 <label className="field">
                   <span>Machine</span>
                   <select value={selectedMachineKey || ""} onChange={(e) => selectMachine(e.target.value)}>
-                    {!machines.length && <option value="">No machines configured</option>}
-                    {machines.map(machine => {
+                    {!visibleMachines.length && <option value="">No machines configured</option>}
+                    {visibleMachines.map(machine => {
                       const key = getMachineKey(machine);
                       const label = machine.name || MACHINE_NAMES[machine.ip] || machine.ip;
                       return (

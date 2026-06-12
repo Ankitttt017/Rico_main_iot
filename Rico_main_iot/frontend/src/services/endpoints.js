@@ -6,6 +6,10 @@ export const SOCKET_URL =
 
 export const ENDPOINTS = {
   plants: "/plants",
+  locations: "/locations",
+  location: (id) => `/locations/${id}`,
+  departments: "/departments",
+  department: (id) => `/departments/${id}`,
   parts: "/parts",
   part: (id) => `/parts/${id}`,
   partOperations: (id) => `/parts/${id}/operations`,
@@ -34,7 +38,18 @@ export const ENDPOINTS = {
   plcConnectionEventsExport: "/plc-monitor/connection-events/export",
   plcMachineConfigs: "/plc-machine-configs",
   plcMachineConfig: (id) => `/plc-machine-configs/${id}`,
+  plcRegisterTemplates: "/plc-machine-configs/templates",
   plcMachineConfigTest: "/plc-machine-configs/test-connection",
+  authLogin: "/auth/login",
+  authRoles: "/auth/roles",
+  authUsers: "/auth/users",
+  authUser: (id) => `/auth/users/${id}`,
+  authUserToggle: (id) => `/auth/users/${id}/toggle`,
+  authUserResetPassword: (id) => `/auth/users/${id}/reset-password`,
+  authCheckUsername: "/auth/users/check-username",
+  workstationSummary: "/workstation/summary",
+  workstationDowntimeEvents: "/workstation/downtime-events",
+  workstationDowntimeEventClose: (id) => `/workstation/downtime-events/${id}/close`,
 };
 
 export function buildApiUrl(path, query) {

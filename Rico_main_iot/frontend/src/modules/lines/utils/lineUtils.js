@@ -17,19 +17,11 @@ export const getPlantCodeFromValue = (value, fallbackCode = "1002") => {
   if (byName) return byName.code;
   if (/bawal/i.test(text)) return "1008";
   if (/gurugram|gurgaon/i.test(text)) return "1002";
-  return fallbackCode;
+  return text || fallbackCode;
 };
 
 export const getLinePlantCode = (line = {}, fallbackCode = "1002") =>
   getPlantCodeFromValue(line.plant_code || line.plant, fallbackCode);
-
-export const getLineProtocolLabels = (line = {}) => {
-  const labels = [];
-  if (Number(line.has_slmp)) labels.push("SLMP");
-  if (Number(line.has_tcp_modbus)) labels.push("TCP/IP");
-  if (!labels.length && line.primary_protocol) labels.push(line.primary_protocol);
-  return labels;
-};
 
 export const divisionMatches = (lineDivision, selectedDivision) => {
   if (!selectedDivision) return true;
@@ -39,17 +31,6 @@ export const divisionMatches = (lineDivision, selectedDivision) => {
     return lineText.includes("machining") || lineText.includes("machine") || lineText.includes("mcs");
   }
   return lineText.includes(selectedText);
-};
-
-export const lineMatchesProtocol = (line, protocol) => {
-  if (!protocol) return true;
-  const compact = String(protocol).replace(/\s+/g, "").toLowerCase();
-  if (compact === "slmp") return Number(line.has_slmp) === 1 || String(line.primary_protocol || "").toLowerCase() === "slmp";
-  if (compact === "tcp/ip" || compact === "tcpip" || compact === "tcpmodbus" || compact === "modbustcp") {
-    const primary = String(line.primary_protocol || "").replace(/[\s/]+/g, "").toLowerCase();
-    return Number(line.has_tcp_modbus) === 1 || primary === "tcpip" || primary === "tcpmodbus";
-  }
-  return getLineProtocolLabels(line).some((label) => label.toLowerCase() === String(protocol).toLowerCase());
 };
 
 export const makeMachineDraft = (machine = {}) => ({

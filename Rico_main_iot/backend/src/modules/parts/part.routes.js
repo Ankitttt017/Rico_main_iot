@@ -1,16 +1,18 @@
 const express = require('express');
 const router  = express.Router();
 const {
-  getAllPlants, getPartsByPlant, getPartById,
+  getAllPlants, getPartsByPlant, createPart, getPartById,
   getPartOperations, getPartConfiguration, updatePartConfiguration,
   updatePartById, getPartSheets, uploadPartSheet, downloadPartSheet,
   updatePartOperation, deletePartOperation,
-  getOperationMaster, getMaterials, getStats,
+  getOperationMaster, createOperation, getMaterials, getStats,
 } = require('./part.controller');
 
 router.get('/plants',                        getAllPlants);
 router.get('/parts',                         getPartsByPlant);
+router.post('/parts',                        createPart);
 router.get('/operations',                    getOperationMaster);
+router.post('/operations',                   createOperation);
 router.get('/parts/:id',                     getPartById);
 router.put('/parts/:id',                     updatePartById);
 router.get('/parts/:id/operations',          getPartOperations);

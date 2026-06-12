@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { CheckCircle2, Download } from "lucide-react";
 import AppLayout from "../../../components/common/AppLayout";
 import ricoLogo from "../../../assets/rico-logo.png";
@@ -67,9 +68,14 @@ const HIDDEN_COLUMNS = new Set([
   "plc_ip",
   "plc_port",
   "cycle_start",
+  "cycle_start_time",
   "cycle_end",
   "cycle_end_time",
+  "cycle_duration",
+  "actual_cycle_time",
+  "plc_cycle_time",
   "minor_stoppage_machine",
+  "vacuum_pressure_mmhg",
   "raw_readings_json",
   "created_at",
   "machine_type",
@@ -81,6 +87,15 @@ const HIDDEN_COLUMNS = new Set([
 
 const SERIAL_COLUMN = "serial_number";
 const SHIFT_COLUMN = "shift";
+
+const NOT_AVAILABLE_COLUMNS = new Set([
+  "fix_1_flow",
+  "fix_2_flow",
+  "fix_3_flow",
+  "mov_1_flow",
+  "mov_2_flow",
+  "mov_3_flow",
+]);
 
 const PREFERRED_COLUMNS = [
   SERIAL_COLUMN,
@@ -101,9 +116,9 @@ const PREFERRED_COLUMNS = [
 ];
 
 const SHOT_STATUS = {
-  1: { label: "OK Shot", tone: "emerald" },
-  3: { label: "Warm Up Shot", tone: "amber" },
-  5: { label: "Parameter NG", tone: "rose" },
+  1: { label: "OK", tone: "emerald" },
+  3: { label: "Warm Up", tone: "amber" },
+  5: { label: "NG", tone: "rose" },
 };
 
 const QUICK_DATE_FILTERS = [
@@ -122,9 +137,9 @@ const SHIFT_FILTERS = [
 
 const SHOT_RESULT_FILTERS = [
   { key: "all", label: "All Result" },
-  { key: "ok", label: "OK Shot", status: 1 },
-  { key: "warm", label: "Warm Up Shot", status: 3 },
-  { key: "ng", label: "Parameter NG", status: 5 },
+  { key: "ok", label: "OK", status: 1 },
+  { key: "warm", label: "Warm Up", status: 3 },
+  { key: "ng", label: "NG", status: 5 },
 ];
 
 const REPORT_LABELS = {
@@ -514,13 +529,14 @@ function isRowInProductionFilter(row = {}, fromDate, toDate, shiftFilter, shotRe
 
 function shotStatusLabel(value) {
   const status = Number(value);
-  if (status === 1) return "OK Shot";
-  if (status === 3) return "Warm Up Shot";
-  if (status === 5) return "Parameter NG";
+  if (status === 1) return "OK";
+  if (status === 3) return "Warm Up";
+  if (status === 5) return "NG";
   return "-";
 }
 
 function formatValue(value, key) {
+  if (NOT_AVAILABLE_COLUMNS.has(normalizeColumnKey(key))) return "N/A";
   if (value === null || value === undefined || value === "") return "-";
   if (normalizeColumnKey(key) === "biscuit_thickness") return String(value);
   if (key === "recorded_at" || key === "cycle_end_time") return formatDateTime(value);
@@ -532,9 +548,21 @@ function formatValue(value, key) {
   return String(value);
 }
 
-function formatReportCell(row, key, rowIndex = 0, rowCount = 0) {
+function formatReportCell(row, key, rowIndex = 0, rowCount = 0, rows = []) {
   if (key === SERIAL_COLUMN) return Math.max(1, rowCount - rowIndex);
   if (key === SHIFT_COLUMN) return getRowShift(row);
+  if (normalizeColumnKey(key) === "ng_counter" && rowIndex > 0) {
+    const previousValue = rows[rowIndex - 1]?.[key];
+    const currentValue = row[key];
+    if (
+      currentValue !== null &&
+      currentValue !== undefined &&
+      currentValue !== "" &&
+      String(currentValue) === String(previousValue)
+    ) {
+      return "-";
+    }
+  }
   return formatValue(row[key], key);
 }
 
@@ -689,6 +717,7 @@ function KpiCard({ title, value, tone }) {
 }
 
 export default function PlcReportPage({ onLogout, currentUser }) {
+  const [searchParams] = useSearchParams();
   const [machines, setMachines] = useState([DEFAULT_MACHINE]);
   const [lines, setLines] = useState([]);
   const [machinesByLine, setMachinesByLine] = useState({});
@@ -711,6 +740,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   const [error, setError] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const tableScrollRef = useRef(null);
+  const reportSearch = (searchParams.get("search") || "").trim();
 
   useEffect(() => {
     let active = true;
@@ -818,6 +848,29 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     [activeMachineOptions, selectedMachineId]
   );
 
+  const searchMatchedMachineId = useMemo(() => {
+    const q = reportSearch.toLowerCase();
+    if (!q) return "";
+    const match = allReportMachines.find((machine) =>
+      [
+        getMachineId(machine),
+        getMachineLabel(machine),
+        getMachineReportIp(machine),
+        machine.machine_name,
+        machine.name,
+      ].some((value) => String(value || "").toLowerCase().includes(q))
+    );
+    return match ? getMachineId(match) : "";
+  }, [allReportMachines, reportSearch]);
+
+  useEffect(() => {
+    if (!searchMatchedMachineId || String(selectedMachineId) === String(searchMatchedMachineId)) return;
+    setSelectedLineId("all");
+    setDraftLineId("all");
+    setSelectedMachineId(searchMatchedMachineId);
+    setDraftMachineId(searchMatchedMachineId);
+  }, [searchMatchedMachineId, selectedMachineId]);
+
   const applyQuickDateFilter = useCallback((key) => {
     const range = getQuickDateRange(key);
     setDraftQuickFilter(key);
@@ -873,10 +926,14 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     return () => window.clearInterval(timer);
   }, [loadReport]);
 
-  const filteredRows = useMemo(
-    () => rows.filter((row) => isRowInProductionFilter(row, fromDate, toDate, shiftFilter, shotResultFilter)),
-    [fromDate, rows, shiftFilter, shotResultFilter, toDate]
-  );
+  const filteredRows = useMemo(() => {
+    const q = searchMatchedMachineId ? "" : reportSearch.toLowerCase();
+    return rows.filter((row) => {
+      if (!isRowInProductionFilter(row, fromDate, toDate, shiftFilter, shotResultFilter)) return false;
+      if (!q) return true;
+      return Object.values(row || {}).some((value) => String(value ?? "").toLowerCase().includes(q));
+    });
+  }, [fromDate, reportSearch, rows, searchMatchedMachineId, shiftFilter, shotResultFilter, toDate]);
 
   const columns = useMemo(() => buildColumns(filteredRows), [filteredRows]);
 
@@ -926,7 +983,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     const generatedAt = formatDateTime(new Date());
     const header = columns.map((key) => `<th>${escapeHtml(labelize(key))}</th>`).join("");
     const body = reportRows.map((row, index) => (
-      `<tr>${columns.map((key) => `<td${reportCellHtmlAttrs(row, key)}>${escapeHtml(formatReportCell(row, key, index, reportRows.length))}</td>`).join("")}</tr>`
+      `<tr>${columns.map((key) => `<td${reportCellHtmlAttrs(row, key)}>${escapeHtml(formatReportCell(row, key, index, reportRows.length, reportRows))}</td>`).join("")}</tr>`
     )).join("");
     const popup = window.open("", "_blank", "width=1200,height=800");
     if (!popup) return;
@@ -993,7 +1050,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     <div class="summary">
       <div class="kpi"><span>OK Shot</span><strong>${kpis.ok}</strong></div>
       <div class="kpi"><span>Warm Up Shot</span><strong>${kpis.warm}</strong></div>
-      <div class="kpi"><span>Parameter NG</span><strong>${kpis.off}</strong></div>
+      <div class="kpi"><span>Off Shot</span><strong>${kpis.off}</strong></div>
       <div class="kpi"><span>Total Production</span><strong>${kpis.totalProduction}</strong></div>
       <div class="kpi"><span>Shift</span><strong>${kpis.shift}</strong></div>
     </div>
@@ -1012,7 +1069,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     const generatedAt = formatDateTime(new Date());
     const header = columns.map((key) => `<th>${escapeHtml(labelize(key))}</th>`).join("");
     const body = reportRows.map((row, index) => (
-      `<tr>${columns.map((key) => `<td${reportCellHtmlAttrs(row, key)}>${escapeHtml(formatReportCell(row, key, index, reportRows.length))}</td>`).join("")}</tr>`
+      `<tr>${columns.map((key) => `<td${reportCellHtmlAttrs(row, key)}>${escapeHtml(formatReportCell(row, key, index, reportRows.length, reportRows))}</td>`).join("")}</tr>`
     )).join("");
     downloadHtmlFile(`${reportFileBaseName}.xls`, `<!doctype html>
 <html>
@@ -1063,7 +1120,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     <tr>
       <td class="summary-label">OK Shot</td>
       <td class="summary-label">Warm Up Shot</td>
-      <td class="summary-label">Parameter NG</td>
+      <td class="summary-label">Off Shot</td>
       <td class="summary-label">Total Production</td>
       <td class="summary-label">Shift</td>
     </tr>
@@ -1222,7 +1279,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
           <KpiCard title="Total Production" value={kpis.totalProduction} tone="blue" />
           <KpiCard title="OK Shot" value={kpis.ok} tone="emerald" />
           <KpiCard title="Warm Up Shot" value={kpis.warm} tone="amber" />
-          <KpiCard title="Parameter NG" value={kpis.off} tone="rose" />
+          <KpiCard title="Off Shot" value={kpis.off} tone="rose" />
           <KpiCard title="Shift" value={kpis.shift} tone="indigo" />
         </section>
 
@@ -1263,7 +1320,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                             : "border-slate-100 text-slate-800"
                         }`}
                       >
-                        {formatReportCell(row, key, index, reportRows.length)}
+                        {formatReportCell(row, key, index, reportRows.length, reportRows)}
                       </td>
                     ))}
                   </tr>

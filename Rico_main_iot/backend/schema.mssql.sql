@@ -9,9 +9,33 @@ BEGIN
     code VARCHAR(20) UNIQUE NOT NULL,
     name VARCHAR(100) NOT NULL,
     location VARCHAR(200) NULL,
+    is_active BIT NOT NULL DEFAULT 1,
+    updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
     created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
   );
 END;
+
+IF COL_LENGTH('dbo.iot_plants', 'is_active') IS NULL
+  ALTER TABLE dbo.iot_plants ADD is_active BIT NOT NULL CONSTRAINT df_iot_plants_is_active DEFAULT 1;
+IF COL_LENGTH('dbo.iot_plants', 'updated_at') IS NULL
+  ALTER TABLE dbo.iot_plants ADD updated_at DATETIME2 NOT NULL CONSTRAINT df_iot_plants_updated_at DEFAULT SYSUTCDATETIME();
+
+IF OBJECT_ID(N'dbo.iot_departments', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.iot_departments (
+    id BIGINT IDENTITY(1,1) PRIMARY KEY,
+    code VARCHAR(40) NOT NULL,
+    name NVARCHAR(160) NOT NULL,
+    plant_code VARCHAR(20) NULL,
+    description NVARCHAR(300) NULL,
+    is_active BIT NOT NULL DEFAULT 1,
+    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+  );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'ux_iot_departments_code_plant')
+  CREATE UNIQUE INDEX ux_iot_departments_code_plant ON dbo.iot_departments (code, plant_code);
 
 IF OBJECT_ID(N'dbo.line_master', N'U') IS NULL
 BEGIN
@@ -277,6 +301,8 @@ IF COL_LENGTH('dbo.iot_machines', 'protocol') IS NULL
   ALTER TABLE dbo.iot_machines ADD protocol VARCHAR(30) NULL;
 IF COL_LENGTH('dbo.iot_machines', 'part_name') IS NULL
   ALTER TABLE dbo.iot_machines ADD part_name NVARCHAR(200) NULL;
+IF COL_LENGTH('dbo.iot_machines', 'is_active') IS NULL
+  ALTER TABLE dbo.iot_machines ADD is_active BIT NOT NULL CONSTRAINT df_iot_machines_is_active DEFAULT 1;
 
 IF OBJECT_ID(N'dbo.iot_machine_status', N'U') IS NULL
 BEGIN
@@ -393,6 +419,18 @@ WHEN MATCHED THEN
   UPDATE SET name = source.name, location = COALESCE(target.location, source.location)
 WHEN NOT MATCHED THEN
   INSERT (code, name, location) VALUES (source.code, source.name, source.location);
+
+MERGE dbo.iot_departments AS target
+USING (
+  SELECT 'HPDC' AS code, 'HPDC' AS name, NULL AS plant_code, 'High Pressure Die Casting' AS description
+  UNION ALL SELECT 'MACHINING', 'Machining', NULL, 'Machine shop and CNC operations'
+) AS source
+ON target.code = source.code AND (
+  target.plant_code = source.plant_code OR (target.plant_code IS NULL AND source.plant_code IS NULL)
+)
+WHEN NOT MATCHED THEN
+  INSERT (code, name, plant_code, description)
+  VALUES (source.code, source.name, source.plant_code, source.description);
 
 MERGE dbo.iot_parts AS target
 USING (
@@ -745,6 +783,26 @@ IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_time') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [shot_time] TIME(0) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_datetime') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [shot_datetime] DATETIME2(0) NULL;
+
+IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
+   AND COL_LENGTH('dbo.plc_machine_configs', 'machine_id') IS NULL
+  ALTER TABLE dbo.plc_machine_configs ADD machine_id BIGINT NULL;
+
+IF OBJECT_ID(N'dbo.plc_register_templates', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.plc_register_templates (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    template_key NVARCHAR(80) NOT NULL UNIQUE,
+    template_name NVARCHAR(160) NOT NULL,
+    machine_type NVARCHAR(40) NOT NULL DEFAULT 'ube',
+    register_config_json NVARCHAR(MAX) NOT NULL,
+    notes NVARCHAR(500) NULL,
+    is_active BIT NOT NULL DEFAULT 1,
+    is_system BIT NOT NULL DEFAULT 0,
+    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+  );
+END;
 
 EXEC(N'CREATE OR ALTER TRIGGER dbo.trg_PlcCycleReadings_ShotDate
 ON dbo.PlcCycleReadings
