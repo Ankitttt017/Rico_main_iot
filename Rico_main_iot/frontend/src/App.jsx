@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useState } from "react";
-import { Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { Routes, Route, Navigate } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 import { I18nProvider } from "./context/I18nContext";
 import { SidebarProvider } from "./context/SidebarContext";
@@ -7,7 +7,6 @@ import { SidebarProvider } from "./context/SidebarContext";
 // ─── Rico IoT Pages ────────────────────────────────────────────────
 const LoginPage = lazy(() => import("./pages/LoginPage"));
 const LineMasterPage = lazy(() => import("./pages/LineMasterPage"));
-const OperatorWorkstationLoginPage = lazy(() => import("./pages/OperatorWorkstationLoginPage"));
 const OperatorWorkstationPage = lazy(() => import("./pages/OperatorWorkstationPage"));
 const IotDashboardPage = lazy(() => import("./pages/IotDashboardPage"));
 const LocationMasterPage = lazy(() => import("./modules/locations/pages/LocationMasterPage"));
@@ -47,15 +46,10 @@ function getSavedUser() {
 }
 
 const App = () => {
-  const location = useLocation();
-  const isWorkstationRoute = location.pathname === "/operator-workstation";
   const [isLoggedIn, setIsLoggedIn] = useState(
     () => sessionStorage.getItem("rico_auth") === "true"
   );
   const [currentUser, setCurrentUser] = useState(() => getSavedUser());
-  const [isWorkstationLoggedIn, setIsWorkstationLoggedIn] = useState(
-    () => sessionStorage.getItem("rico_workstation_auth") === "true"
-  );
   const [workstationUser, setWorkstationUser] = useState(
     () => sessionStorage.getItem("rico_workstation_user") || ""
   );
@@ -80,7 +74,6 @@ const App = () => {
       sessionStorage.setItem("rico_workstation_auth", "true");
       sessionStorage.setItem("rico_workstation_user", user.name || user.username || "Operator");
       setWorkstationUser(user.name || user.username || "Operator");
-      setIsWorkstationLoggedIn(true);
     }
   };
 
@@ -91,34 +84,14 @@ const App = () => {
     sessionStorage.removeItem("rico_workstation_user");
     setCurrentUser(null);
     setIsLoggedIn(false);
-    setIsWorkstationLoggedIn(false);
     setWorkstationUser("");
-  };
-
-  const handleWorkstationLogin = (username) => {
-    const user = typeof username === "object" ? username : {
-      name: username?.trim() || "Operator",
-      role: "Operator",
-      role_key: "OPERATOR",
-      permissions: ["workstation:view", "workstation:operate"],
-      landingPath: "/operator-workstation",
-    };
-    const name = user.name || user.username || "Operator";
-    sessionStorage.setItem("rico_auth", "true");
-    sessionStorage.setItem("rico_user", JSON.stringify(user));
-    sessionStorage.setItem("rico_workstation_auth", "true");
-    sessionStorage.setItem("rico_workstation_user", name);
-    setCurrentUser(user);
-    setIsLoggedIn(true);
-    setWorkstationUser(name);
-    setIsWorkstationLoggedIn(true);
   };
 
   const workstationRoute = (
     <Route
       path="/operator-workstation"
       element={
-        isWorkstationLoggedIn ? (
+        requirePermission("workstation:view",
           <OperatorWorkstationPage
             onLogout={handleLogout}
             currentUser={{
@@ -127,8 +100,6 @@ const App = () => {
               permissions: currentUser?.permissions || ["workstation:view", "workstation:operate"],
             }}
           />
-        ) : (
-          <OperatorWorkstationLoginPage onLogin={handleWorkstationLogin} />
         )
       }
     />
@@ -143,7 +114,7 @@ const App = () => {
       <SidebarProvider>
         <Toaster position="top-right" />
         <Suspense fallback={<PageLoader />}>
-          {!isLoggedIn && !isWorkstationRoute ? (
+          {!isLoggedIn ? (
             <LoginPage onLogin={handleLogin} />
           ) : (
             <Routes>

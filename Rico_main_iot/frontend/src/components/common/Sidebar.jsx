@@ -36,7 +36,7 @@ const navSections = [
     items: [
       { label: "Dashboard", to: "/dashboard", icon: LayoutDashboard, permission: "reports:view" },
       { label: "Alerts", to: "/alerts", icon: Bell, badge: { text: "3", type: "amber" }, permission: "reports:view" },
-      { label: "Digital Workstation", to: "/operator-workstation", icon: Monitor, badgeKey: "workstations", badgeType: "gray", permission: "workstation:view", newTab: true },
+      { label: "Digital Workstation", to: "/operator-workstation", icon: Monitor, badgeKey: "workstations", badgeType: "gray", permission: "workstation:view" },
       { label: "Real Time Monitor", to: "/plc-monitor", icon: Activity, badge: { text: "Live", type: "green" }, permission: "plc:view" },
       { label: "Downtime Tracker", to: "/downtime-tracker", icon: AlertTriangle, permission: "downtime:view" },
       { label: "My Report", to: "/plc-report", icon: FileText, permission: "reports:view" },
