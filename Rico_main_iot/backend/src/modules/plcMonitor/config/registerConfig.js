@@ -232,6 +232,7 @@ const LEGACY_COLUMNS_BY_PARAMETER = {
   "Mov. 2 Flow (Lpm)": "mov_2_flow",
   "Mov. 3 Flow (Lpm)": "mov_3_flow",
   "Vacuum pressure (mmHg)": "vacuum_pressure_mmhg",
+  "Vacuum pressure (mbar)": "vacuum_pressure_mmhg",
   "AVERAGE DIE CLAMP TONNAGE COUNT": "average_die_clamp_tonnage_count",
   "Time for stroke(ms)": "time_for_stroke",
   "Stroke (mm)": "stroke",
