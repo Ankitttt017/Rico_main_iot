@@ -167,6 +167,21 @@ function isLeakTestMachine(machine) {
   return machine.kind === "leaktest";
 }
 
+const REPORT_SAVE_UBE_KEYS = new Set(
+  String(process.env.PLC_REPORT_SAVE_UBE_KEYS || "ube-850t-2,192.168.117.201")
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean)
+);
+
+function isReportSaveEnabledForMachine(machine) {
+  if (isLeakTestMachine(machine)) return true;
+  const key = String(machine.key || machine.machine_key || "").trim().toLowerCase();
+  const name = String(machine.name || machine.machine_name || "").trim().toLowerCase();
+  const ip = String(machine.ip || machine.plc_ip || "").trim().toLowerCase();
+  return REPORT_SAVE_UBE_KEYS.has(key) || REPORT_SAVE_UBE_KEYS.has(name) || REPORT_SAVE_UBE_KEYS.has(ip);
+}
+
 /**
  * Build a standard emit payload â€” always includes machineKey + machineType
  * so frontend can filter easily
@@ -2370,11 +2385,20 @@ function startPlcMonitor(io) {
       if (!fs.existsSync(PLC_PENDING_SAVE_FILE)) return;
       const parsed = JSON.parse(fs.readFileSync(PLC_PENDING_SAVE_FILE, "utf8"));
       if (!Array.isArray(parsed)) return;
+      let dropped = 0;
       parsed.forEach(([key, item]) => {
         if (key && item?.machine && item?.readings) {
+          if (!isReportSaveEnabledForMachine(item.machine)) {
+            dropped += 1;
+            return;
+          }
           pendingUbeSaves.set(key, item);
         }
       });
+      if (dropped) {
+        persistPendingUbeSaves();
+        console.log(`PLC pending save queue dropped ${dropped} disabled UBE items`);
+      }
       if (pendingUbeSaves.size) {
         console.log(`PLC pending save queue restored: ${pendingUbeSaves.size} items`);
       }
@@ -2487,6 +2511,12 @@ function startPlcMonitor(io) {
   };
 
   const persistUbeReading = async (machine, partName, readings) => {
+    if (!isReportSaveEnabledForMachine(machine)) {
+      pendingUbeSaves.delete(buildUbeSaveKey(machine, readings));
+      persistPendingUbeSaves();
+      return { skipped: true, reason: "report-save-disabled" };
+    }
+
     try {
       const result = await saveToDB(machine, partName, readings);
       pendingUbeSaves.delete(buildUbeSaveKey(machine, readings));
