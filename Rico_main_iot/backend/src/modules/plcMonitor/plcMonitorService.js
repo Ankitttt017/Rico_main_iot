@@ -540,6 +540,32 @@ function getFallbackDevices(envName, defaults = []) {
     .filter(Boolean);
 }
 
+function getLeakQrDeviceCandidates(configuredDevice = "") {
+  const primaryDevice = String(process.env.PLC_LEAK_SCAN_DEVICE || "D301").trim().toUpperCase();
+  const configured = String(configuredDevice || "").trim().toUpperCase();
+  return Array.from(new Set(getFallbackDevices("PLC_LEAK_SCAN_FALLBACK_DEVICES", [
+    primaryDevice,
+    configured,
+    "D300",
+    "D301",
+    "D100",
+    "D101",
+    "D102",
+  ])));
+}
+
+async function readLeakQrCode(sock, configuredDevice = "", configuredLength = 14) {
+  const length = Number(process.env.PLC_LEAK_SCAN_LENGTH || configuredLength || 14);
+  for (const device of getLeakQrDeviceCandidates(configuredDevice)) {
+    if (!device) continue;
+    const value = await readString(sock, device, length).catch(() => "");
+    if (String(value || "").trim()) {
+      return { value, device };
+    }
+  }
+  return { value: "", device: "" };
+}
+
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // DB HELPERS
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -617,6 +643,24 @@ function formatDbRowForClient(row = {}) {
   }
 
   return next;
+}
+
+function historySortKey(row = {}) {
+  const value = row.recorded_at || row.shot_datetime || row.cycle_end_time || row.created_at;
+  if (value instanceof Date) return value.toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "");
+  return String(value || "")
+    .replace("T", " ")
+    .replace(/\.\d{3}Z$/, "")
+    .replace(/Z$/, "");
+}
+
+function sortHistoryRows(rows = []) {
+  return rows.sort((a, b) => {
+    const aKey = historySortKey(a);
+    const bKey = historySortKey(b);
+    if (aKey !== bKey) return bKey.localeCompare(aKey);
+    return Number(b.id || 0) - Number(a.id || 0);
+  });
 }
 
 function formatDbReading(row, machineFallback = {}) {
@@ -1108,7 +1152,7 @@ async function getReadingHistory({ ip, limit = 200, from, to } = {}) {
        ORDER BY recorded_at DESC, id DESC`,
       values
     );
-    return rows.map(formatDbRowForClient);
+    return sortHistoryRows(rows.map(formatDbRowForClient));
   }
 
   if (targetMachine?.kind === "leaktest") {
@@ -1151,7 +1195,7 @@ async function getReadingHistory({ ip, limit = 200, from, to } = {}) {
       ORDER BY Cycle_End_Time DESC, Id DESC`,
       values
     );
-    return rows.map(formatDbRowForClient);
+    return sortHistoryRows(rows.map(formatDbRowForClient));
   }
 
   const machineKey = targetMachine?.key || targetMachine?.machine_key || targetId;
@@ -1167,39 +1211,40 @@ async function getReadingHistory({ ip, limit = 200, from, to } = {}) {
   const byMachineKey = buildDateFilter();
   const byPlcIp = buildDateFilter();
   const byLegacyKey = buildDateFilter();
+  const latestOrder = "TRY_CONVERT(DATETIME2(3), recorded_at) DESC, id DESC";
 
   const { rows } = await db.query(
     `WITH candidates AS (
        SELECT * FROM (
          SELECT TOP (${safeLimit}) * FROM ${TABLE}
          WHERE machine_key = ?${byMachineKey.sql}
-         ORDER BY recorded_at DESC, id DESC
+         ORDER BY ${latestOrder}
        ) by_machine_key
        UNION ALL
        SELECT * FROM (
          SELECT TOP (${safeLimit}) * FROM ${TABLE}
          WHERE plc_ip = ?${byPlcIp.sql}
-         ORDER BY recorded_at DESC, id DESC
+         ORDER BY ${latestOrder}
        ) by_plc_ip
        UNION ALL
        SELECT * FROM (
          SELECT TOP (${safeLimit}) * FROM ${TABLE}
          WHERE plc_ip = ?${byLegacyKey.sql}
-         ORDER BY recorded_at DESC, id DESC
+         ORDER BY ${latestOrder}
        ) by_legacy_key
      ),
      ranked AS (
        SELECT *,
          ROW_NUMBER() OVER (
            PARTITION BY id
-           ORDER BY recorded_at DESC, id DESC
+           ORDER BY ${latestOrder}
          ) AS history_rank
        FROM candidates
      )
      SELECT TOP (${safeLimit}) *
      FROM ranked
      WHERE history_rank = 1
-     ORDER BY recorded_at DESC, id DESC`,
+     ORDER BY ${latestOrder}`,
     [
       machineKey,
       ...byMachineKey.values,
@@ -1209,7 +1254,7 @@ async function getReadingHistory({ ip, limit = 200, from, to } = {}) {
       ...byLegacyKey.values,
     ]
   );
-  return rows.map(formatDbRowForClient);
+  return sortHistoryRows(rows.map(formatDbRowForClient));
 }
 
 async function getConnectionEvents({ ip, limit = 200, from, to } = {}) {
@@ -2918,21 +2963,10 @@ function startPlcMonitor(io) {
       }
     }
 
-    if (!String(readings.part_qr_code || "").trim()) {
-      const qrFallbackDevices = getFallbackDevices("PLC_LEAK_SCAN_FALLBACK_DEVICES", [
-        configuredQrDevice || "D101",
-        "D100",
-        "D102",
-      ]);
-      for (const fallbackDevice of qrFallbackDevices) {
-        if (!fallbackDevice || fallbackDevice === configuredQrDevice) continue;
-        const fallbackQr = await readString(sock, fallbackDevice, configuredQrLength || 14).catch(() => "");
-        if (String(fallbackQr || "").trim()) {
-          readings.part_qr_code = fallbackQr;
-          readings.scan_source_device = fallbackDevice;
-          break;
-        }
-      }
+    const primaryQr = await readLeakQrCode(sock, configuredQrDevice, configuredQrLength);
+    if (primaryQr.value) {
+      readings.part_qr_code = primaryQr.value;
+      readings.scan_source_device = primaryQr.device;
     }
 
     readings.scan_data = readings.part_qr_code || "";
@@ -3441,6 +3475,7 @@ function startPlcMonitor(io) {
         let cycleEndHandled = false;
         let lastLiveReadAt = 0;
         let lastSeenShotNumber = null;
+        let lastLiveSavedShotNumber = null;
         let consecutiveReadFailures = 0;
 
         while (isMonitorCurrent()) {
@@ -3546,6 +3581,42 @@ function startPlcMonitor(io) {
 
             const currentShotNumber = livePayload?.readings?.shot_number?.value ?? null;
             if (currentShotNumber !== null && currentShotNumber !== undefined) {
+              const liveFlatReadings = Object.fromEntries(
+                Object.entries(livePayload.readings || {}).map(([name, r]) => [name, r?.value])
+              );
+
+              const saveOnLiveShot =
+                String(process.env.PLC_UBE_SAVE_ON_LIVE_SHOT_CHANGE || "true").toLowerCase() !== "false";
+              if (
+                saveOnLiveShot &&
+                currentShotNumber !== lastLiveSavedShotNumber &&
+                hasStableCycleReadings(liveFlatReadings)
+              ) {
+                try {
+                  const saveResult = await persistUbeReading(machine, livePayload.partName, liveFlatReadings);
+                  lastLiveSavedShotNumber = currentShotNumber;
+                  if (saveResult?.skipped && saveResult.reason !== "duplicate-shot-number") {
+                    updateMachineState(machine, {
+                      connected: true,
+                      error: null,
+                      shotStatus: `Live shot ${currentShotNumber} checked: ${saveResult.reason}.`,
+                    });
+                  } else if (!saveResult?.skipped) {
+                    updateMachineState(machine, {
+                      connected: true,
+                      error: null,
+                      shotStatus: `Live shot ${currentShotNumber} saved.`,
+                    });
+                  }
+                } catch (error) {
+                  updateMachineState(machine, {
+                    connected: true,
+                    error: `Live shot save failed: ${error.message}`,
+                  });
+                  console.error(`PLC live shot save failed for ${machine.ip}:`, error.message);
+                }
+              }
+
               if (lastSeenShotNumber === null) {
                 lastSeenShotNumber = currentShotNumber;
               } else if (currentShotNumber !== lastSeenShotNumber) {

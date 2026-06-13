@@ -200,8 +200,6 @@ const LineMasterPage = ({ onLogout, currentUser }) => {
           plantOptions={plantOptions.length ? plantOptions : PLANT_OPTIONS}
           departmentOptions={departmentOptions}
           onPlantChange={(plantCode) => {
-            const nextPlant = plants.find((item) => String(item.code) === String(plantCode));
-            if (nextPlant) setSelectedPlant(nextPlant);
             return loadDepartments(plantCode);
           }}
           saving={saving}

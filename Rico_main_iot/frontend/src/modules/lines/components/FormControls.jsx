@@ -1,10 +1,10 @@
 import React, { useState } from "react";
 
 export const Field = ({ label, children }) => (
-  <label className="block">
+  <div className="block">
     <span className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">{label}</span>
     {children}
-  </label>
+  </div>
 );
 
 export const inputClass = "h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-50";

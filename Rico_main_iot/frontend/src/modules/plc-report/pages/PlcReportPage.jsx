@@ -85,6 +85,11 @@ const HIDDEN_COLUMNS = new Set([
   ...Object.values(LIMIT_STATUS_BY_COLUMN),
 ]);
 
+const LEAK_TEST_HIDDEN_COLUMNS = new Set([
+  "part_name",
+  "part_qr_code",
+]);
+
 const SERIAL_COLUMN = "serial_number";
 const SHIFT_COLUMN = "shift";
 
@@ -335,10 +340,6 @@ function normalizeColumnKey(key) {
     .replace(/[^a-zA-Z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "")
     .toLowerCase();
-}
-
-function isHiddenColumn(key) {
-  return HIDDEN_COLUMNS.has(normalizeColumnKey(key));
 }
 
 function formatDateTime(value) {
@@ -665,11 +666,29 @@ function sortRowsLatestFirst(nextRows) {
   });
 }
 
-function buildColumns(rows) {
+function isLeakTestMachine(machine = {}, rows = []) {
+  const machineText = [
+    machine.machine_type,
+    machine.kind,
+    machine.machine_name,
+    machine.name,
+    machine.machine_key,
+  ].join(" ").toLowerCase();
+  if (machineText.includes("leak")) return true;
+  return rows.some((row) => String(row?.machine_type || row?.kind || "").toLowerCase() === "leaktest");
+}
+
+function isHiddenForReport(key, hideLeakTestFields = false) {
+  const normalizedKey = normalizeColumnKey(key);
+  return HIDDEN_COLUMNS.has(normalizedKey) || (hideLeakTestFields && LEAK_TEST_HIDDEN_COLUMNS.has(normalizedKey));
+}
+
+function buildColumns(rows, options = {}) {
+  const hideLeakTestFields = Boolean(options.hideLeakTestFields);
   const keys = new Set();
   rows.forEach((row) => {
     Object.keys(row || {}).forEach((key) => {
-      if (!isHiddenColumn(key)) keys.add(key);
+      if (!isHiddenForReport(key, hideLeakTestFields)) keys.add(key);
     });
   });
   if (rows.length) {
@@ -677,7 +696,7 @@ function buildColumns(rows) {
     keys.add(SHIFT_COLUMN);
   }
   return [
-    ...PREFERRED_COLUMNS.filter((key) => keys.has(key)),
+    ...PREFERRED_COLUMNS.filter((key) => keys.has(key) && !isHiddenForReport(key, hideLeakTestFields)),
     ...Array.from(keys)
       .filter((key) => !PREFERRED_COLUMNS.includes(key))
       .sort((a, b) => labelize(a).localeCompare(labelize(b))),
@@ -935,7 +954,15 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     });
   }, [fromDate, reportSearch, rows, searchMatchedMachineId, shiftFilter, shotResultFilter, toDate]);
 
-  const columns = useMemo(() => buildColumns(filteredRows), [filteredRows]);
+  const hideLeakTestFields = useMemo(
+    () => isLeakTestMachine(selectedMachine, filteredRows),
+    [filteredRows, selectedMachine]
+  );
+
+  const columns = useMemo(
+    () => buildColumns(filteredRows, { hideLeakTestFields }),
+    [filteredRows, hideLeakTestFields]
+  );
 
   const reportRows = useMemo(
     () => sortRowsLatestFirst(filteredRows),

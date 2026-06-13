@@ -115,8 +115,10 @@ const SearchableSelect = ({
               <button
                 key={`${option.value}-${option.label}`}
                 type="button"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => chooseOption(option)}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  chooseOption(option);
+                }}
                 className={`flex w-full flex-col px-3 py-2 text-left transition hover:bg-teal-50 ${
                   String(option.value) === String(value) ? "bg-teal-50 text-teal-800" : "text-slate-700"
                 }`}

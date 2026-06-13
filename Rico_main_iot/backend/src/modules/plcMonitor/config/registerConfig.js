@@ -143,7 +143,7 @@ const LEAK_TEST_PARAMETERS = [
   {
     name: "part_qr_code",
     type: "text",
-    stringDevice: process.env.PLC_LEAK_SCAN_DEVICE || "D101",
+    stringDevice: process.env.PLC_LEAK_SCAN_DEVICE || "D301",
     stringLength: Number(process.env.PLC_LEAK_SCAN_LENGTH || 14),
   },
   { name: "body_leak_value", device: process.env.PLC_LEAK_BODY_VALUE_DEVICE || "D2258", type: "real32" },
