@@ -19,6 +19,7 @@ const DEFAULT_MACHINE = {
 };
 
 const REPORT_AUTO_REFRESH_MS = Number(import.meta.env.VITE_PLC_REPORT_REFRESH_MS || 5000);
+const REPORT_HISTORY_LIMIT = Number(import.meta.env.VITE_PLC_REPORT_HISTORY_LIMIT || 15000);
 
 const LIMIT_STATUS_BY_COLUMN = {
   die_close_core_in_time: "die_close_core_in_time_status",
@@ -925,7 +926,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
         ip: getMachineReportIp(selectedMachine),
         from: fromDate,
         to: addDaysToInputDate(toDate, 1),
-        limit: 5000,
+        limit: REPORT_HISTORY_LIMIT,
       });
       const nextRows = Array.isArray(response.data?.data) ? response.data.data : [];
       setRows(sortRowsLatestFirst(nextRows));
