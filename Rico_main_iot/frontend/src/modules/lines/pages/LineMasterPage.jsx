@@ -215,12 +215,12 @@ const LineMasterPage = ({ onLogout, currentUser }) => {
 
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <h1 className="text-xl font-extrabold text-slate-950">Production Lines</h1>
+          <h1 className="text-xl font-extrabold text-slate-950">Line Manager</h1>
           <span className="text-slate-300">|</span>
           <nav className="flex items-center gap-1 text-sm text-slate-500">
-            <span className="app-brand-text font-medium">Organisation</span>
+            <span className="app-brand-text font-medium">Master Setup</span>
             <span className="text-slate-300">/</span>
-            <span className="font-medium text-gray-600">Line Master</span>
+            <span className="font-medium text-gray-600">Line Manager</span>
           </nav>
         </div>
         <button onClick={() => openWorkspace()} className="rounded-lg bg-teal-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-teal-700">

@@ -490,15 +490,6 @@ export function RegisterConfigTable({ registers, setRegisters, maxHeightClass = 
       itemIndex === index ? setRegisterTypeValue(item, value) : item
     )));
   };
-  const setScaleOrLength = (index, value) => {
-    setRegisters((current) => current.map((item, itemIndex) => {
-      if (itemIndex !== index) return item;
-      return (item.type || "").toLowerCase() === "text"
-        ? { ...item, stringLength: value }
-        : { ...item, scale: value };
-    }));
-  };
-
   const addRegister = () => {
     setRegisters((current) => [
       ...current,
@@ -538,21 +529,13 @@ export function RegisterConfigTable({ registers, setRegisters, maxHeightClass = 
         </button>
       </div>
       <div className={`${maxHeightClass} overflow-auto`}>
-        <table className="min-w-[1280px] w-full text-left text-xs">
+        <table className="min-w-[720px] w-full text-left text-xs">
           <thead className="sticky top-0 bg-slate-50 text-[10px] font-black uppercase tracking-wide text-slate-500">
             <tr>
               <th className="px-3 py-3">Use</th>
               <th className="px-3 py-3">Parameter</th>
               <th className="px-3 py-3">PLC Address</th>
               <th className="px-3 py-3">Type</th>
-              <th className="px-3 py-3">Scale / Len</th>
-              <th className="px-3 py-3">Unit</th>
-              <th className="px-3 py-3">Min</th>
-              <th className="px-3 py-3">Max</th>
-              <th className="px-3 py-3">Warn Min</th>
-              <th className="px-3 py-3">Warn Max</th>
-              <th className="px-3 py-3">Monitor</th>
-              <th className="px-3 py-3">Operator</th>
               <th className="px-3 py-3">Alarm</th>
               <th className="px-3 py-3"></th>
             </tr>
@@ -581,30 +564,6 @@ export function RegisterConfigTable({ registers, setRegisters, maxHeightClass = 
                     <option value="bit">BIT</option>
                     <option value="text">STRING / ASCII</option>
                   </select>
-                </td>
-                <td className="px-3 py-2">
-                  <input className={inputClass} type="number" value={(register.type || "").toLowerCase() === "text" ? (register.stringLength ?? "") : (register.scale ?? 1)} onChange={(event) => setScaleOrLength(index, event.target.value)} />
-                </td>
-                <td className="px-3 py-2">
-                  <input className={inputClass} value={register.unit || ""} onChange={(event) => setRegisterField(index, "unit", event.target.value)} />
-                </td>
-                <td className="px-3 py-2">
-                  <input className={inputClass} type="number" value={register.min ?? ""} onChange={(event) => setRegisterField(index, "min", event.target.value)} />
-                </td>
-                <td className="px-3 py-2">
-                  <input className={inputClass} type="number" value={register.max ?? ""} onChange={(event) => setRegisterField(index, "max", event.target.value)} />
-                </td>
-                <td className="px-3 py-2">
-                  <input className={inputClass} type="number" value={register.warning_min ?? ""} onChange={(event) => setRegisterField(index, "warning_min", event.target.value)} />
-                </td>
-                <td className="px-3 py-2">
-                  <input className={inputClass} type="number" value={register.warning_max ?? ""} onChange={(event) => setRegisterField(index, "warning_max", event.target.value)} />
-                </td>
-                <td className="px-3 py-2 text-center">
-                  <input type="checkbox" checked={register.show_on_monitor !== false} onChange={(event) => setRegisterField(index, "show_on_monitor", event.target.checked)} />
-                </td>
-                <td className="px-3 py-2 text-center">
-                  <input type="checkbox" checked={register.show_to_operator === true} onChange={(event) => setRegisterField(index, "show_to_operator", event.target.checked)} />
                 </td>
                 <td className="px-3 py-2 text-center">
                   <input type="checkbox" checked={register.alarm_enabled === true} onChange={(event) => setRegisterField(index, "alarm_enabled", event.target.checked)} />
@@ -822,10 +781,10 @@ export default function UbeMachineSetupPage({ onLogout, currentUser }) {
 
   return (
     <AppLayout onLogout={onLogout} currentUser={currentUser}>
-      <div className="mx-auto flex max-w-[1180px] flex-col gap-4">
+      <div className="flex w-full flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="text-xs font-black uppercase tracking-[0.24em] text-blue-600">Settings / Organisation</p>
+            <p className="text-xs font-black uppercase tracking-[0.24em] text-blue-600">Master Setup / Machine Manager</p>
             <h1 className="mt-1 text-2xl font-black text-slate-950">PLC Config / Tags</h1>
             <p className="mt-1 text-sm font-semibold text-slate-500">Configure PLC connection only after the machine exists in Machine Master.</p>
           </div>

@@ -328,21 +328,21 @@ const OperationsMasterPage = ({ onLogout, currentUser }) => {
       <main>
         <div className="w-full">
           <div className="mb-5 flex flex-wrap items-center gap-2">
-            <h1 className="text-xl font-extrabold text-slate-950">Organisation Master</h1>
+            <h1 className="text-xl font-extrabold text-slate-950">Operation Manager</h1>
             <span className="text-slate-300">|</span>
             <nav className="flex items-center gap-1 text-sm text-slate-500">
-              <span className="app-brand-text font-medium">Part & Operations</span>
+              <span className="app-brand-text font-medium">Master Setup</span>
               <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
               </svg>
-              <span className="font-medium text-gray-600">Operation Master</span>
+              <span className="font-medium text-gray-600">Operation Manager</span>
             </nav>
           </div>
 
           <section className="app-panel mb-6 w-full rounded-2xl border border-slate-200 bg-white p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h2 className="text-lg font-extrabold text-slate-950">Operation Master</h2>
+                <h2 className="text-lg font-extrabold text-slate-950">Operation Manager</h2>
                 <p className="mt-2 max-w-5xl text-sm leading-relaxed text-slate-500">
                   Create operations against a selected part.
                 </p>
