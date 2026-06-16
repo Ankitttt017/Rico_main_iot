@@ -231,14 +231,14 @@ const PartMasterPage = ({ onLogout, currentUser }) => {
 
           {/* Breadcrumb */}
           <div className="mb-5 flex flex-wrap items-center gap-2">
-            <h1 className="text-xl font-extrabold text-slate-950">Parts & Operations</h1>
+            <h1 className="text-xl font-extrabold text-slate-950">Part Manager</h1>
             <span className="text-slate-300">|</span>
             <nav className="flex items-center gap-1 text-sm text-slate-500">
-              <span className="app-brand-text font-medium">Master Data</span>
+              <span className="app-brand-text font-medium">Master Setup</span>
               <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
               </svg>
-              <span className="font-medium text-gray-600">{t("partMaster")}</span>
+              <span className="font-medium text-gray-600">Part Manager</span>
             </nav>
           </div>
 

@@ -167,19 +167,11 @@ function isLeakTestMachine(machine) {
   return machine.kind === "leaktest";
 }
 
-const REPORT_SAVE_UBE_KEYS = new Set(
-  String(process.env.PLC_REPORT_SAVE_UBE_KEYS || "ube-850t-2,192.168.117.201")
-    .split(",")
-    .map((item) => item.trim().toLowerCase())
-    .filter(Boolean)
-);
-
 function isReportSaveEnabledForMachine(machine) {
   if (isLeakTestMachine(machine)) return true;
-  const key = String(machine.key || machine.machine_key || "").trim().toLowerCase();
-  const name = String(machine.name || machine.machine_name || "").trim().toLowerCase();
-  const ip = String(machine.ip || machine.plc_ip || "").trim().toLowerCase();
-  return REPORT_SAVE_UBE_KEYS.has(key) || REPORT_SAVE_UBE_KEYS.has(name) || REPORT_SAVE_UBE_KEYS.has(ip);
+  const mode = String(process.env.PLC_REPORT_SAVE_UBE_MODE || "all").trim().toLowerCase();
+  if (["0", "false", "off", "disabled", "none"].includes(mode)) return false;
+  return true;
 }
 
 /**
@@ -603,6 +595,7 @@ function legacySqlType(name) {
 
 function addInsertValue(columns, values, column, value) {
   if (value === undefined || DROPPED_READING_COLUMNS.has(column)) return;
+  if (!getFixedReadingColumnNames().has(column)) return;
   if (columns.includes(column)) return;
   columns.push(column);
   values.push(value);
@@ -612,6 +605,20 @@ function getReadingNames() {
   return [...EXCEL_PARAMETERS, ...UBE_LIMIT_STATUS_PARAMETERS]
     .map((p) => p.name)
     .filter((name) => !DROPPED_READING_COLUMNS.has(name));
+}
+
+let fixedReadingColumnNames = null;
+
+function getFixedReadingColumnNames() {
+  if (fixedReadingColumnNames) return fixedReadingColumnNames;
+  fixedReadingColumnNames = new Set([
+    "raw_readings_json",
+    ...getReadingNames(),
+    ...Object.values(LEGACY_COLUMNS_BY_PARAMETER),
+    ...EXTRA_READING_COLUMNS.map((item) => Array.isArray(item) ? item[0] : item),
+    ...M_BIT_DURATION_COLUMNS.map((item) => Array.isArray(item) ? item[0] : item),
+  ]);
+  return fixedReadingColumnNames;
 }
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -2621,11 +2628,8 @@ function startPlcMonitor(io) {
     const rawCache = new Map();
     const now = new Date();
     const readParameters = Array.isArray(machine.registerConfig) && machine.registerConfig.length
-      ? [
-          ...machine.registerConfig.filter((parameter) => parameter.enabled !== false),
-          ...UBE_LIMIT_STATUS_PARAMETERS,
-        ]
-      : UBE_READ_PARAMETERS;
+      ? machine.registerConfig.filter((parameter) => parameter.enabled !== false)
+      : [];
 
     const partName = await readString(sock, UBE_PART_NAME_DEVICE, UBE_PART_NAME_LENGTH).catch(() => "");
     const shotYearRaw = await readWord(sock, SHOT_DATE_TIME_DEVICES.year).catch(() => null);
@@ -2880,7 +2884,7 @@ function startPlcMonitor(io) {
     const currentState = machineState.get(machineKey) || {};
     const readParameters = Array.isArray(machine.registerConfig) && machine.registerConfig.length
       ? machine.registerConfig.filter((parameter) => parameter.enabled !== false)
-      : LEAK_TEST_PARAMETERS;
+      : [];
     let configuredQrDevice = "";
     let configuredQrLength = 14;
 

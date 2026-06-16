@@ -114,11 +114,11 @@ const MachineProfilePage = ({ onLogout, currentUser }) => {
           {/* Breadcrumb */}
           <div className="flex items-center gap-2 mb-5 text-sm">
             <button onClick={() => navigate("/machines")} className="text-blue-600 font-semibold hover:underline">
-              Organisation Master
+              Machine Manager
             </button>
             <span className="text-gray-300">›</span>
             <button onClick={() => navigate("/machines")} className="text-blue-600 font-semibold hover:underline">
-              Machines
+              Master Setup
             </button>
             <span className="text-gray-300">›</span>
             <span className="text-gray-600 font-medium">Machine Profile</span>

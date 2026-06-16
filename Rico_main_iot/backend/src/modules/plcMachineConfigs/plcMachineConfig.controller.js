@@ -95,7 +95,8 @@ async function ensureSchema() {
             id INT IDENTITY(1,1) PRIMARY KEY,
             machine_key NVARCHAR(80) NOT NULL UNIQUE,
             machine_name NVARCHAR(160) NOT NULL,
-            machine_type NVARCHAR(40) NOT NULL DEFAULT 'ube',
+          machine_type NVARCHAR(40) NOT NULL DEFAULT 'ube',
+            plant_code NVARCHAR(40) NULL,
             ip_address VARCHAR(50) NOT NULL,
             port INT NOT NULL DEFAULT 5002,
             protocol NVARCHAR(30) NOT NULL DEFAULT 'SLMP',
@@ -118,6 +119,10 @@ async function ensureSchema() {
         BEGIN
           ALTER TABLE dbo.plc_machine_configs ADD machine_id BIGINT NULL;
         END;
+        IF COL_LENGTH('dbo.plc_machine_configs', 'plant_code') IS NULL
+        BEGIN
+          ALTER TABLE dbo.plc_machine_configs ADD plant_code NVARCHAR(40) NULL;
+        END;
       `);
       await db.run(`
         IF OBJECT_ID('dbo.plc_register_templates', 'U') IS NULL
@@ -136,7 +141,9 @@ async function ensureSchema() {
           );
         END;
       `);
-      await seedDefaultTemplates();
+      if (String(process.env.PLC_SEED_SYSTEM_TEMPLATES || "false").toLowerCase() === "true") {
+        await seedDefaultTemplates();
+      }
     })().catch((error) => {
       schemaReadyPromise = null;
       throw error;
@@ -158,6 +165,7 @@ function normalizeMachine(row = {}) {
     machine_key: row.machine_key,
     machine_name: row.machine_name,
     machine_type: row.machine_type || "ube",
+    plant_code: row.plant_code || null,
     ip_address: row.ip_address,
     port: Number(row.port || 5002),
     protocol: row.protocol || "SLMP",
@@ -168,7 +176,6 @@ function normalizeMachine(row = {}) {
     machine_code: row.machine_code || null,
     asset_machine_name: row.asset_machine_name || null,
     line_id: row.line_id || null,
-    plant_code: row.plant_code || null,
     notes: row.notes || "",
     created_at: row.created_at || null,
     updated_at: row.updated_at || null,
@@ -321,13 +328,14 @@ async function saveMachineRecord(input = {}) {
   const selectedTemplate = templates.find((template) => template.template_key === profile);
   const fallbackRegisters = selectedTemplate?.register_config?.length
     ? selectedTemplate.register_config
-    : registersForType(type);
+    : [];
 
   const payload = {
     machine_key: key,
     machine_id: cleanInt(input.machine_id),
     machine_name: name,
     machine_type: type,
+    plant_code: cleanText(input.plant_code),
     ip_address: ip,
     port: cleanInt(input.port, 5002),
     protocol: protocolType(input.protocol),
@@ -347,7 +355,7 @@ async function saveMachineRecord(input = {}) {
 
     await db.run(`
       UPDATE dbo.plc_machine_configs
-      SET machine_id = ?, machine_key = ?, machine_name = ?, machine_type = ?, ip_address = ?, port = ?,
+      SET machine_id = ?, machine_key = ?, machine_name = ?, machine_type = ?, plant_code = ?, ip_address = ?, port = ?,
           protocol = ?, register_profile_key = ?, sequence_no = ?, is_active = ?,
           register_config_json = ?, notes = ?, updated_at = SYSUTCDATETIME()
       WHERE id = ?
@@ -356,6 +364,7 @@ async function saveMachineRecord(input = {}) {
       payload.machine_key,
       payload.machine_name,
       payload.machine_type,
+      payload.plant_code,
       payload.ip_address,
       payload.port,
       payload.protocol,
@@ -378,15 +387,16 @@ async function saveMachineRecord(input = {}) {
 
   const result = await db.run(`
     INSERT INTO dbo.plc_machine_configs
-      (machine_id, machine_key, machine_name, machine_type, ip_address, port, protocol,
+      (machine_id, machine_key, machine_name, machine_type, plant_code, ip_address, port, protocol,
        register_profile_key, sequence_no, is_active, register_config_json, notes)
     OUTPUT INSERTED.id
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, [
     payload.machine_id,
     payload.machine_key,
     payload.machine_name,
     payload.machine_type,
+    payload.plant_code,
     payload.ip_address,
     payload.port,
     payload.protocol,
@@ -410,7 +420,26 @@ async function listMachines(_req, res) {
   try {
     await ensureSchema();
     const { rows } = await db.query(`
-      SELECT pc.*, m.machine_code, m.name AS asset_machine_name, m.line_id, m.plant_code
+      SELECT
+        pc.id,
+        pc.machine_id,
+        pc.machine_key,
+        pc.machine_name,
+        pc.machine_type,
+        pc.ip_address,
+        pc.port,
+        pc.protocol,
+        pc.register_profile_key,
+        pc.sequence_no,
+        pc.is_active,
+        pc.register_config_json,
+        pc.notes,
+        pc.created_at,
+        pc.updated_at,
+        m.machine_code,
+        m.name AS asset_machine_name,
+        m.line_id,
+        COALESCE(m.plant_code, pc.plant_code) AS plant_code
       FROM dbo.plc_machine_configs pc
       LEFT JOIN dbo.iot_machines m ON m.id = pc.machine_id
       ORDER BY sequence_no, machine_name
@@ -419,10 +448,10 @@ async function listMachines(_req, res) {
     res.json({
       success: true,
       data: rows.map(normalizeMachine),
-      default_registers: registersForType("ube"),
+      default_registers: byType.ube?.[0]?.register_config || [],
       default_registers_by_type: {
-        ube: byType.ube?.[0]?.register_config || registersForType("ube"),
-        leaktest: byType.leaktest?.[0]?.register_config || registersForType("leaktest"),
+        ube: byType.ube?.[0]?.register_config || [],
+        leaktest: byType.leaktest?.[0]?.register_config || [],
       },
       register_templates: templates,
     });

@@ -140,11 +140,11 @@ export default function DepartmentMasterPage({ onLogout, currentUser }) {
 
   return (
     <AppLayout onLogout={onLogout} currentUser={currentUser}>
-      <div className="mx-auto flex max-w-[1180px] flex-col gap-4">
+      <div className="flex w-full flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="text-xs font-black uppercase tracking-[0.24em] text-blue-600">Settings / Organisation</p>
-            <h1 className="mt-1 text-2xl font-black text-slate-950">Department Master</h1>
+            <p className="text-xs font-black uppercase tracking-[0.24em] text-blue-600">Master Setup / Department Manager</p>
+            <h1 className="mt-1 text-2xl font-black text-slate-950">Department Manager</h1>
             <p className="mt-1 text-sm font-semibold text-slate-500">Create departments such as HPDC, Machining, Assembly or Paint Shop for line filtering.</p>
           </div>
           <button type="button" onClick={() => setDraft(emptyDraft)} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700 hover:bg-slate-50">
@@ -154,7 +154,7 @@ export default function DepartmentMasterPage({ onLogout, currentUser }) {
         </div>
 
         <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-          <div className="grid gap-4 p-5 md:grid-cols-5">
+          <div className="grid gap-4 p-5 md:grid-cols-4">
             <label>
               <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-slate-400">Code</span>
               <input className={inputClass} value={draft.code || ""} onChange={(event) => setField("code", event.target.value.toUpperCase())} />
@@ -167,10 +167,6 @@ export default function DepartmentMasterPage({ onLogout, currentUser }) {
               <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-slate-400">Location Scope</span>
               <SearchableSelect value={draft.plant_code || ""} options={locationOptions} placeholder="All Locations" onChange={(value) => setField("plant_code", value)} />
             </div>
-            <label>
-              <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-slate-400">Description</span>
-              <input className={inputClass} value={draft.description || ""} onChange={(event) => setField("description", event.target.value)} />
-            </label>
             <label>
               <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-slate-400">Status</span>
               <select className={inputClass} value={draft.is_active ? "1" : "0"} onChange={(event) => setField("is_active", event.target.value === "1")}>
@@ -215,7 +211,7 @@ export default function DepartmentMasterPage({ onLogout, currentUser }) {
                         <span className={`flex h-9 w-9 items-center justify-center rounded-lg ${active ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-slate-400"}`}><Factory className="h-4 w-4" /></span>
                         <div>
                           <p className="font-black text-slate-950">{department.name}</p>
-                          <p className="text-xs font-bold text-slate-400">{department.code} {department.description ? `- ${department.description}` : ""}</p>
+                          <p className="text-xs font-bold text-slate-400">{department.code}</p>
                         </div>
                       </div>
                     </td>

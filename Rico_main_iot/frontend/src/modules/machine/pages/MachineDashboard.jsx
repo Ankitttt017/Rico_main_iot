@@ -11,6 +11,7 @@ import {
   getMachines,
   getPlants,
   getPlcMachineConfigs,
+  deletePlcMachineConfig,
   savePlcMachineConfig,
   testPlcMachineConfig,
   updateMachine,
@@ -33,6 +34,15 @@ import {
   profileForType,
   withRegisterDefaults,
 } from "../../plc-machines/UbeMachineSetupPage";
+
+const makeMachineCode = (draft = {}) => {
+  const base = String(draft.machine_code || draft.name || draft.asset || "MACHINE")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return base || `MACHINE-${Date.now()}`;
+};
 
 const MachineDashboard = ({ onLogout, currentUser }) => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -155,19 +165,62 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
     return () => clearInterval(id);
   }, [fetchMachines]);
 
-  const enriched = useMemo(() =>
-    machines.map(m => {
+  const enriched = useMemo(() => {
+    const linkedConfigIds = new Set();
+    const linkedKeys = new Set();
+    const masterMachines = machines.map(m => {
       const lineCode = getLineCode(m);
+      const machineKey = keyFromMachine(m);
+      const plcConfig = plcConfigs.find((config) =>
+        String(config.machine_id || "") === String(m.id || "") ||
+        (machineKey && String(config.machine_key || "") === machineKey)
+      );
+      if (plcConfig?.id) linkedConfigIds.add(String(plcConfig.id));
+      if (plcConfig?.machine_key) linkedKeys.add(String(plcConfig.machine_key));
       return {
         ...m,
         _division: getDivision(m),
         _lineCode: lineCode,
         _lineName: getLineName(m, lineCode),
         _machineType: getMachineType(m),
+        _plcConfig: plcConfig || null,
+        _plcOnly: false,
       };
-    }),
-    [machines]
-  );
+    });
+
+    const plcOnlyMachines = plcConfigs
+      .filter((config) =>
+        String(config.plant_code || "") === String(plant || "") &&
+        !linkedConfigIds.has(String(config.id || "")) &&
+        !linkedKeys.has(String(config.machine_key || ""))
+      )
+      .map((config) => ({
+        id: config.machine_id ? String(config.machine_id) : `plc-${config.id}`,
+        machine_code: config.machine_key || "",
+        name: config.machine_name || config.machine_key || "PLC Machine",
+        category: config.machine_type === "leaktest" ? "Leak Test" : "PLC Config",
+        plant_code: config.plant_code || "",
+        line_id: "",
+        line_code: "",
+        line_name: "",
+        line_division: "",
+        asset: config.machine_type === "leaktest" ? "Leak Test" : "Die Casting / PLC",
+        cost_center: "",
+        is_active: config.is_active !== false,
+        status: config.is_active === false ? "IDLE" : "RUNNING",
+        part: "PLC config pending machine link",
+        assigned_operation_count: 0,
+        _division: "Needs line link",
+        _lineCode: "",
+        _lineName: "Assign department and line",
+        _machineType: config.machine_type || "general",
+        _plcConfig: config,
+        _plcOnly: true,
+        _linkedOutsideCurrentPlant: Boolean(config.machine_id),
+      }));
+
+    return [...masterMachines, ...plcOnlyMachines];
+  }, [machines, plcConfigs, plant]);
 
   const baseDepartmentRows = useMemo(() => {
     const plantSpecific = departments.filter((department) =>
@@ -262,11 +315,12 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
       machine_id: machine?.id || null,
       machine_key: keyFromMachine(machine),
       machine_name: machine?.name || machine?.machine_code || "",
+      plant_code: machine?.plant_code || plant,
       machine_type: type,
       register_profile_key: template?.template_key || profileForType(type),
       register_config: template?.register_config || getDefaultRegisters(defaults, type),
     };
-  }, [defaultRegistersByType, plcConfigs, registerTemplates]);
+  }, [defaultRegistersByType, plant, plcConfigs, registerTemplates]);
 
   const openCreateMachine = () => {
     const availableLines = division
@@ -295,6 +349,31 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
   };
 
   const openEditMachine = async (machine) => {
+    if (machine?._plcOnly) {
+      const setup = await loadPlcSetup().catch(() => ({
+        configs: plcConfigs,
+        defaults: defaultRegistersByType,
+        templates: registerTemplates,
+      }));
+      const config = setup.configs.find((item) => String(item.id || "") === String(machine._plcConfig?.id || "")) || machine._plcConfig;
+      const type = getPlcMachineType(config);
+      setMachineDraft({
+        id: config?.machine_id || null,
+        machine_code: config?.machine_key || "",
+        name: config?.machine_name || machine.name || "",
+        category: "",
+        plant_code: config?.plant_code || plant,
+        line_id: "",
+        asset: type === "leaktest" ? "Leak Test" : "Die Casting / PLC",
+        cost_center: "",
+        is_active: config?.is_active !== false,
+      });
+      setPlcDraft(withRegisterDefaults(config, setup.defaults));
+      setPlcTestResult(null);
+      setMachineModalOpen(true);
+      return;
+    }
+
     setMachineDraft({
       id: machine.id,
       machine_code: machine.machine_code || "",
@@ -325,6 +404,7 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
       const selectedLine = getSelectedLine(machineDraft.line_id);
       const payload = {
         ...machineDraft,
+        machine_code: makeMachineCode(machineDraft),
         plant_code: selectedLine?.plant_code || machineDraft.plant_code,
         category: machineDraft.category || selectedLine?.division || "",
         line_id: machineDraft.line_id,
@@ -354,12 +434,11 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
       if (hasPlcInput) {
         await savePlcMachineConfig({
           ...plcDraft,
-          id: payload.id ? plcDraft.id : null,
+          id: plcDraft.id || null,
           machine_id: machineId,
-          machine_key: payload.id
-            ? plcDraft.machine_key || keyFromMachine({ ...payload, id: machineId })
-            : keyFromMachine({ ...payload, id: machineId }),
+          machine_key: keyFromMachine({ ...payload, id: machineId }),
           machine_name: payload.name,
+          plant_code: payload.plant_code,
           machine_type: type,
           register_profile_key: plcDraft.register_profile_key || profileForType(type),
           port: Number(plcDraft.port || 5002),
@@ -394,17 +473,31 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
     }
   };
 
-  const removeMachine = async () => {
-    if (!machineDraft?.id || !window.confirm(`Delete ${machineDraft.name}?`)) return;
+  const deleteMachineEverywhere = async (machine) => {
+    const configId = machine?._plcConfig?.id || plcDraft?.id;
+    const machineId = machine?.id || machineDraft?.id;
+    const machineName = machine?.name || machineDraft?.name || "this machine";
+    const isSyntheticPlcOnly = String(machineId || "").startsWith("plc-");
+
+    if (!machineId && !configId) return toast.error("Machine id missing. Refresh and try again.");
+    if (!window.confirm(`Delete ${machineName}? This will remove it from Machine Manager, PLC Config / Tags and IoT monitor.`)) return;
+
     try {
-      await deleteMachine(machineDraft.id);
+      if (configId) await deletePlcMachineConfig(configId);
+      if (machineId && !isSyntheticPlcOnly) await deleteMachine(machineId);
       toast.success("Machine deleted");
       setMachineModalOpen(false);
       setMachineDraft(null);
+      setPlcDraft(DEFAULT_PLC_DRAFT);
+      await loadPlcSetup();
       fetchMachines();
     } catch (error) {
       toast.error(error.response?.data?.message || "Unable to delete machine");
     }
+  };
+
+  const removeMachine = async () => {
+    await deleteMachineEverywhere({ ...machineDraft, _plcConfig: plcDraft });
   };
 
   const toggleMachineActive = async (machine) => {
@@ -451,7 +544,8 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     const matches = enriched.filter(m => {
-      if (plant && m.plant_code && m.plant_code !== plant) return false;
+      const machinePlant = m._plcConfig?.plant_code || m.plant_code || "";
+      if (plant && String(machinePlant || "") !== String(plant)) return false;
       if (division && m._division !== division) return false;
       if (line && String(m.line_id || "") !== String(line)) return false;
       if (q && !`${m.name || ""} ${m.machine_code || ""} ${m.category || ""}`.toLowerCase().includes(q)) return false;
@@ -537,14 +631,6 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
                       }} placeholder="Die Casting / CNC / Leak Test" className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none focus:border-teal-500 focus:ring-4 focus:ring-teal-50" />
                     </label>
                     <label className="flex flex-col gap-1">
-                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Machine Code</span>
-                      <input value={machineDraft.machine_code || ""} onChange={(event) => {
-                        const machine_code = event.target.value;
-                        setMachineDraft((current) => ({ ...current, machine_code }));
-                        setPlcDraft((current) => ({ ...current, machine_key: current.id ? current.machine_key : keyFromMachine({ ...machineDraft, machine_code }) }));
-                      }} placeholder="UBE-850T-1" className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none focus:border-teal-500 focus:ring-4 focus:ring-teal-50" />
-                    </label>
-                    <label className="flex flex-col gap-1">
                       <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Machine Name</span>
                       <input value={machineDraft.name || ""} onChange={(event) => {
                         const name = event.target.value;
@@ -620,18 +706,17 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
             </div>
           )}
 
-          {/* Breadcrumb */}
           <div className="mb-5 flex items-center gap-2 text-sm">
-            <span className="font-bold text-slate-900">Organisation Master</span>
+            <span className="font-bold text-slate-900">Machine Manager</span>
             <span className="text-slate-300">|</span>
-            <span className="font-semibold text-teal-700">Machines</span>
+            <span className="font-semibold text-teal-700">Master Setup / Machine Manager</span>
           </div>
 
           {/* Header card */}
           <div className="app-panel mb-6 rounded-2xl border border-slate-200 bg-white p-5">
             <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
               <div>
-              <h2 className="text-lg font-extrabold text-slate-950">Machine Settings</h2>
+              <h2 className="text-lg font-extrabold text-slate-950">Machine Manager</h2>
               <p className="max-w-5xl text-sm leading-relaxed text-slate-500">
               Add machines under the selected plant, department and line. PLC IP, protocol and tags are configured in PLC Config / Tags.
               </p>
@@ -741,8 +826,10 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
                   machine={machine}
                   division={machine._division}
                   line={machine._lineName}
+                  plcConfig={machine._plcConfig}
                   onEdit={openEditMachine}
                   onToggle={toggleMachineActive}
+                  onDelete={deleteMachineEverywhere}
                 />
               ))}
             </div>

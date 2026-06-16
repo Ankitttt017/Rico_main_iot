@@ -125,11 +125,11 @@ export default function LocationMasterPage({ onLogout, currentUser }) {
 
   return (
     <AppLayout onLogout={onLogout} currentUser={currentUser}>
-      <div className="mx-auto flex max-w-[1180px] flex-col gap-4">
+      <div className="flex w-full flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="text-xs font-black uppercase tracking-[0.24em] text-blue-600">Settings / Organisation</p>
-            <h1 className="mt-1 text-2xl font-black text-slate-950">Location Master</h1>
+            <p className="text-xs font-black uppercase tracking-[0.24em] text-blue-600">Master Setup / Plant Manager</p>
+            <h1 className="mt-1 text-2xl font-black text-slate-950">Plant Manager</h1>
             <p className="mt-1 text-sm font-semibold text-slate-500">Create plants, shops or factory locations before adding production lines.</p>
           </div>
           <button
@@ -138,7 +138,7 @@ export default function LocationMasterPage({ onLogout, currentUser }) {
             className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700 hover:bg-slate-50"
           >
             <Plus className="h-4 w-4" />
-            New Location
+            New Plant
           </button>
         </div>
 
@@ -172,17 +172,17 @@ export default function LocationMasterPage({ onLogout, currentUser }) {
               className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-black text-white hover:bg-blue-700 disabled:opacity-60"
             >
               <Save className="h-4 w-4" />
-              {saving ? "Saving..." : "Save Location"}
+              {saving ? "Saving..." : "Save Plant"}
             </button>
           </div>
         </section>
 
         <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
-            <h2 className="text-sm font-black text-slate-900">Configured Locations</h2>
+            <h2 className="text-sm font-black text-slate-900">Configured Plants</h2>
             <input
               className="h-9 w-full max-w-xs rounded-lg border border-slate-200 px-3 text-sm font-semibold outline-none focus:border-blue-500"
-              placeholder="Search locations..."
+              placeholder="Search plants..."
               value={search}
               onChange={(event) => handleSearchChange(event.target.value)}
             />
@@ -191,7 +191,7 @@ export default function LocationMasterPage({ onLogout, currentUser }) {
             <table className="min-w-[720px] w-full text-left text-sm">
               <thead className="bg-slate-50 text-[11px] font-black uppercase tracking-wide text-slate-500">
                 <tr>
-                  <th className="px-4 py-3">Location</th>
+                  <th className="px-4 py-3">Plant</th>
                   <th className="px-4 py-3">Code</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3"></th>
@@ -242,7 +242,7 @@ export default function LocationMasterPage({ onLogout, currentUser }) {
                 );
                 })}
                 {!loading && !filtered.length && (
-                  <tr><td colSpan="4" className="px-4 py-8 text-center text-sm font-bold text-slate-400">No locations configured</td></tr>
+                  <tr><td colSpan="4" className="px-4 py-8 text-center text-sm font-bold text-slate-400">No plants configured</td></tr>
                 )}
               </tbody>
             </table>

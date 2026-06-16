@@ -281,6 +281,10 @@ const updateMachine = async (req, res) => {
 // DELETE /api/machines/:id
 const deleteMachine = async (req, res) => {
   try {
+    await db.run(`
+      IF OBJECT_ID('dbo.plc_machine_configs', 'U') IS NOT NULL
+        DELETE FROM dbo.plc_machine_configs WHERE machine_id = ?
+    `, [req.params.id]);
     await db.run(`DELETE FROM ${TABLES.machineStatus} WHERE machine_id = ?`, [req.params.id]);
     await db.run(`DELETE FROM ${TABLES.machineOperations} WHERE machine_id = ?`, [req.params.id]);
     await db.run(`DELETE FROM ${TABLES.machines} WHERE id = ?`, [req.params.id]);

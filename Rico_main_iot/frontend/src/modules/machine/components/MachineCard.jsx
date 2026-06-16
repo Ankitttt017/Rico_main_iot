@@ -1,5 +1,5 @@
 import React from "react";
-import { Power } from "lucide-react";
+import { Power, Trash2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 const safeText = (value, fallback) => String(value || "").trim() || fallback;
@@ -36,15 +36,18 @@ const getStatusBadge = (s, active = true) => !active
   ? { bg: "bg-red-100 text-red-700",     label: "Stopped" }
   : { bg: "bg-orange-100 text-orange-700", label: "Management Loss" };
 
-const MachineCard = ({ machine, division, line, onEdit, onToggle }) => {
+const MachineCard = ({ machine, division, line, plcConfig, onEdit, onToggle, onDelete }) => {
   const navigate = useNavigate();
   const status = safeText(machine?.status, "IDLE").toUpperCase();
   const isActive = machine?.is_active !== false;
   const badge  = getStatusBadge(status, isActive);
+  const registerCount = Array.isArray(plcConfig?.register_config) ? plcConfig.register_config.length : 0;
+  const needsMasterLink = machine?._plcOnly === true && !machine?._linkedOutsideCurrentPlant;
+  const outsideCurrentPlant = machine?._linkedOutsideCurrentPlant === true;
 
   return (
     <article
-      onClick={() => navigate(`/machine/${machine.id}`)}
+      onClick={() => needsMasterLink ? onEdit?.(machine) : navigate(`/machine/${machine.id}`)}
       className="group cursor-pointer overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-teal-300 hover:shadow-lg hover:shadow-slate-200/80"
     >
       <div className="flex h-28 items-center justify-center bg-[linear-gradient(145deg,_#f8fafc_0%,_#eaf2f1_100%)] px-3 pt-3">
@@ -57,21 +60,42 @@ const MachineCard = ({ machine, division, line, onEdit, onToggle }) => {
         </h3>
         <p className="text-[10px] text-gray-500 mt-1 font-medium">{division || safeText(machine?.category, "Uncategorized")}</p>
         <p className="text-[10px] text-gray-400 mt-0.5">{line || "—"}</p>
+        <div className="mt-2 grid grid-cols-2 gap-1.5 text-[9px] font-bold">
+          <span className="truncate rounded-md bg-blue-50 px-1.5 py-1 text-blue-700" title={plcConfig?.ip_address || "No PLC config"}>
+            PLC: {plcConfig?.ip_address || "Not set"}
+          </span>
+          <span className="truncate rounded-md bg-slate-100 px-1.5 py-1 text-slate-600" title={`${registerCount} data registers`}>
+            Tags: {registerCount}
+          </span>
+        </div>
         <div className="mt-3 flex items-center justify-between gap-2">
-          <span className={`text-[9px] font-semibold px-2 py-0.5 rounded-full ${badge.bg}`}>
-            {badge.label}
+          <span className={`text-[9px] font-semibold px-2 py-0.5 rounded-full ${needsMasterLink || outsideCurrentPlant ? "bg-amber-100 text-amber-700" : badge.bg}`}>
+            {needsMasterLink ? "Needs line link" : outsideCurrentPlant ? "PLC linked" : badge.label}
           </span>
           <div className="flex items-center gap-1">
+            {!needsMasterLink && (
+              <button
+                type="button"
+                title={isActive ? "Disable machine" : "Enable machine"}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onToggle?.(machine);
+                }}
+                className={`rounded-md border px-1.5 py-1 text-[10px] font-bold ${isActive ? "border-amber-200 text-amber-700 hover:bg-amber-50" : "border-emerald-200 text-emerald-700 hover:bg-emerald-50"}`}
+              >
+                <Power className="h-3 w-3" />
+              </button>
+            )}
             <button
               type="button"
-              title={isActive ? "Disable machine" : "Enable machine"}
+              title="Delete machine"
               onClick={(event) => {
                 event.stopPropagation();
-                onToggle?.(machine);
+                onDelete?.(machine);
               }}
-              className={`rounded-md border px-1.5 py-1 text-[10px] font-bold ${isActive ? "border-amber-200 text-amber-700 hover:bg-amber-50" : "border-emerald-200 text-emerald-700 hover:bg-emerald-50"}`}
+              className="rounded-md border border-red-200 px-1.5 py-1 text-[10px] font-bold text-red-700 hover:bg-red-50"
             >
-              <Power className="h-3 w-3" />
+              <Trash2 className="h-3 w-3" />
             </button>
             <button
               type="button"
@@ -81,7 +105,7 @@ const MachineCard = ({ machine, division, line, onEdit, onToggle }) => {
               }}
               className="rounded-md border border-slate-200 px-2 py-1 text-[10px] font-bold text-slate-500 hover:border-teal-300 hover:text-teal-700"
             >
-              Edit
+              PLC / Tags
             </button>
           </div>
         </div>

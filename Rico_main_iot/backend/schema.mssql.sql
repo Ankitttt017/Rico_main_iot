@@ -788,6 +788,10 @@ IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
    AND COL_LENGTH('dbo.plc_machine_configs', 'machine_id') IS NULL
   ALTER TABLE dbo.plc_machine_configs ADD machine_id BIGINT NULL;
 
+IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
+   AND COL_LENGTH('dbo.plc_machine_configs', 'plant_code') IS NULL
+  ALTER TABLE dbo.plc_machine_configs ADD plant_code NVARCHAR(40) NULL;
+
 IF OBJECT_ID(N'dbo.plc_register_templates', N'U') IS NULL
 BEGIN
   CREATE TABLE dbo.plc_register_templates (
