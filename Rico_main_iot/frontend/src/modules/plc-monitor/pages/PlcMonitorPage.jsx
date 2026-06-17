@@ -523,6 +523,17 @@ function PLCDashboard() {
     selectedMachineStatus.partName,
     partName
   );
+  const compactCardHiddenFields = new Set([
+    "machine_name",
+    "plc_ip",
+    "shot_datetime",
+    "shot_year",
+    "shot_month",
+    "shot_day",
+    "shot_hour",
+    "shot_minute",
+    "shot_second",
+  ]);
   const availableGroups = REGISTER_GROUPS
     .filter((group) => group.kind === selectedMachineKind)
     .filter((group) => {
@@ -553,17 +564,6 @@ function PLCDashboard() {
         : group
     ))
     .filter((group) => group.keys.length > 0);
-  const compactCardHiddenFields = new Set([
-    "machine_name",
-    "plc_ip",
-    "shot_datetime",
-    "shot_year",
-    "shot_month",
-    "shot_day",
-    "shot_hour",
-    "shot_minute",
-    "shot_second",
-  ]);
   const cardGroups = displayGroups
     .map((group) => ({
       ...group,

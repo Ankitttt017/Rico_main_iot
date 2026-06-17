@@ -20,6 +20,7 @@ const {
   DEVICE_CODE,
   CYCLE_START_DEVICE,
   CYCLE_END_DEVICE,
+  SHOT_DATE_TIME_DEVICES,
   UBE_CYCLE_END_DELAY_MS,
   UBE_CYCLE_END_POLL_MS,
   UBE_LIVE_READ_MS,
@@ -54,6 +55,13 @@ const {
 } = require("./config/registerConfig");
 
 let schemaReadyPromise = null;
+const latestReadingsCache = {
+  key: "",
+  at: 0,
+  data: null,
+  promise: null,
+};
+const PLC_LATEST_DB_CACHE_MS = Math.max(500, Number(process.env.PLC_LATEST_DB_CACHE_MS || 3000));
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // UTILITY HELPERS
@@ -115,6 +123,8 @@ const PLC_RECONNECT_MIN_MS = Number(process.env.PLC_RECONNECT_MIN_MS || process.
 const PLC_RECONNECT_MAX_MS = Number(process.env.PLC_RECONNECT_MAX_MS || 30000);
 const PLC_RECONNECT_BACKOFF_FACTOR = Number(process.env.PLC_RECONNECT_BACKOFF_FACTOR || 1.6);
 const PLC_RECONNECT_JITTER_MS = Number(process.env.PLC_RECONNECT_JITTER_MS || 1000);
+const UBE_PART_NAME_DEVICE = process.env.PLC_UBE_PART_NAME_DEVICE || "D100";
+const UBE_PART_NAME_LENGTH = Number(process.env.PLC_UBE_PART_NAME_LENGTH || 12);
 
 function isPlcReadTimeoutError(error) {
   return /PLC read timeout|timed out|timeout/i.test(String(error?.message || error || ""));
@@ -522,6 +532,39 @@ function buildLeakSignature(readings, { includeCycleTime = false } = {}) {
   return JSON.stringify(signature);
 }
 
+function getFallbackDevices(envName, defaults = []) {
+  return String(process.env[envName] || defaults.join(","))
+    .split(",")
+    .map((item) => item.trim().toUpperCase())
+    .filter(Boolean);
+}
+
+function getLeakQrDeviceCandidates(configuredDevice = "") {
+  const primaryDevice = String(process.env.PLC_LEAK_SCAN_DEVICE || "D301").trim().toUpperCase();
+  const configured = String(configuredDevice || "").trim().toUpperCase();
+  return Array.from(new Set(getFallbackDevices("PLC_LEAK_SCAN_FALLBACK_DEVICES", [
+    primaryDevice,
+    configured,
+    "D300",
+    "D301",
+    "D100",
+    "D101",
+    "D102",
+  ])));
+}
+
+async function readLeakQrCode(sock, configuredDevice = "", configuredLength = 14) {
+  const length = Number(process.env.PLC_LEAK_SCAN_LENGTH || configuredLength || 14);
+  for (const device of getLeakQrDeviceCandidates(configuredDevice)) {
+    if (!device) continue;
+    const value = await readString(sock, device, length).catch(() => "");
+    if (String(value || "").trim()) {
+      return { value, device };
+    }
+  }
+  return { value: "", device: "" };
+}
+
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // DB HELPERS
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -590,7 +633,16 @@ function getFixedReadingColumnNames() {
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function formatDbRowForClient(row = {}) {
-  const next = { ...row };
+  let rawReadings = {};
+  try {
+    rawReadings = row.raw_readings_json ? JSON.parse(row.raw_readings_json) : {};
+  } catch {
+    rawReadings = {};
+  }
+  const next = {
+    ...(rawReadings && typeof rawReadings === "object" && !Array.isArray(rawReadings) ? rawReadings : {}),
+    ...row,
+  };
 
   if (next.scan_data && !next.part_qr_code) next.part_qr_code = next.scan_data;
   if (next.part_qr_code && !next.scan_data) next.scan_data = next.part_qr_code;
@@ -757,14 +809,11 @@ function getConfiguredRegisterDevice(machine = {}, names = [], fallback = "") {
 }
 
 function formatReadingsForClient(readings, machineOrKind = "ube") {
-  const configuredNames =
-    typeof machineOrKind === "object" ? getConfiguredReadingNames(machineOrKind) : null;
   const machineKind =
     typeof machineOrKind === "object"
       ? (isLeakTestMachine(machineOrKind) ? "leaktest" : "ube")
       : machineOrKind;
-  const allowedNames = configuredNames ||
-    (machineKind === "leaktest" ? LEAK_CLIENT_READING_NAMES : UBE_CLIENT_READING_NAMES);
+  const allowedNames = machineKind === "leaktest" ? LEAK_CLIENT_READING_NAMES : UBE_CLIENT_READING_NAMES;
 
   return Object.fromEntries(
     Object.entries(readings)
@@ -1046,6 +1095,37 @@ function buildConnectionEventsExcelXml(rows, meta = {}) {
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function getLatestReadingsForMachines(machineSnapshots = getMachines()) {
+  const cacheKey = machineSnapshots
+    .map((machine) => `${machine.key || machine.ip || ""}:${machine.ip || ""}:${machine.kind || ""}`)
+    .join("|");
+  if (
+    latestReadingsCache.data &&
+    latestReadingsCache.key === cacheKey &&
+    Date.now() - latestReadingsCache.at < PLC_LATEST_DB_CACHE_MS
+  ) {
+    return latestReadingsCache.data;
+  }
+  if (latestReadingsCache.promise && latestReadingsCache.key === cacheKey) {
+    return latestReadingsCache.promise;
+  }
+
+  latestReadingsCache.key = cacheKey;
+  latestReadingsCache.promise = getLatestReadingsForMachinesUnlocked(machineSnapshots)
+    .then((data) => {
+      latestReadingsCache.data = data;
+      latestReadingsCache.at = Date.now();
+      latestReadingsCache.promise = null;
+      return data;
+    })
+    .catch((error) => {
+      latestReadingsCache.promise = null;
+      throw error;
+    });
+
+  return latestReadingsCache.promise;
+}
+
+async function getLatestReadingsForMachinesUnlocked(machineSnapshots = getMachines()) {
   await ensureTableOnce();
 
   const machines = machineSnapshots.length ? machineSnapshots : getMachines();
@@ -2627,14 +2707,37 @@ function startPlcMonitor(io) {
     const readings = {};
     const rawCache = new Map();
     const now = new Date();
-    const readParameters = Array.isArray(machine.registerConfig) && machine.registerConfig.length
-      ? machine.registerConfig.filter((parameter) => parameter.enabled !== false)
-      : [];
+    const readParameters = UBE_READ_PARAMETERS;
+
+    const partName = await readString(sock, UBE_PART_NAME_DEVICE, UBE_PART_NAME_LENGTH).catch(() => "");
+    const shotYearRaw = await readWord(sock, SHOT_DATE_TIME_DEVICES.year).catch(() => null);
+    const shotMonthRaw = await readWord(sock, SHOT_DATE_TIME_DEVICES.month).catch(() => null);
+    const shotDayRaw = await readWord(sock, SHOT_DATE_TIME_DEVICES.day).catch(() => null);
+    const shotHour = await readWord(sock, SHOT_DATE_TIME_DEVICES.hour).catch(() => null);
+    const shotMinute = await readWord(sock, SHOT_DATE_TIME_DEVICES.minute).catch(() => null);
+    const shotSecond = await readWord(sock, SHOT_DATE_TIME_DEVICES.second).catch(() => null);
+    const shotTime = buildShotTimeValue(shotHour, shotMinute, shotSecond);
+    const shotDateTime = buildShotDateTimeValue(
+      shotYearRaw,
+      shotMonthRaw,
+      shotDayRaw,
+      shotHour,
+      shotMinute,
+      shotSecond
+    );
+    const cycleTimestamp = shotDateTime;
 
     reportSerial += 1;
-    let partName = "";
-    let shotTime = null;
-    let cycleTimestamp = null;
+    readings.part_name = partName;
+    readings.shot_date = buildShotDateValue(shotYearRaw, shotMonthRaw, shotDayRaw);
+    readings.shot_time = shotTime;
+    readings.shot_datetime = shotDateTime;
+    readings.shot_year = pad2(shotYearRaw);
+    readings.shot_month = pad2(shotMonthRaw);
+    readings.shot_day = pad2(shotDayRaw);
+    readings.shot_hour = pad2(shotHour);
+    readings.shot_minute = pad2(shotMinute);
+    readings.shot_second = pad2(shotSecond);
 
     for (const parameter of readParameters) {
       const { name, device, computed } = parameter;
@@ -2663,34 +2766,6 @@ function startPlcMonitor(io) {
         readings[name] = null;
       }
     }
-
-    partName = readings.part_name || readings.partName || "";
-    const shotYearRaw = readings.shot_year;
-    const shotMonthRaw = readings.shot_month;
-    const shotDayRaw = readings.shot_day;
-    const shotHour = readings.shot_hour;
-    const shotMinute = readings.shot_minute;
-    const shotSecond = readings.shot_second;
-    shotTime = readings.shot_time || buildShotTimeValue(shotHour, shotMinute, shotSecond);
-    const shotDateTime = readings.shot_datetime || buildShotDateTimeValue(
-      shotYearRaw,
-      shotMonthRaw,
-      shotDayRaw,
-      shotHour,
-      shotMinute,
-      shotSecond
-    );
-    cycleTimestamp = shotDateTime || now.toISOString();
-    readings.part_name = partName;
-    readings.shot_date = readings.shot_date || buildShotDateValue(shotYearRaw, shotMonthRaw, shotDayRaw);
-    readings.shot_time = shotTime;
-    readings.shot_datetime = shotDateTime;
-    readings.shot_year = pad2(shotYearRaw);
-    readings.shot_month = pad2(shotMonthRaw);
-    readings.shot_day = pad2(shotDayRaw);
-    readings.shot_hour = pad2(shotHour);
-    readings.shot_minute = pad2(shotMinute);
-    readings.shot_second = pad2(shotSecond);
 
     readings.shot_number = readings["SHOT NO."] ?? null;
     readings.ok_shot = readings["HIGH SHOT COUNT"] ?? null;
@@ -2885,12 +2960,16 @@ function startPlcMonitor(io) {
     const machineKey = machine.key || machine.ip;
     const machineType = "leaktest";
     const currentState = machineState.get(machineKey) || {};
-    const readParameters = Array.isArray(machine.registerConfig) && machine.registerConfig.length
-      ? machine.registerConfig.filter((parameter) => parameter.enabled !== false)
-      : [];
+    const readParameters = LEAK_TEST_PARAMETERS;
+    let configuredQrDevice = "";
+    let configuredQrLength = 14;
 
     for (const parameter of readParameters) {
       const { name, device, stringDevice, stringLength } = parameter;
+      if (name === "part_qr_code") {
+        configuredQrDevice = stringDevice || device || configuredQrDevice;
+        configuredQrLength = Number(stringLength || configuredQrLength || 14);
+      }
       try {
         if (stringDevice) {
           readings[name] = await readString(sock, stringDevice, stringLength || 11);
@@ -2921,6 +3000,12 @@ function startPlcMonitor(io) {
       } catch {
         readings[name] = null;
       }
+    }
+
+    const primaryQr = await readLeakQrCode(sock, configuredQrDevice, configuredQrLength);
+    if (primaryQr.value) {
+      readings.part_qr_code = primaryQr.value;
+      readings.scan_source_device = primaryQr.device;
     }
 
     readings.scan_data = readings.part_qr_code || "";
@@ -3256,16 +3341,8 @@ function startPlcMonitor(io) {
         // â”€ LEAK TEST LOOP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
         if (isLeakTestMachine(machine)) {
-          const cycleStartDevice = getConfiguredRegisterDevice(
-            machine,
-            ["cycle_start", "cycle start", "start"],
-            LEAK_TEST_CONTROL.cycleStartDevice
-          );
-          const cycleEndDevice = getConfiguredRegisterDevice(
-            machine,
-            ["cycle_end", "cycle end", "end"],
-            LEAK_TEST_CONTROL.cycleEndDevice
-          );
+          const cycleStartDevice = LEAK_TEST_CONTROL.cycleStartDevice;
+          const cycleEndDevice = LEAK_TEST_CONTROL.cycleEndDevice;
 
           let cycleStarted = !cycleStartDevice;
           let lastCycleStartBit = cycleStartDevice
@@ -3431,16 +3508,8 @@ function startPlcMonitor(io) {
 
         // â”€ UBE LOOP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-        const cycleStartDevice = getConfiguredRegisterDevice(
-          machine,
-          ["cycle_start", "cycle start", "start"],
-          CYCLE_START_DEVICE
-        );
-        const cycleEndDevice = getConfiguredRegisterDevice(
-          machine,
-          ["cycle_end", "cycle end", "end"],
-          CYCLE_END_DEVICE
-        );
+        const cycleStartDevice = CYCLE_START_DEVICE;
+        const cycleEndDevice = CYCLE_END_DEVICE;
         let lastCycleStartBit = cycleStartDevice
           ? await readBit(sock, cycleStartDevice).catch(() => 0)
           : 0;
