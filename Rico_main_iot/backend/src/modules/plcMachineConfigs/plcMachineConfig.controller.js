@@ -2,6 +2,7 @@
 
 const net = require("net");
 const db = require("../../config/db");
+const { LEAK_TEST_PARAMETERS, UBE_READ_PARAMETERS } = require("../plcMonitor/config/registerConfig");
 
 let schemaReadyPromise = null;
 
@@ -55,7 +56,7 @@ function protocolType(value) {
 }
 
 function profileForType(type) {
-  return type === "leaktest" ? "LEAK_TEST" : "CUSTOM";
+  return type === "leaktest" ? "LEAK_TEST" : "UBE_850T";
 }
 
 function templateKey(value) {
@@ -99,7 +100,7 @@ async function ensureSchema() {
             ip_address VARCHAR(50) NOT NULL,
             port INT NOT NULL DEFAULT 5002,
             protocol NVARCHAR(30) NOT NULL DEFAULT 'SLMP',
-            register_profile_key NVARCHAR(80) NOT NULL DEFAULT 'CUSTOM',
+            register_profile_key NVARCHAR(80) NOT NULL DEFAULT 'UBE_850T',
             sequence_no INT NULL,
             is_active BIT NOT NULL DEFAULT 1,
             register_config_json NVARCHAR(MAX) NULL,
@@ -168,7 +169,7 @@ function normalizeMachine(row = {}) {
     ip_address: row.ip_address,
     port: Number(row.port || 5002),
     protocol: row.protocol || "SLMP",
-    register_profile_key: row.register_profile_key || "CUSTOM",
+    register_profile_key: row.register_profile_key || "UBE_850T",
     sequence_no: row.sequence_no ?? null,
     is_active: row.is_active === undefined ? true : Boolean(row.is_active),
     register_config: Array.isArray(registerConfig) ? registerConfig : null,
@@ -182,7 +183,49 @@ function normalizeMachine(row = {}) {
 }
 
 function systemTemplates() {
-  return [];
+  return [
+    {
+      template_key: "UBE_850T",
+      template_name: "UBE 850T Die Casting",
+      machine_type: "ube",
+      notes: "System default UBE die casting register map.",
+      register_config: registersForType("ube"),
+      is_system: 1,
+    },
+    {
+      template_key: "LEAK_TEST",
+      template_name: "Leak Test",
+      machine_type: "leaktest",
+      notes: "System default leak test register map.",
+      register_config: registersForType("leaktest"),
+      is_system: 1,
+    },
+  ];
+}
+
+function registersForType(type = "ube") {
+  return (type === "leaktest" ? LEAK_TEST_PARAMETERS : UBE_READ_PARAMETERS)
+    .filter((parameter) => !parameter.hidden)
+    .map((parameter, index) => ({
+      id: `${parameter.name}-${index}`,
+      name: parameter.name,
+      device: parameter.device || "",
+      stringDevice: parameter.stringDevice || "",
+      stringLength: parameter.stringLength || "",
+      type: parameter.type || "int",
+      scale: parameter.scale ?? 1,
+      computed: parameter.computed || "",
+      enabled: true,
+      min: null,
+      max: null,
+      warning_min: null,
+      warning_max: null,
+      unit: parameter.unit || "",
+      show_on_monitor: true,
+      show_to_operator: false,
+      log_history: true,
+      alarm_enabled: false,
+    }));
 }
 
 function normalizeRegisters(input) {
@@ -285,7 +328,7 @@ async function saveMachineRecord(input = {}) {
   const selectedTemplate = templates.find((template) => template.template_key === profile);
   const fallbackRegisters = selectedTemplate?.register_config?.length
     ? selectedTemplate.register_config
-    : [];
+    : registersForType(type);
 
   const payload = {
     machine_key: key,
@@ -405,10 +448,10 @@ async function listMachines(_req, res) {
     res.json({
       success: true,
       data: rows.map(normalizeMachine),
-      default_registers: byType.ube?.[0]?.register_config || [],
+      default_registers: byType.ube?.[0]?.register_config || registersForType("ube"),
       default_registers_by_type: {
-        ube: byType.ube?.[0]?.register_config || [],
-        leaktest: byType.leaktest?.[0]?.register_config || [],
+        ube: byType.ube?.[0]?.register_config || registersForType("ube"),
+        leaktest: byType.leaktest?.[0]?.register_config || registersForType("leaktest"),
       },
       register_templates: templates,
     });

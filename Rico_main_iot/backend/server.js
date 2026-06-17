@@ -46,7 +46,18 @@ app.use("/api/departments", departmentRoutes);
 app.use("/api/lines", lineRoutes);
 app.use("/api/plc-machine-configs", plcMachineConfigRoutes);
 
-const plcMonitor = startPlcMonitor(io);
+const plcMonitor = String(process.env.PLC_MONITOR_ENABLED || "true").toLowerCase() === "false"
+  ? {
+      getStatus: () => ({ running: false, disabled: true }),
+      getLatestReadings: async () => [],
+      getReadingHistory: async () => [],
+      getConnectionEvents: async () => [],
+      getReportColumns: () => [],
+      buildReadingsExcelXml: () => "",
+      buildConnectionEventsExcelXml: () => "",
+      restart: async () => ({ ok: false, disabled: true }),
+    }
+  : startPlcMonitor(io);
 app.use("/api/plc-monitor", createPlcMonitorRoutes(plcMonitor));
 
 app.use((err, _req, res, _next) => {

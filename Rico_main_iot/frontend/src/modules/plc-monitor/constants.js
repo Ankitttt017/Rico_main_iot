@@ -1,4 +1,4 @@
-export const PLC_LATEST_POLL_MS = Number(import.meta.env.VITE_PLC_LATEST_POLL_MS || 1000);
+export const PLC_LATEST_POLL_MS = Number(import.meta.env.VITE_PLC_LATEST_POLL_MS || 5000);
 
 export const MACHINE_NAMES = {};
 
