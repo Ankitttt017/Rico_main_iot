@@ -18,6 +18,8 @@ function normalizeConfiguredMachine(machine = {}, index = 0) {
     .replace(/^-+|-+$/g, "");
 
   return {
+    id: machine.id || machine.plc_config_id || null,
+    machineId: machine.machineId || machine.machine_id || null,
     key: key || `machine-${index + 1}`,
     ip,
     port: Number(machine.port || machine.plc_port || 5002),
@@ -57,7 +59,7 @@ async function getConfiguredMachines() {
     if (!tableExists) return getMachines();
 
     const { rows } = await db.query(`
-      SELECT machine_key, machine_name, machine_type, ip_address, port, register_config_json
+      SELECT id, machine_id, machine_key, machine_name, machine_type, ip_address, port, register_config_json
       FROM dbo.plc_machine_configs WITH (NOLOCK)
       WHERE is_active = 1
         AND NULLIF(LTRIM(RTRIM(ip_address)), '') IS NOT NULL
@@ -67,6 +69,8 @@ async function getConfiguredMachines() {
     const machines = rows
       .map((row, index) => normalizeConfiguredMachine({
         key: row.machine_key,
+        id: row.id,
+        machine_id: row.machine_id,
         name: row.machine_name,
         machine_type: row.machine_type,
         ip: row.ip_address,

@@ -20,7 +20,6 @@ const {
   DEVICE_CODE,
   CYCLE_START_DEVICE,
   CYCLE_END_DEVICE,
-  SHOT_DATE_TIME_DEVICES,
   UBE_CYCLE_END_DELAY_MS,
   UBE_CYCLE_END_POLL_MS,
   UBE_LIVE_READ_MS,
@@ -116,8 +115,6 @@ const PLC_RECONNECT_MIN_MS = Number(process.env.PLC_RECONNECT_MIN_MS || process.
 const PLC_RECONNECT_MAX_MS = Number(process.env.PLC_RECONNECT_MAX_MS || 30000);
 const PLC_RECONNECT_BACKOFF_FACTOR = Number(process.env.PLC_RECONNECT_BACKOFF_FACTOR || 1.6);
 const PLC_RECONNECT_JITTER_MS = Number(process.env.PLC_RECONNECT_JITTER_MS || 1000);
-const UBE_PART_NAME_DEVICE = process.env.PLC_UBE_PART_NAME_DEVICE || "D100";
-const UBE_PART_NAME_LENGTH = Number(process.env.PLC_UBE_PART_NAME_LENGTH || 12);
 
 function isPlcReadTimeoutError(error) {
   return /PLC read timeout|timed out|timeout/i.test(String(error?.message || error || ""));
@@ -525,39 +522,6 @@ function buildLeakSignature(readings, { includeCycleTime = false } = {}) {
   return JSON.stringify(signature);
 }
 
-function getFallbackDevices(envName, defaults = []) {
-  return String(process.env[envName] || defaults.join(","))
-    .split(",")
-    .map((item) => item.trim().toUpperCase())
-    .filter(Boolean);
-}
-
-function getLeakQrDeviceCandidates(configuredDevice = "") {
-  const primaryDevice = String(process.env.PLC_LEAK_SCAN_DEVICE || "D301").trim().toUpperCase();
-  const configured = String(configuredDevice || "").trim().toUpperCase();
-  return Array.from(new Set(getFallbackDevices("PLC_LEAK_SCAN_FALLBACK_DEVICES", [
-    primaryDevice,
-    configured,
-    "D300",
-    "D301",
-    "D100",
-    "D101",
-    "D102",
-  ])));
-}
-
-async function readLeakQrCode(sock, configuredDevice = "", configuredLength = 14) {
-  const length = Number(process.env.PLC_LEAK_SCAN_LENGTH || configuredLength || 14);
-  for (const device of getLeakQrDeviceCandidates(configuredDevice)) {
-    if (!device) continue;
-    const value = await readString(sock, device, length).catch(() => "");
-    if (String(value || "").trim()) {
-      return { value, device };
-    }
-  }
-  return { value: "", device: "" };
-}
-
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // DB HELPERS
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -762,9 +726,45 @@ async function persistLiveSnapshotIfAhead(machine = {}, dbReading = {}) {
   return result;
 }
 
-function formatReadingsForClient(readings, machineKind = "ube") {
-  const allowedNames =
-    machineKind === "leaktest" ? LEAK_CLIENT_READING_NAMES : UBE_CLIENT_READING_NAMES;
+function getConfiguredReadingNames(machine = {}) {
+  if (!Array.isArray(machine.registerConfig)) return null;
+  const names = machine.registerConfig
+    .filter((parameter) => parameter && parameter.enabled !== false && parameter.show_on_monitor !== false)
+    .map((parameter) => String(parameter.name || "").trim())
+    .filter(Boolean);
+  return names.length ? new Set(names) : null;
+}
+
+function normalizeRegisterName(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function getConfiguredRegisterDevice(machine = {}, names = [], fallback = "") {
+  const wanted = new Set(names.map(normalizeRegisterName));
+  const register = Array.isArray(machine.registerConfig)
+    ? machine.registerConfig.find((item) =>
+        item &&
+        item.enabled !== false &&
+        wanted.has(normalizeRegisterName(item.name)) &&
+        String(item.device || item.stringDevice || "").trim()
+      )
+    : null;
+  return String(register?.device || register?.stringDevice || fallback || "").trim().toUpperCase();
+}
+
+function formatReadingsForClient(readings, machineOrKind = "ube") {
+  const configuredNames =
+    typeof machineOrKind === "object" ? getConfiguredReadingNames(machineOrKind) : null;
+  const machineKind =
+    typeof machineOrKind === "object"
+      ? (isLeakTestMachine(machineOrKind) ? "leaktest" : "ube")
+      : machineOrKind;
+  const allowedNames = configuredNames ||
+    (machineKind === "leaktest" ? LEAK_CLIENT_READING_NAMES : UBE_CLIENT_READING_NAMES);
 
   return Object.fromEntries(
     Object.entries(readings)
@@ -2631,35 +2631,10 @@ function startPlcMonitor(io) {
       ? machine.registerConfig.filter((parameter) => parameter.enabled !== false)
       : [];
 
-    const partName = await readString(sock, UBE_PART_NAME_DEVICE, UBE_PART_NAME_LENGTH).catch(() => "");
-    const shotYearRaw = await readWord(sock, SHOT_DATE_TIME_DEVICES.year).catch(() => null);
-    const shotMonthRaw = await readWord(sock, SHOT_DATE_TIME_DEVICES.month).catch(() => null);
-    const shotDayRaw = await readWord(sock, SHOT_DATE_TIME_DEVICES.day).catch(() => null);
-    const shotHour = await readWord(sock, SHOT_DATE_TIME_DEVICES.hour).catch(() => null);
-    const shotMinute = await readWord(sock, SHOT_DATE_TIME_DEVICES.minute).catch(() => null);
-    const shotSecond = await readWord(sock, SHOT_DATE_TIME_DEVICES.second).catch(() => null);
-    const shotTime = buildShotTimeValue(shotHour, shotMinute, shotSecond);
-    const shotDateTime = buildShotDateTimeValue(
-      shotYearRaw,
-      shotMonthRaw,
-      shotDayRaw,
-      shotHour,
-      shotMinute,
-      shotSecond
-    );
-    const cycleTimestamp = shotDateTime;
-
     reportSerial += 1;
-    readings.part_name = partName;
-    readings.shot_date = buildShotDateValue(shotYearRaw, shotMonthRaw, shotDayRaw);
-    readings.shot_time = shotTime;
-    readings.shot_datetime = shotDateTime;
-    readings.shot_year = pad2(shotYearRaw);
-    readings.shot_month = pad2(shotMonthRaw);
-    readings.shot_day = pad2(shotDayRaw);
-    readings.shot_hour = pad2(shotHour);
-    readings.shot_minute = pad2(shotMinute);
-    readings.shot_second = pad2(shotSecond);
+    let partName = "";
+    let shotTime = null;
+    let cycleTimestamp = null;
 
     for (const parameter of readParameters) {
       const { name, device, computed } = parameter;
@@ -2688,6 +2663,34 @@ function startPlcMonitor(io) {
         readings[name] = null;
       }
     }
+
+    partName = readings.part_name || readings.partName || "";
+    const shotYearRaw = readings.shot_year;
+    const shotMonthRaw = readings.shot_month;
+    const shotDayRaw = readings.shot_day;
+    const shotHour = readings.shot_hour;
+    const shotMinute = readings.shot_minute;
+    const shotSecond = readings.shot_second;
+    shotTime = readings.shot_time || buildShotTimeValue(shotHour, shotMinute, shotSecond);
+    const shotDateTime = readings.shot_datetime || buildShotDateTimeValue(
+      shotYearRaw,
+      shotMonthRaw,
+      shotDayRaw,
+      shotHour,
+      shotMinute,
+      shotSecond
+    );
+    cycleTimestamp = shotDateTime || now.toISOString();
+    readings.part_name = partName;
+    readings.shot_date = readings.shot_date || buildShotDateValue(shotYearRaw, shotMonthRaw, shotDayRaw);
+    readings.shot_time = shotTime;
+    readings.shot_datetime = shotDateTime;
+    readings.shot_year = pad2(shotYearRaw);
+    readings.shot_month = pad2(shotMonthRaw);
+    readings.shot_day = pad2(shotDayRaw);
+    readings.shot_hour = pad2(shotHour);
+    readings.shot_minute = pad2(shotMinute);
+    readings.shot_second = pad2(shotSecond);
 
     readings.shot_number = readings["SHOT NO."] ?? null;
     readings.ok_shot = readings["HIGH SHOT COUNT"] ?? null;
@@ -2736,7 +2739,7 @@ function startPlcMonitor(io) {
       machineType,
       partName,
       shotTime,
-      readings: formatReadingsForClient(readings, machine.kind),
+      readings: formatReadingsForClient(readings, machine),
       cycleTime: readings.cycle_time,
       timestamp: cycleTimestamp,
       observedAt: now.toISOString(),
@@ -2756,7 +2759,7 @@ function startPlcMonitor(io) {
         machineType,
         partName,
         shotTime,
-        readings: formatReadingsForClient(readings, machine.kind),
+        readings: formatReadingsForClient(readings, machine),
         cycleTime: readings.cycle_time,
         timestamp: payload.timestamp,
         observedAt: payload.observedAt,
@@ -2834,7 +2837,7 @@ function startPlcMonitor(io) {
       machineType,
       partName: lastPayload.partName,
       shotTime: lastPayload.shotTime,
-      readings: formatReadingsForClient(finalReadings, machine.kind),
+      readings: formatReadingsForClient(finalReadings, machine),
       cycleTime: finalReadings.cycle_time,
       timestamp: lastPayload.timestamp,
       config: lastPayload.config,
@@ -2885,15 +2888,9 @@ function startPlcMonitor(io) {
     const readParameters = Array.isArray(machine.registerConfig) && machine.registerConfig.length
       ? machine.registerConfig.filter((parameter) => parameter.enabled !== false)
       : [];
-    let configuredQrDevice = "";
-    let configuredQrLength = 14;
 
     for (const parameter of readParameters) {
       const { name, device, stringDevice, stringLength } = parameter;
-      if (name === "part_qr_code") {
-        configuredQrDevice = stringDevice || device || configuredQrDevice;
-        configuredQrLength = Number(stringLength || configuredQrLength || 14);
-      }
       try {
         if (stringDevice) {
           readings[name] = await readString(sock, stringDevice, stringLength || 11);
@@ -2926,12 +2923,6 @@ function startPlcMonitor(io) {
       }
     }
 
-    const primaryQr = await readLeakQrCode(sock, configuredQrDevice, configuredQrLength);
-    if (primaryQr.value) {
-      readings.part_qr_code = primaryQr.value;
-      readings.scan_source_device = primaryQr.device;
-    }
-
     readings.scan_data = readings.part_qr_code || "";
     readings.part_qr_code = readings.scan_data;
     readings.result = normalizeLeakResult(readings.result);
@@ -2952,7 +2943,7 @@ function startPlcMonitor(io) {
       shotTime: now.toLocaleTimeString("en-IN", {
         hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
       }),
-      readings: formatReadingsForClient(readings, machine.kind),
+      readings: formatReadingsForClient(readings, machine),
       cycleTime: readings.cycle_time,
       timestamp: liveOnly ? currentState.lastCycleAt || timestamp : timestamp,
       observedAt: timestamp,
@@ -3106,7 +3097,7 @@ function startPlcMonitor(io) {
       machineType,
       partName: lastPayload.partName,
       shotTime: lastPayload.shotTime,
-      readings: formatReadingsForClient(finalReadings, machine.kind),
+      readings: formatReadingsForClient(finalReadings, machine),
       cycleTime: finalReadings.cycle_time,
       timestamp: lastPayload.timestamp,
       config: lastPayload.config,
@@ -3166,7 +3157,7 @@ function startPlcMonitor(io) {
       shotTime: new Date(readings.cycle_end_time).toLocaleTimeString("en-IN", {
         hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
       }),
-      readings: formatReadingsForClient(readings, machine.kind),
+      readings: formatReadingsForClient(readings, machine),
       cycleTime: readings.cycle_time,
       timestamp: readings.cycle_end_time,
       config: {
@@ -3265,8 +3256,16 @@ function startPlcMonitor(io) {
         // â”€ LEAK TEST LOOP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
         if (isLeakTestMachine(machine)) {
-          const cycleStartDevice = LEAK_TEST_CONTROL.cycleStartDevice;
-          const cycleEndDevice = LEAK_TEST_CONTROL.cycleEndDevice;
+          const cycleStartDevice = getConfiguredRegisterDevice(
+            machine,
+            ["cycle_start", "cycle start", "start"],
+            LEAK_TEST_CONTROL.cycleStartDevice
+          );
+          const cycleEndDevice = getConfiguredRegisterDevice(
+            machine,
+            ["cycle_end", "cycle end", "end"],
+            LEAK_TEST_CONTROL.cycleEndDevice
+          );
 
           let cycleStarted = !cycleStartDevice;
           let lastCycleStartBit = cycleStartDevice
@@ -3432,7 +3431,19 @@ function startPlcMonitor(io) {
 
         // â”€ UBE LOOP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-        let lastCycleStartBit = await readBit(sock, CYCLE_START_DEVICE).catch(() => 0);
+        const cycleStartDevice = getConfiguredRegisterDevice(
+          machine,
+          ["cycle_start", "cycle start", "start"],
+          CYCLE_START_DEVICE
+        );
+        const cycleEndDevice = getConfiguredRegisterDevice(
+          machine,
+          ["cycle_end", "cycle end", "end"],
+          CYCLE_END_DEVICE
+        );
+        let lastCycleStartBit = cycleStartDevice
+          ? await readBit(sock, cycleStartDevice).catch(() => 0)
+          : 0;
         let cycleStartAt = lastCycleStartBit === 1 ? new Date() : null;
         let lastCycleEndBit = 0;
         let cycleEndHandled = false;
@@ -3448,12 +3459,12 @@ function startPlcMonitor(io) {
           let cycleStart = lastCycleStartBit;
           let cycleEnd = lastCycleEndBit;
           try {
-            cycleStart = await readBit(sock, CYCLE_START_DEVICE);
-            cycleEnd = await readBit(sock, CYCLE_END_DEVICE);
+            cycleStart = cycleStartDevice ? await readBit(sock, cycleStartDevice) : 0;
+            cycleEnd = cycleEndDevice ? await readBit(sock, cycleEndDevice) : 0;
             consecutiveReadFailures = 0;
           } catch (error) {
             if (isPlcReadTimeoutError(error)) {
-              await refreshSocketAfterTimeout(`cycle bits ${CYCLE_START_DEVICE}/${CYCLE_END_DEVICE}`);
+              await refreshSocketAfterTimeout(`cycle bits ${cycleStartDevice || ""}/${cycleEndDevice || ""}`);
               consecutiveReadFailures = 0;
               lastLiveReadAt = 0;
               await sleep(UBE_CYCLE_END_POLL_MS);
@@ -3478,7 +3489,7 @@ function startPlcMonitor(io) {
             updateMachineState(machine, {
               connected: true,
               error: null,
-              shotStatus: `Cycle started on ${CYCLE_START_DEVICE}; waiting for ${CYCLE_END_DEVICE}.`,
+              shotStatus: `Cycle started on ${cycleStartDevice}; waiting for ${cycleEndDevice || "cycle end"}.`,
             });
           }
 
@@ -3490,7 +3501,7 @@ function startPlcMonitor(io) {
               : null;
             updateMachineState(machine, {
               connected: true,
-              error: cycleStartAt ? null : `Cycle end received without ${CYCLE_START_DEVICE} start timestamp.`,
+              error: cycleStartAt ? null : `Cycle end received without ${cycleStartDevice || "cycle start"} start timestamp.`,
               shotStatus: cycleEndedNow
                 ? `Cycle ended; duration ${durationSec ?? "-"} sec. Waiting before PLC snapshot.`
                 : `Cycle end is ON; duration ${durationSec ?? "-"} sec. Waiting before PLC snapshot.`,

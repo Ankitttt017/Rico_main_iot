@@ -13,6 +13,15 @@ function cleanCode(value) {
   return String(value ?? "").trim().toUpperCase();
 }
 
+function isDuplicatePlantCodeError(error) {
+  return /duplicate key|unique key|iot_plants/i.test(String(error?.message || ""));
+}
+
+function duplicatePlantMessage(code, existingName) {
+  const label = existingName ? ` as ${existingName}` : "";
+  return `Plant code ${code} already exists${label}. Use Edit on the existing plant instead of creating it again.`;
+}
+
 function ensureSchema() {
   if (!schemaReadyPromise) {
     schemaReadyPromise = db.run(`
@@ -36,6 +45,14 @@ function ensureSchema() {
     });
   }
   return schemaReadyPromise;
+}
+
+async function findLocationByCode(code) {
+  const { rows } = await db.query(
+    "SELECT TOP 1 id, name FROM dbo.iot_plants WHERE code = ?",
+    [code]
+  );
+  return rows[0] || null;
 }
 
 async function listLocations(req, res) {
@@ -65,7 +82,15 @@ async function createLocation(req, res) {
     const code = cleanCode(req.body.code);
     const name = cleanText(req.body.name);
     if (!code || !name) {
-      return res.status(400).json({ success: false, message: "Location code and name are required" });
+      return res.status(400).json({ success: false, message: "Plant code and name are required" });
+    }
+
+    const existing = await findLocationByCode(code);
+    if (existing) {
+      return res.status(409).json({
+        success: false,
+        message: duplicatePlantMessage(code, existing.name),
+      });
     }
 
     const result = await db.run(`
@@ -74,8 +99,14 @@ async function createLocation(req, res) {
       VALUES (?, ?, ?, ?)
     `, [code, name, cleanText(req.body.location), req.body.is_active === false ? 0 : 1]);
 
-    res.status(201).json({ success: true, id: result.rows[0]?.id, message: "Location created" });
+    res.status(201).json({ success: true, id: result.rows[0]?.id, message: "Plant created" });
   } catch (error) {
+    if (isDuplicatePlantCodeError(error)) {
+      return res.status(409).json({
+        success: false,
+        message: "Plant code already exists. Use Edit on the existing plant instead of creating it again.",
+      });
+    }
     res.status(500).json({ success: false, message: error.message });
   }
 }
@@ -86,7 +117,7 @@ async function updateLocation(req, res) {
     const allowed = ["code", "name", "location", "is_active"];
     const updates = allowed.filter((field) => Object.prototype.hasOwnProperty.call(req.body, field));
     if (!updates.length) {
-      return res.status(400).json({ success: false, message: "No location fields supplied" });
+      return res.status(400).json({ success: false, message: "No plant fields supplied" });
     }
 
     const values = updates.map((field) => {
@@ -95,6 +126,21 @@ async function updateLocation(req, res) {
       return cleanText(req.body[field]);
     });
 
+    const codeIndex = updates.indexOf("code");
+    if (codeIndex >= 0) {
+      const nextCode = values[codeIndex];
+      if (!nextCode) {
+        return res.status(400).json({ success: false, message: "Plant code is required" });
+      }
+      const existing = await findLocationByCode(nextCode);
+      if (existing && String(existing.id) !== String(req.params.id)) {
+        return res.status(409).json({
+          success: false,
+          message: duplicatePlantMessage(nextCode, existing.name),
+        });
+      }
+    }
+
     await db.run(`
       UPDATE dbo.iot_plants
       SET ${updates.map((field) => `${field} = ?`).join(", ")},
@@ -102,8 +148,14 @@ async function updateLocation(req, res) {
       WHERE id = ?
     `, [...values, req.params.id]);
 
-    res.json({ success: true, message: "Location updated" });
+    res.json({ success: true, message: "Plant updated" });
   } catch (error) {
+    if (isDuplicatePlantCodeError(error)) {
+      return res.status(409).json({
+        success: false,
+        message: "Plant code already exists. Use Edit on the existing plant instead of creating it again.",
+      });
+    }
     res.status(500).json({ success: false, message: error.message });
   }
 }
@@ -115,7 +167,7 @@ async function deleteLocation(req, res) {
       "SELECT TOP 1 id FROM dbo.iot_plants WHERE id = ?",
       [req.params.id]
     );
-    if (!rows.length) return res.status(404).json({ success: false, message: "Location not found" });
+    if (!rows.length) return res.status(404).json({ success: false, message: "Plant not found" });
 
     await db.run(`
       DECLARE @plantCode VARCHAR(20);
@@ -156,7 +208,7 @@ async function deleteLocation(req, res) {
 
       DELETE FROM dbo.iot_plants WHERE id = ?;
     `, [req.params.id, req.params.id]);
-    res.json({ success: true, message: "Location deleted" });
+    res.json({ success: true, message: "Plant deleted" });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
