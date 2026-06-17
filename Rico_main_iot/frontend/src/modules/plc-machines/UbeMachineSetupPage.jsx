@@ -21,7 +21,7 @@ export const DEFAULT_PLC_DRAFT = {
   ip_address: "",
   port: "",
   protocol: "SLMP",
-  register_profile_key: "UBE_850T",
+  register_profile_key: "CUSTOM",
   sequence_no: null,
   is_active: true,
   register_config: [],
@@ -68,7 +68,7 @@ export function getDefaultRegisters(defaultRegistersByType, type) {
 }
 
 export function profileForType(type) {
-  return type === "leaktest" ? "LEAK_TEST" : "UBE_850T";
+  return type === "leaktest" ? "LEAK_TEST" : "CUSTOM";
 }
 
 function cleanTemplateKey(value) {
@@ -550,7 +550,7 @@ export function RegisterConfigTable({ registers, setRegisters, maxHeightClass = 
                   <input className={inputClass} value={register.name || ""} onChange={(event) => setRegisterField(index, "name", event.target.value)} />
                 </td>
                 <td className="px-3 py-2">
-                  <input className={inputClass} value={getRegisterAddress(register)} onChange={(event) => setRegisterAddress(index, event.target.value)} placeholder="D2258 / M110 / R2250" />
+                  <input className={inputClass} value={getRegisterAddress(register)} onChange={(event) => setRegisterAddress(index, event.target.value)} placeholder="PLC address" />
                 </td>
                 <td className="px-3 py-2">
                   <select className={inputClass} value={register.type || "int"} onChange={(event) => setRegisterType(index, event.target.value)}>

@@ -34,7 +34,7 @@ export default function LocationMasterPage({ onLogout, currentUser }) {
       const response = await getLocations();
       setLocations(Array.isArray(response.data?.data) ? response.data.data : []);
     } catch (error) {
-      toast.error(error.response?.data?.message || "Unable to load locations");
+      toast.error(error.response?.data?.message || "Unable to load plants");
     } finally {
       setLoading(false);
     }
@@ -68,23 +68,32 @@ export default function LocationMasterPage({ onLogout, currentUser }) {
   const setField = (field, value) => setDraft((current) => ({ ...current, [field]: value }));
 
   const save = async () => {
-    if (!String(draft.code || "").trim() || !String(draft.name || "").trim()) {
-      toast.error("Location code and name are required");
+    const nextCode = String(draft.code || "").trim().toUpperCase();
+    if (!nextCode || !String(draft.name || "").trim()) {
+      toast.error("Plant code and name are required");
+      return;
+    }
+    const sameCodePlant = locations.find((plant) =>
+      String(plant.code || "").trim().toUpperCase() === nextCode &&
+      String(plant.id) !== String(draft.id || "")
+    );
+    if (sameCodePlant) {
+      toast.error(`Plant code ${nextCode} already exists as ${sameCodePlant.name}. Use Edit on that plant.`);
       return;
     }
     setSaving(true);
     try {
       if (draft.id) {
         await updateLocation(draft.id, { ...draft, is_active: isActive(draft.is_active) });
-        toast.success("Location updated");
+        toast.success("Plant updated");
       } else {
         await createLocation({ ...draft, is_active: isActive(draft.is_active) });
-        toast.success("Location created");
+        toast.success("Plant created");
       }
       setDraft(emptyDraft);
       await load();
     } catch (error) {
-      toast.error(error.response?.data?.message || "Unable to save location");
+      toast.error(error.response?.data?.message || "Unable to save plant");
     } finally {
       setSaving(false);
     }
@@ -95,11 +104,11 @@ export default function LocationMasterPage({ onLogout, currentUser }) {
     setBusyId(location.id);
     try {
       await deleteLocation(location.id);
-      toast.success("Location deleted");
+      toast.success("Plant deleted");
       if (draft.id === location.id) setDraft(emptyDraft);
       await load();
     } catch (error) {
-      toast.error(error.response?.data?.message || "Unable to delete location");
+      toast.error(error.response?.data?.message || "Unable to delete plant");
     } finally {
       setBusyId(null);
     }
@@ -110,14 +119,14 @@ export default function LocationMasterPage({ onLogout, currentUser }) {
     setBusyId(location.id);
     try {
       await updateLocation(location.id, { is_active: nextActive });
-      toast.success(nextActive ? "Location enabled" : "Location disabled");
+      toast.success(nextActive ? "Plant enabled" : "Plant disabled");
       setLocations((current) =>
         current.map((item) => item.id === location.id ? { ...item, is_active: nextActive } : item)
       );
       if (draft.id === location.id) setDraft((current) => ({ ...current, is_active: nextActive }));
       await load();
     } catch (error) {
-      toast.error(error.response?.data?.message || "Unable to update location status");
+      toast.error(error.response?.data?.message || "Unable to update plant status");
     } finally {
       setBusyId(null);
     }
