@@ -161,17 +161,30 @@ export function normalizeLeakStatus(status, result) {
 }
 
 export function rowToReadings(row = {}, machineKind = getMachineKindFromRow(row)) {
+  let rawReadings = {};
+  try {
+    rawReadings = row.raw_readings_json ? JSON.parse(row.raw_readings_json) : {};
+  } catch {
+    rawReadings = {};
+  }
+  const expandedRow = {
+    ...(rawReadings && typeof rawReadings === "object" && !Array.isArray(rawReadings) ? rawReadings : {}),
+    ...row,
+  };
   const allowedNames = getAllowedParameterNames(machineKind);
-  const names = Array.from(allowedNames);
+  const dynamicNames = Object.keys(expandedRow)
+    .filter((name) => !isHiddenDbField(name))
+    .filter((name) => expandedRow[name] !== null && expandedRow[name] !== undefined);
+  const names = Array.from(new Set([...allowedNames, ...dynamicNames]));
 
   return Object.fromEntries(
     names.map((name) => {
-      let value = row[name] ?? null;
-      if (name === "part_name") value = row.part_name ?? row.part_qr_code ?? row.scan_data ?? null;
-      if (name === "part_qr_code") value = row.part_qr_code ?? row.scan_data ?? row.part_name ?? null;
-      if (name === "machine") value = row.machine ?? row.machine_name ?? null;
-      if (name === "ip") value = row.ip ?? row.plc_ip ?? null;
-      if (name === "status") value = normalizeLeakStatus(row.status, row.result);
+      let value = expandedRow[name] ?? null;
+      if (name === "part_name") value = expandedRow.part_name ?? expandedRow.part_qr_code ?? expandedRow.scan_data ?? null;
+      if (name === "part_qr_code") value = expandedRow.part_qr_code ?? expandedRow.scan_data ?? expandedRow.part_name ?? null;
+      if (name === "machine") value = expandedRow.machine ?? expandedRow.machine_name ?? null;
+      if (name === "ip") value = expandedRow.ip ?? expandedRow.plc_ip ?? null;
+      if (name === "status") value = normalizeLeakStatus(expandedRow.status, expandedRow.result);
       return [name, { value: normalizeDisplayValue(name, value), column: name }];
     })
   );

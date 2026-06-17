@@ -590,7 +590,16 @@ function getFixedReadingColumnNames() {
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function formatDbRowForClient(row = {}) {
-  const next = { ...row };
+  let rawReadings = {};
+  try {
+    rawReadings = row.raw_readings_json ? JSON.parse(row.raw_readings_json) : {};
+  } catch {
+    rawReadings = {};
+  }
+  const next = {
+    ...(rawReadings && typeof rawReadings === "object" && !Array.isArray(rawReadings) ? rawReadings : {}),
+    ...row,
+  };
 
   if (next.scan_data && !next.part_qr_code) next.part_qr_code = next.scan_data;
   if (next.part_qr_code && !next.scan_data) next.scan_data = next.part_qr_code;

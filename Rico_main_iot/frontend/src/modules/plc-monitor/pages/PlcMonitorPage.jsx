@@ -4,7 +4,7 @@ import { io } from "socket.io-client";
 import AppLayout from "../../../components/common/AppLayout";
 import { getPlcLatestReadings } from "../../../services/api";
 import { SOCKET_URL } from "../../../services/endpoints";
-import { DEFAULT_MACHINES, MACHINE_NAMES, PLC_LATEST_POLL_MS, REGISTER_GROUPS, getMachineKey, mergeMachineList } from "../constants";
+import { DEFAULT_MACHINES, DISPLAY_LABELS, HIDDEN_DB_FIELDS, MACHINE_NAMES, PLC_LATEST_POLL_MS, REGISTER_GROUPS, getMachineKey, mergeMachineList } from "../constants";
 import PlcMonitorStyles from "../components/PlcMonitorStyles";
 import PlcReportModal from "../components/PlcReportModal";
 import { MachineStatusCard, MetricTile, ParameterTable, STATUS_CFG, ValueCard, formatValue } from "../components/PlcWidgets";
@@ -42,6 +42,15 @@ function toValidDate(value) {
 
 function hasReadingData(readings = {}) {
   return Object.values(readings).some((item) => hasReadableValue(item?.value));
+}
+
+function labelFromKey(name = "") {
+  if (DISPLAY_LABELS[name]) return DISPLAY_LABELS[name];
+  return String(name || "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function PLCDashboard() {
@@ -523,7 +532,34 @@ function PLCDashboard() {
     selectedMachineStatus.partName,
     partName
   );
-  const availableGroups = REGISTER_GROUPS
+  const compactCardHiddenFields = new Set([
+    "machine_name",
+    "plc_ip",
+    "shot_datetime",
+    "shot_year",
+    "shot_month",
+    "shot_day",
+    "shot_hour",
+    "shot_minute",
+    "shot_second",
+  ]);
+  const dynamicRegisterKeys = Object.keys(readings)
+    .filter((name) => !HIDDEN_DB_FIELDS.has(name))
+    .filter((name) => !compactCardHiddenFields.has(name))
+    .filter((name) => readings[name] && Object.prototype.hasOwnProperty.call(readings[name], "value"));
+  const dynamicRegisterGroup = {
+    id: "configured_registers",
+    label: "Configured Registers",
+    kind: selectedMachineKind,
+    icon: "DB",
+    color: "#2563eb",
+    keys: dynamicRegisterKeys.map((name) => ({
+      name,
+      label: labelFromKey(name),
+      unit: readings[name]?.unit || "",
+    })),
+  };
+  const fallbackGroups = REGISTER_GROUPS
     .filter((group) => group.kind === selectedMachineKind)
     .filter((group) => {
       if (group.id !== "machine_bits") return true;
@@ -534,6 +570,7 @@ function PLCDashboard() {
         return true;
       });
     });
+  const availableGroups = dynamicRegisterGroup.keys.length ? [dynamicRegisterGroup] : fallbackGroups;
   const validActiveGroup = availableGroups.some((group) => group.id === activeGroup) ? activeGroup : null;
   const baseDisplayGroups = validActiveGroup
     ? availableGroups.filter(g => g.id === validActiveGroup)
@@ -553,17 +590,6 @@ function PLCDashboard() {
         : group
     ))
     .filter((group) => group.keys.length > 0);
-  const compactCardHiddenFields = new Set([
-    "machine_name",
-    "plc_ip",
-    "shot_datetime",
-    "shot_year",
-    "shot_month",
-    "shot_day",
-    "shot_hour",
-    "shot_minute",
-    "shot_second",
-  ]);
   const cardGroups = displayGroups
     .map((group) => ({
       ...group,
