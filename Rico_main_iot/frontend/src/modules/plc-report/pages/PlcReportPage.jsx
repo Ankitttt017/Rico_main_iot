@@ -20,6 +20,7 @@ const DEFAULT_MACHINE = {
 
 const REPORT_AUTO_REFRESH_MS = Number(import.meta.env.VITE_PLC_REPORT_REFRESH_MS || 5000);
 const REPORT_HISTORY_LIMIT = Number(import.meta.env.VITE_PLC_REPORT_HISTORY_LIMIT || 15000);
+const REPORT_PAGE_SIZE = Number(import.meta.env.VITE_PLC_REPORT_PAGE_SIZE || 100);
 
 const LIMIT_STATUS_BY_COLUMN = {
   die_close_core_in_time: "die_close_core_in_time_status",
@@ -72,9 +73,6 @@ const HIDDEN_COLUMNS = new Set([
   "cycle_start_time",
   "cycle_end",
   "cycle_end_time",
-  "cycle_duration",
-  "actual_cycle_time",
-  "plc_cycle_time",
   "minor_stoppage_machine",
   "vacuum_pressure_mmhg",
   "raw_readings_json",
@@ -553,6 +551,10 @@ function formatValue(value, key) {
 function formatReportCell(row, key, rowIndex = 0, rowCount = 0, rows = []) {
   if (key === SERIAL_COLUMN) return Math.max(1, rowCount - rowIndex);
   if (key === SHIFT_COLUMN) return getRowShift(row);
+  if (key === "shot_time") {
+    const parts = getRowTimeParts(row);
+    return parts ? `${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}:${String(parts.second).padStart(2, "0")}` : "-";
+  }
   if (normalizeColumnKey(key) === "ng_counter" && rowIndex > 0) {
     const previousValue = rows[rowIndex - 1]?.[key];
     const currentValue = row[key];
@@ -639,13 +641,17 @@ function getNumericId(row = {}) {
 }
 
 function getRowSortTime(row = {}) {
+  const shotParts = getRowTimeParts(row);
+  const shotTime = shotParts
+    ? `${String(shotParts.hour).padStart(2, "0")}:${String(shotParts.minute).padStart(2, "0")}:${String(shotParts.second).padStart(2, "0")}`
+    : null;
   const candidates = [
     row.cycle_end_time,
     row.shot_datetime,
     row.recorded_at,
     row.created_at,
     row.cycle_end,
-    row.shot_date && row.shot_time ? `${row.shot_date}T${row.shot_time}` : null,
+    row.shot_date && shotTime ? `${row.shot_date}T${shotTime}` : null,
     row.shot_date,
   ];
   for (const value of candidates) {
@@ -695,6 +701,7 @@ function buildColumns(rows, options = {}) {
   if (rows.length) {
     keys.add(SERIAL_COLUMN);
     keys.add(SHIFT_COLUMN);
+    if (rows.some((row) => getRowTimeParts(row))) keys.add("shot_time");
   }
   return [
     ...PREFERRED_COLUMNS.filter((key) => keys.has(key) && !isHiddenForReport(key, hideLeakTestFields)),
@@ -750,12 +757,16 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   const [activeQuickFilter, setActiveQuickFilter] = useState("today");
   const [shiftFilter, setShiftFilter] = useState("all");
   const [shotResultFilter, setShotResultFilter] = useState("all");
+  const [shotNumberFilter, setShotNumberFilter] = useState("");
   const [draftFromDate, setDraftFromDate] = useState(fromDate);
   const [draftToDate, setDraftToDate] = useState(toDate);
   const [draftQuickFilter, setDraftQuickFilter] = useState(activeQuickFilter);
   const [draftShiftFilter, setDraftShiftFilter] = useState(shiftFilter);
   const [draftShotResultFilter, setDraftShotResultFilter] = useState(shotResultFilter);
+  const [draftShotNumberFilter, setDraftShotNumberFilter] = useState("");
   const [rows, setRows] = useState([]);
+  const [pagination, setPagination] = useState({ page: 1, pageSize: REPORT_PAGE_SIZE, total: 0, totalPages: 1 });
+  const [serverKpis, setServerKpis] = useState({ ok: 0, warm: 0, off: 0 });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -916,7 +927,39 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     setToDate(draftToDate);
     setShiftFilter(draftShiftFilter);
     setShotResultFilter(draftShotResultFilter);
-  }, [draftFromDate, draftLineId, draftMachineId, draftQuickFilter, draftShiftFilter, draftShotResultFilter, draftToDate]);
+    setShotNumberFilter(draftShotNumberFilter.trim());
+    setPagination((current) => ({ ...current, page: 1 }));
+  }, [draftFromDate, draftLineId, draftMachineId, draftQuickFilter, draftShiftFilter, draftShotNumberFilter, draftShotResultFilter, draftToDate]);
+
+  const clearReportFilters = useCallback(() => {
+    const range = getQuickDateRange("today");
+    setDraftLineId("all");
+    setSelectedLineId("all");
+    setDraftMachineId(getMachineId(DEFAULT_MACHINE));
+    setSelectedMachineId(getMachineId(DEFAULT_MACHINE));
+    setDraftQuickFilter("today");
+    setActiveQuickFilter("today");
+    setDraftFromDate(range.from);
+    setFromDate(range.from);
+    setDraftToDate(range.to);
+    setToDate(range.to);
+    setDraftShiftFilter("all");
+    setShiftFilter("all");
+    setDraftShotResultFilter("all");
+    setShotResultFilter("all");
+    setDraftShotNumberFilter("");
+    setShotNumberFilter("");
+    setPagination((current) => ({ ...current, page: 1 }));
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const nextShotNumber = draftShotNumberFilter.trim();
+      setShotNumberFilter((current) => current === nextShotNumber ? current : nextShotNumber);
+      setPagination((current) => current.page === 1 ? current : { ...current, page: 1 });
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [draftShotNumberFilter]);
 
   const loadReport = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setLoading(true);
@@ -925,18 +968,34 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       const response = await getPlcReadingHistory({
         ip: getMachineReportIp(selectedMachine),
         from: fromDate,
-        to: addDaysToInputDate(toDate, 1),
-        limit: REPORT_HISTORY_LIMIT,
+        to: toDate,
+        page: pagination.page,
+        pageSize: pagination.pageSize,
+        shift: shiftFilter,
+        shotResult: shotResultFilter,
+        shotNumber: shotNumberFilter,
       });
       const nextRows = Array.isArray(response.data?.data) ? response.data.data : [];
       setRows(sortRowsLatestFirst(nextRows));
+      setPagination((current) => response.data?.pagination ? {
+        page: response.data.pagination.page || current.page,
+        pageSize: response.data.pagination.pageSize || current.pageSize,
+        total: response.data.pagination.total || 0,
+        totalPages: response.data.pagination.totalPages || 1,
+      } : { ...current, total: nextRows.length, totalPages: 1 });
+      setServerKpis({
+        ok: Number(response.data?.kpis?.ok || 0),
+        warm: Number(response.data?.kpis?.warm || 0),
+        off: Number(response.data?.kpis?.off || 0),
+      });
     } catch (err) {
       if (!silent) setRows([]);
+      if (!silent) setPagination((current) => ({ ...current, total: 0, totalPages: 1 }));
       setError(err.response?.data?.error || err.response?.data?.message || "Unable to load PLC report.");
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [fromDate, selectedMachine, toDate]);
+  }, [fromDate, pagination.page, pagination.pageSize, selectedMachine, shiftFilter, shotNumberFilter, shotResultFilter, toDate]);
 
   useEffect(() => {
     loadReport();
@@ -946,14 +1005,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     return () => window.clearInterval(timer);
   }, [loadReport]);
 
-  const filteredRows = useMemo(() => {
-    const q = searchMatchedMachineId ? "" : reportSearch.toLowerCase();
-    return rows.filter((row) => {
-      if (!isRowInProductionFilter(row, fromDate, toDate, shiftFilter, shotResultFilter)) return false;
-      if (!q) return true;
-      return Object.values(row || {}).some((value) => String(value ?? "").toLowerCase().includes(q));
-    });
-  }, [fromDate, reportSearch, rows, searchMatchedMachineId, shiftFilter, shotResultFilter, toDate]);
+  const filteredRows = useMemo(() => rows, [rows]);
 
   const hideLeakTestFields = useMemo(
     () => isLeakTestMachine(selectedMachine, filteredRows),
@@ -975,9 +1027,16 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       tableScrollRef.current.scrollLeft = 0;
       tableScrollRef.current.scrollTop = 0;
     }
-  }, [columns.length, fromDate, selectedMachineId, shiftFilter, shotResultFilter, toDate]);
+  }, [columns.length, fromDate, selectedMachineId, shiftFilter, shotNumberFilter, shotResultFilter, toDate]);
   const kpis = useMemo(() => {
-    const counts = { ok: 0, warm: 0, off: 0, totalProduction: reportRows.length, shift: shiftFilter === "all" ? "All" : shiftFilter };
+    const counts = {
+      ok: serverKpis.ok,
+      warm: serverKpis.warm,
+      off: serverKpis.off,
+      totalProduction: pagination.total,
+      shift: shiftFilter === "all" ? "All" : shiftFilter,
+    };
+    if (pagination.total) return counts;
     reportRows.forEach((row) => {
       const value = Number(row.shot_status ?? row["Shot Status"]);
       if (value === 1) counts.ok += 1;
@@ -986,7 +1045,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     });
     if (!reportRows.length) counts.shift = shiftFilter === "all" ? "All" : shiftFilter;
     return counts;
-  }, [reportRows, shiftFilter]);
+  }, [pagination.total, reportRows, serverKpis.off, serverKpis.ok, serverKpis.warm, shiftFilter]);
 
   const reportRangeLabel = `${formatDisplayDate(fromDate)} to ${formatDisplayDate(toDate)}`;
   const reportFilterLabel = getQuickFilterLabel(activeQuickFilter);
@@ -1204,7 +1263,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
 
           {filtersOpen && (
             <div className="border-t border-slate-200 p-3 sm:p-4">
-              <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))] 2xl:[grid-template-columns:minmax(170px,1fr)_minmax(170px,1fr)_minmax(150px,0.9fr)_minmax(130px,0.8fr)_minmax(150px,0.9fr)_minmax(150px,0.9fr)_minmax(110px,0.7fr)_minmax(120px,0.75fr)] 2xl:items-end">
+              <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))] 2xl:[grid-template-columns:minmax(170px,1fr)_minmax(170px,1fr)_minmax(150px,0.9fr)_minmax(130px,0.8fr)_minmax(150px,0.9fr)_minmax(150px,0.9fr)_minmax(110px,0.7fr)_minmax(110px,0.7fr)_minmax(130px,0.8fr)_minmax(110px,0.7fr)] 2xl:items-end">
                 <label className="block">
                   <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">Line</span>
                   <select
@@ -1290,9 +1349,25 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                   <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">To</span>
                   <input type="date" value={draftToDate} onChange={handleToDateChange} className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" />
                 </label>
+                <label className="block">
+                  <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">Shot No.</span>
+                  <input
+                    type="search"
+                    value={draftShotNumberFilter}
+                    onChange={(event) => setDraftShotNumberFilter(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") applyReportFilters();
+                    }}
+                    placeholder="Find shot number"
+                    className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                  />
+                </label>
                 <button type="button" onClick={applyReportFilters} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-blue-700 sm:self-end">
                   <CheckCircle2 className="h-4 w-4" />
                   Apply
+                </button>
+                <button type="button" onClick={clearReportFilters} className="inline-flex h-10 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50 sm:self-end">
+                  Clear
                 </button>
                 <button type="button" onClick={downloadExcel} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-emerald-700 sm:self-end">
                   <Download className="h-4 w-4" />
@@ -1315,7 +1390,10 @@ export default function PlcReportPage({ onLogout, currentUser }) {
           <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
             <div>
               <h2 className="text-sm font-black uppercase tracking-[0.14em] text-slate-800">Overall Machine Report</h2>
-              <p className="text-xs font-semibold text-slate-500">Latest records first</p>
+              <p className="text-xs font-semibold text-slate-500">
+                Latest records first | Page {pagination.page} of {pagination.totalPages} | {pagination.total} records
+                {shotNumberFilter && ` | Shot search: ${shotNumberFilter}`}
+              </p>
             </div>
             {loading && <span className="text-xs font-bold text-blue-600">Loading...</span>}
           </div>
@@ -1362,6 +1440,33 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                 )}
               </tbody>
             </table>
+          </div>
+          <div className="flex flex-col gap-3 border-t border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs font-bold text-slate-500">
+              Showing {reportRows.length ? ((pagination.page - 1) * pagination.pageSize) + 1 : 0}
+              {" "}to {Math.min(pagination.page * pagination.pageSize, pagination.total)} of {pagination.total}
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={loading || pagination.page <= 1}
+                onClick={() => setPagination((current) => ({ ...current, page: Math.max(1, current.page - 1) }))}
+                className="h-9 rounded-lg border border-slate-300 px-3 text-sm font-black text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Prev
+              </button>
+              <span className="min-w-24 text-center text-xs font-black uppercase tracking-wide text-slate-500">
+                {pagination.page} / {pagination.totalPages}
+              </span>
+              <button
+                type="button"
+                disabled={loading || pagination.page >= pagination.totalPages}
+                onClick={() => setPagination((current) => ({ ...current, page: Math.min(current.totalPages, current.page + 1) }))}
+                className="h-9 rounded-lg border border-slate-300 px-3 text-sm font-black text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
           </div>
         </section>
       </div>

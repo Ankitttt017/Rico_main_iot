@@ -1,10 +1,7 @@
 export const PAGE_SIZE = 50;
 export const REFRESH_INTERVAL_MS = 30000;
 
-export const DEFAULT_PLANTS = [
-  { label: "Gurugram Plant", value: "1002" },
-  { label: "Bawal Plant", value: "1008" },
-];
+export const DEFAULT_PLANTS = [];
 
 export const LINES_BY_DIVISION = {
   "": [

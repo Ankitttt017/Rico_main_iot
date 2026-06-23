@@ -33,6 +33,10 @@ function cleanMachine(row) {
     part: row.part || "No part assigned",
     part_code: row.part_code || null,
     operation_no: row.operation_no || null,
+    ip_address: row.ip_address || null,
+    port: row.port || null,
+    protocol: row.protocol || null,
+    part_name: row.part_name || null,
     assigned_operation_count: Number(row.assigned_operation_count || 0),
     last_updated: row.last_updated || null,
   };
@@ -175,6 +179,71 @@ const getMachines = async (req, res) => {
       message: "Unable to load machines",
       error: err.message,
     });
+  }
+};
+
+// GET /api/machines/:id
+const getMachineById = async (req, res) => {
+  try {
+    await ensureMachineSchema();
+    const { rows } = await db.query(
+      `SELECT TOP 1
+         m.id,
+         m.machine_code,
+         COALESCE(m.name, m.machine_code, CONCAT('Machine ', m.id)) AS name,
+         COALESCE(m.category, lm.division, 'Uncategorized') AS category,
+         COALESCE(m.plant_code, lm.plant_code) AS plant_code,
+         m.line_id,
+         lm.line_code,
+         lm.line_name,
+         lm.division AS line_division,
+         m.asset,
+         m.cost_center,
+         COALESCE(m.is_active, 1) AS is_active,
+         COALESCE(ms.status, 'IDLE') AS status,
+         COALESCE(mo.part_code, ms.part_code) AS part_code,
+         COALESCE(p.description, m.part_name, mo.part_code, ms.part_code, 'No part assigned') AS part,
+         COALESCE(mo.operation_no, ms.operation_no, m.operation_no) AS operation_no,
+         m.ip_address,
+         m.port,
+         m.protocol,
+         m.part_name,
+         COALESCE(oc.assigned_operation_count, 0) AS assigned_operation_count,
+         COALESCE(mo.updated_at, ms.updated_at) AS last_updated
+       FROM ${TABLES.machines} m
+       LEFT JOIN dbo.line_master lm ON lm.line_id = m.line_id
+       OUTER APPLY (
+         SELECT TOP 1 status, part_code, operation_no, updated_at
+         FROM ${TABLES.machineStatus}
+         WHERE machine_id = m.id
+         ORDER BY
+           CASE WHEN updated_at IS NULL THEN 1 ELSE 0 END,
+           updated_at DESC,
+           CASE WHEN created_at IS NULL THEN 1 ELSE 0 END,
+           created_at DESC,
+           id DESC
+       ) ms
+       OUTER APPLY (
+         SELECT TOP 1 part_code, operation_no, updated_at
+         FROM ${TABLES.machineOperations}
+         WHERE machine_id = m.id AND is_active = 1
+         ORDER BY is_primary DESC, updated_at DESC, id DESC
+       ) mo
+       OUTER APPLY (
+         SELECT COUNT(*) AS assigned_operation_count
+         FROM ${TABLES.machineOperations}
+         WHERE machine_id = m.id AND is_active = 1
+       ) oc
+       LEFT JOIN ${TABLES.parts} p ON p.material_code = COALESCE(mo.part_code, ms.part_code)
+       WHERE m.id = ?`,
+      [req.params.id]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ success: false, message: "Machine not found" });
+    }
+    res.json({ success: true, data: cleanMachine(rows[0]) });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Unable to load machine", error: err.message });
   }
 };
 
@@ -492,6 +561,7 @@ const getMachineStatusHistory = async (req, res) => {
 
 module.exports = {
   getMachines,
+  getMachineById,
   createMachine,
   updateMachine,
   deleteMachine,

@@ -36,7 +36,7 @@ const LineWorkspaceModal = ({ initialLine, plant, plantOptions, departmentOption
   const submit = async (event) => {
     event.preventDefault();
     if (!line.line_name || !linePlantCode || !line.division) {
-      setLocalError("Line save karne ke liye plant, department aur line name required hai.");
+      setLocalError("Plant, department, and line name are required before saving the line.");
       return;
     }
 

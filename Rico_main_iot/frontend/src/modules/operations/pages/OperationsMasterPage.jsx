@@ -1,17 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import toast from "react-hot-toast";
-import { Plus, Save, X } from "lucide-react";
+import { Pencil, Plus, Save, Trash2, X } from "lucide-react";
 import AppLayout from "../../../components/common/AppLayout";
-import { createOperation, getOperationMaster, getParts, getPlants } from "../../../services/api";
+import { createOperation, deleteOperation, getOperationMaster, getParts, getPlants, updateOperation } from "../../../services/api";
 import { DEFAULT_PLANTS } from "../../parts/constants";
 import { normalizePlants } from "../../parts/utils/plantUtils";
 import { sortBySearchRelevance } from "../../../utils/searchRelevance";
 
 const emptyOperationDraft = {
+  id: null,
   part_code: "",
   operation_no: "",
   operation_name: "",
+  type: "Operation",
+  rework: "No rework assigned",
 };
 
 const StatCard = ({ value, label, icon, color = "text-blue-600", accent = "border-t-blue-600" }) => (
@@ -222,23 +225,61 @@ const OperationsMasterPage = ({ onLogout, currentUser }) => {
     setOperationModalOpen(true);
   };
 
+  const openEditOperationModal = (operation) => {
+    setOperationDraft({
+      id: operation.id,
+      part_code: operation.part_code || "",
+      sr_no: operation.sr_no ?? "",
+      operation_no: operation.operation_id || operation.label || "",
+      operation_name: operation.operation_name || operation.name || "",
+      type: operation.type || "Operation",
+      rework: operation.rework || "No rework assigned",
+    });
+    setOperationModalOpen(true);
+  };
+
   const saveOperation = async () => {
     if (!operationDraft.part_code || !operationDraft.operation_no.trim() || !operationDraft.operation_name.trim()) {
-      toast.error("Part, operation number aur operation name required hai");
+      toast.error("Part, operation number, and operation name are required.");
       return;
     }
 
     setSavingOperation(true);
     try {
-      await createOperation(operationDraft);
+      if (operationDraft.id) {
+        await updateOperation(operationDraft.part_code, operationDraft.id, {
+          sr_no: operationDraft.sr_no,
+          label: operationDraft.operation_no,
+          name: operationDraft.operation_name,
+          type: operationDraft.type || "Operation",
+          rework: operationDraft.rework || "No rework assigned",
+        });
+      } else {
+        await createOperation(operationDraft);
+      }
       setOperationModalOpen(false);
       setOperationDraft(emptyOperationDraft);
-      toast.success("Operation created");
+      toast.success(operationDraft.id ? "Operation updated" : "Operation created");
       fetchOperations();
     } catch (error) {
       toast.error(error.response?.data?.message || "Unable to save operation");
     } finally {
       setSavingOperation(false);
+    }
+  };
+
+  const removeOperation = async (operation) => {
+    if (!operation?.id || !operation?.part_code) {
+      toast.error("Operation id missing. Refresh and try again.");
+      return;
+    }
+    if (!window.confirm(`Delete ${operation.operation_name || operation.operation_id || "this operation"}?`)) return;
+    try {
+      await deleteOperation(operation.part_code, operation.id);
+      toast.success("Operation deleted");
+      fetchOperations();
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Unable to delete operation");
     }
   };
 
@@ -267,7 +308,7 @@ const OperationsMasterPage = ({ onLogout, currentUser }) => {
           <div className="w-full max-w-2xl overflow-hidden rounded-xl bg-white shadow-2xl">
             <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
               <div>
-                <h3 className="text-lg font-extrabold text-slate-950">Add Operation</h3>
+                <h3 className="text-lg font-extrabold text-slate-950">{operationDraft.id ? "Edit Operation" : "Add Operation"}</h3>
                 <p className="mt-1 text-sm font-medium text-slate-500">Select part and enter operation details.</p>
               </div>
               <button
@@ -309,6 +350,24 @@ const OperationsMasterPage = ({ onLogout, currentUser }) => {
                   value={operationDraft.operation_name}
                   onChange={(event) => setOperationDraft((current) => ({ ...current, operation_name: event.target.value }))}
                   placeholder="Machining / Inspection"
+                />
+              </label>
+              <label>
+                <span className="mb-1 block text-xs font-black uppercase tracking-wide text-slate-500">Type</span>
+                <input
+                  className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-50"
+                  value={operationDraft.type || ""}
+                  onChange={(event) => setOperationDraft((current) => ({ ...current, type: event.target.value }))}
+                  placeholder="Operation"
+                />
+              </label>
+              <label>
+                <span className="mb-1 block text-xs font-black uppercase tracking-wide text-slate-500">Rework</span>
+                <input
+                  className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-50"
+                  value={operationDraft.rework || ""}
+                  onChange={(event) => setOperationDraft((current) => ({ ...current, rework: event.target.value }))}
+                  placeholder="No rework assigned"
                 />
               </label>
             </div>
@@ -426,12 +485,13 @@ const OperationsMasterPage = ({ onLogout, currentUser }) => {
                     <th className="px-4 py-3">Linked Part</th>
                     <th className="px-4 py-3">Modified</th>
                     <th className="px-4 py-3">Rework</th>
+                    <th className="px-4 py-3">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {loading ? (
                     <tr>
-                      <td colSpan={10} className="py-20 text-center">
+                      <td colSpan={11} className="py-20 text-center">
                         <svg className="mx-auto h-8 w-8 animate-spin text-[#7667ff]" fill="none" viewBox="0 0 24 24">
                           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
@@ -441,7 +501,7 @@ const OperationsMasterPage = ({ onLogout, currentUser }) => {
                     </tr>
                   ) : visibleOperations.length === 0 ? (
                     <tr>
-                      <td colSpan={10} className="py-20 text-center text-slate-400">
+                      <td colSpan={11} className="py-20 text-center text-slate-400">
                         <BriefcaseIcon className="mx-auto h-10 w-10" />
                         <p className="mt-3 text-sm font-semibold">No operations found</p>
                         <p className="mt-1 text-xs">Try changing the plant or part filter</p>
@@ -472,6 +532,26 @@ const OperationsMasterPage = ({ onLogout, currentUser }) => {
                         <td className="px-4 py-3 text-slate-500">{formatDate(operation.modified_at)}</td>
                         <td className="px-4 py-3 text-slate-500">
                           {operation.rework && operation.rework !== "No rework assigned" ? operation.rework : <span className="italic text-slate-400">No rework assigned</span>}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => openEditOperationModal(operation)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-2 text-xs font-black text-slate-700 hover:border-teal-300 hover:text-teal-700"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => removeOperation(operation)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-3 py-2 text-xs font-black text-red-700 hover:bg-red-50"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              Delete
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))

@@ -1,11 +1,6 @@
 export const PAGE_SIZE = 50;
 
-export const PLANTS = [
-  { code: "1002", name: "Gurugram Plant" },
-  { code: "1008", name: "Bawal Plant" },
-  { code: "PATHREDI", name: "Pathredi Plant" },
-  { code: "CHENNAI", name: "Chennai Plant" },
-];
+export const PLANTS = [];
 
 export const PLANT_OPTIONS = PLANTS.map((plant) => ({
   value: plant.code,
@@ -58,7 +53,7 @@ export const FALLBACK_OPERATIONS = [
 ].map(([operation_no, operation_name]) => ({ operation_no, operation_name }));
 
 export const emptyLine = {
-  plant: "Gurugram Plant",
+  plant: "",
   line_name: "",
   division: "HPDC",
   is_active: true,

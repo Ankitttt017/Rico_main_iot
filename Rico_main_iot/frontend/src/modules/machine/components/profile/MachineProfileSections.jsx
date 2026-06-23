@@ -621,7 +621,7 @@ export const OperationSetupTab = ({ machine }) => {
     if (!machine?.id) return;
     setLoading(true);
     setMessage("");
-    getMachineOperations(machine.id, { plant: machine?.plant_code || "1002" })
+    getMachineOperations(machine.id, { plant: machine?.plant_code || "" })
       .then((res) => {
         const rows = Array.isArray(res.data?.data) ? res.data.data : [];
         const active = res.data?.current || null;
@@ -651,7 +651,7 @@ export const OperationSetupTab = ({ machine }) => {
 
   const savePart = async () => {
     if (!partDraft.material_code.trim() || !partDraft.description.trim()) {
-      setMessage("Part create karne ke liye part code aur part name required hai.");
+      setMessage("Part code and part name are required before creating a part.");
       return;
     }
     setSavingPart(true);
@@ -679,11 +679,11 @@ export const OperationSetupTab = ({ machine }) => {
 
   const saveOperation = async () => {
     if (!selectedPart) {
-      setMessage("Operation create karne se pehle part select karo.");
+      setMessage("Select a part before creating an operation.");
       return;
     }
     if (!operationDraft.operation_no.trim() || !operationDraft.operation_name.trim()) {
-      setMessage("Operation number aur operation name required hai.");
+      setMessage("Operation number and operation name are required.");
       return;
     }
     setSavingOperation(true);
@@ -708,7 +708,7 @@ export const OperationSetupTab = ({ machine }) => {
 
   const save = async () => {
     if (!selectedPart || !selectedOperation) {
-      setMessage("Machine setup save karne ke liye part aur operation dono select karo.");
+      setMessage("Select both a part and an operation before saving the machine setup.");
       return;
     }
 

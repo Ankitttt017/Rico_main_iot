@@ -104,6 +104,7 @@ async function findMachineContext({ machine_key, plc_ip, machine_id }) {
     params.push(machine_key, machine_key, machine_key);
   }
   if (!filters.length) return {};
+  const orderMachineKey = machine_key || "";
 
   const { rows } = await db.query(
     `SELECT TOP 1
@@ -129,8 +130,12 @@ async function findMachineContext({ machine_key, plc_ip, machine_id }) {
      ) mo
      LEFT JOIN dbo.iot_parts p ON p.material_code = COALESCE(mo.part_code, m.part_name)
      WHERE ${filters.join(" OR ")}
-     ORDER BY CASE WHEN pc.machine_key IS NULL THEN 1 ELSE 0 END`,
-    params
+     ORDER BY
+       CASE WHEN pc.machine_id = m.id THEN 0 ELSE 1 END,
+       CASE WHEN pc.machine_key = ? THEN 0 ELSE 1 END,
+       CASE WHEN m.plant_code IS NULL OR m.line_id IS NULL THEN 1 ELSE 0 END,
+       m.id DESC`,
+    [...params, orderMachineKey]
   );
   return rows[0] || {};
 }

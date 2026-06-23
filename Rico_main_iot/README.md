@@ -39,10 +39,25 @@ If you want Windows authentication, set `DB_TRUSTED_CONNECTION=true` and install
 npm install msnodesqlv8
 ```
 
-The IoT schema is in `backend/schema.mssql.sql`. To let the backend run the non-destructive schema check on startup, set:
+The IoT schema is in `backend/schema.mssql.sql`. To let the backend apply it on startup, set:
 
 ```env
 DB_AUTO_MIGRATE=true
+```
+
+For a new database, prefer an explicit one-time initialization while the backend is stopped:
+
+```bash
+npm --prefix backend run db:init
+```
+
+This applies `backend/schema.mssql.sql` in a transaction and verifies the tables,
+critical CRUD columns, and indexes expected by the application. Keep
+`DB_AUTO_MIGRATE=false` in production after initialization. Run a read-only check at
+any time with:
+
+```bash
+npm --prefix backend run db:verify
 ```
 
 ## How To Run

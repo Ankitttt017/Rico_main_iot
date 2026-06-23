@@ -1,8 +1,18 @@
+function getSameHostBackendUrl(path) {
+  if (typeof window === "undefined") return path;
+  const { protocol, hostname } = window.location;
+  return `${protocol}//${hostname}:5000${path}`;
+}
+
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
+
+export const API_FALLBACK_BASE_URL =
+  import.meta.env.VITE_API_FALLBACK_BASE_URL ||
+  (!import.meta.env.DEV && API_BASE_URL === "/api" ? getSameHostBackendUrl("/api") : "");
 
 export const SOCKET_URL =
   import.meta.env.VITE_SOCKET_URL ||
-  (import.meta.env.DEV ? "http://localhost:5000" : window.location.origin);
+  (import.meta.env.DEV ? "http://localhost:5000" : getSameHostBackendUrl(""));
 
 export const ENDPOINTS = {
   plants: "/plants",
@@ -38,7 +48,6 @@ export const ENDPOINTS = {
   plcConnectionEventsExport: "/plc-monitor/connection-events/export",
   plcMachineConfigs: "/plc-machine-configs",
   plcMachineConfig: (id) => `/plc-machine-configs/${id}`,
-  plcRegisterTemplates: "/plc-machine-configs/templates",
   plcMachineConfigTest: "/plc-machine-configs/test-connection",
   authLogin: "/auth/login",
   authRoles: "/auth/roles",

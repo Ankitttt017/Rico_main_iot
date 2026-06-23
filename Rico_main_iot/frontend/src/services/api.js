@@ -1,19 +1,32 @@
 import axios from 'axios';
-import { API_BASE_URL, ENDPOINTS, buildApiUrl } from './endpoints';
+import { API_BASE_URL, API_FALLBACK_BASE_URL, ENDPOINTS, buildApiUrl } from './endpoints';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: 90000,
 });
 
+const fallbackApi = API_FALLBACK_BASE_URL
+  ? axios.create({
+      baseURL: API_FALLBACK_BASE_URL,
+      timeout: 90000,
+    })
+  : null;
+
 const responseCache = new Map();
 const DEFAULT_CACHE_TTL = 30000;
 const LIVE_CACHE_TTL = 5000;
 
+function cleanParams(params) {
+  if (!params || typeof params !== "object") return params;
+  return Object.fromEntries(
+    Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== "")
+  );
+}
+
 function cacheKey(url, params) {
   const search = new URLSearchParams();
-  Object.entries(params || {})
-    .filter(([, value]) => value !== undefined && value !== null && value !== "")
+  Object.entries(cleanParams(params) || {})
     .sort(([a], [b]) => a.localeCompare(b))
     .forEach(([key, value]) => search.set(key, String(value)));
   const query = search.toString();
@@ -39,7 +52,7 @@ function cachedGet(url, { params, ttl = DEFAULT_CACHE_TTL, staleWhileRefresh = t
   }
 
   if (cached && staleWhileRefresh) {
-    api.get(url, { params })
+    requestGet(url, { params })
       .then((response) => {
         responseCache.set(key, { time: Date.now(), response: cloneResponse(response) });
       })
@@ -47,10 +60,28 @@ function cachedGet(url, { params, ttl = DEFAULT_CACHE_TTL, staleWhileRefresh = t
     return Promise.resolve(cloneResponse(cached.response));
   }
 
-  return api.get(url, { params }).then((response) => {
+  return requestGet(url, { params }).then((response) => {
     responseCache.set(key, { time: Date.now(), response: cloneResponse(response) });
     return response;
   });
+}
+
+function shouldRetryWithFallback(error) {
+  if (!fallbackApi || API_FALLBACK_BASE_URL === API_BASE_URL) return false;
+  const status = error?.response?.status;
+  return !status || status === 404 || status === 502 || status === 503 || status === 504;
+}
+
+async function requestGet(url, config) {
+  const nextConfig = config?.params
+    ? { ...config, params: cleanParams(config.params) }
+    : config;
+  try {
+    return await api.get(url, nextConfig);
+  } catch (error) {
+    if (!shouldRetryWithFallback(error)) throw error;
+    return fallbackApi.get(url, nextConfig);
+  }
 }
 
 function clearApiCache() {
@@ -87,6 +118,7 @@ export const getConfig      = (id)      => cachedGet(ENDPOINTS.partConfiguration
 export const updateConfig   = (id, d)   => mutate(api.put(ENDPOINTS.partConfiguration(id), d));
 export const getStats       = (params)  => cachedGet(ENDPOINTS.stats, { params });
 export const getMachines    = (params)  => cachedGet(ENDPOINTS.machines, { params });
+export const getMachineById = (id)      => cachedGet(ENDPOINTS.machine(id), { ttl: LIVE_CACHE_TTL, staleWhileRefresh: false });
 export const createMachine  = (data)    => mutate(api.post(ENDPOINTS.machines, data));
 export const updateMachine  = (id, d)   => mutate(api.put(ENDPOINTS.machine(id), d));
 export const deleteMachine  = (id)      => mutate(api.delete(ENDPOINTS.machine(id)));
@@ -103,14 +135,12 @@ export const getLineMachines = (id)     => cachedGet(ENDPOINTS.lineMachines(id))
 export const createLineMachine = (id, data) => mutate(api.post(ENDPOINTS.lineMachines(id), data));
 export const updateLineMachine = (lineId, machineId, data) => mutate(api.put(ENDPOINTS.lineMachine(lineId, machineId), data));
 export const removeLineMachine = (lineId, machineId, params) => mutate(api.delete(ENDPOINTS.lineMachine(lineId, machineId), { params }));
-export const getPlcLatestReadings = () => api.get(ENDPOINTS.plcLatestReadings, { params: { _: Date.now() } });
+export const getPlcLatestReadings = () => requestGet(ENDPOINTS.plcLatestReadings, { params: { _: Date.now() } });
 export const getPlcReadingHistory = (params) => cachedGet(ENDPOINTS.plcReadingHistory, { params, ttl: LIVE_CACHE_TTL, staleWhileRefresh: false });
 export const getPlcConnectionEvents = (params) => cachedGet(ENDPOINTS.plcConnectionEvents, { params, ttl: LIVE_CACHE_TTL, staleWhileRefresh: false });
 export const getPlcMachineConfigs = () => cachedGet(ENDPOINTS.plcMachineConfigs, { ttl: LIVE_CACHE_TTL, staleWhileRefresh: false });
 export const savePlcMachineConfig = (data) => mutate(api.post(ENDPOINTS.plcMachineConfigs, data));
 export const deletePlcMachineConfig = (id) => mutate(api.delete(ENDPOINTS.plcMachineConfig(id)));
-export const getPlcRegisterTemplates = () => cachedGet(ENDPOINTS.plcRegisterTemplates, { ttl: LIVE_CACHE_TTL, staleWhileRefresh: false });
-export const savePlcRegisterTemplate = (data) => mutate(api.post(ENDPOINTS.plcRegisterTemplates, data));
 export const testPlcMachineConfig = (data) => api.post(ENDPOINTS.plcMachineConfigTest, data);
 export const loginUser = (data) => api.post(ENDPOINTS.authLogin, data);
 export const getAuthRoles = () => cachedGet(ENDPOINTS.authRoles, { ttl: 300000 });

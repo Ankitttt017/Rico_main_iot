@@ -87,8 +87,8 @@ function normalizeProtocol(protocol) {
 
 function getPlantCode(plant = '') {
   const value = String(plant || '').trim();
-  if (value === '1008' || /bawal/i.test(value)) return '1008';
-  if (value === '1002' || /gurugram|gurgaon/i.test(value)) return '1002';
+  const numericCode = value.match(/\b\d{3,10}\b/);
+  if (numericCode) return numericCode[0];
   return value;
 }
 
@@ -455,24 +455,8 @@ const getRawMasterData = async (req, res) => {
   try {
     const { plant, type, division } = req.query;
     const plantCode = getPlantCode(plant);
-    const isBawal = plantCode === '1008';
 
     if (type === 'parts') {
-      if (isBawal) {
-        try {
-          const { rows } = await db.query(
-            `SELECT DISTINCT material AS material_code, material_description AS description, material_group, material_type AS manufacturing_type
-             FROM dbo.iot_parts_master_bawal_raw
-             WHERE material IS NOT NULL
-               AND (plant = ? OR ? = '')
-             ORDER BY material_description`,
-            [plantCode, plantCode]
-          );
-          return res.json({ success: true, data: rows });
-        } catch(e) {
-          // fallback to the common raw table below
-        }
-      }
       const { rows } = await db.query(
         `SELECT DISTINCT material AS material_code, material_description AS description, material_group, customer, manufacturing_type
          FROM dbo.iot_parts_master_raw
@@ -485,48 +469,28 @@ const getRawMasterData = async (req, res) => {
     }
 
     if (type === 'machines') {
-      if (isBawal) {
-        const params = [];
-        let query = `SELECT DISTINCT equipment AS machine_code, description AS name, division AS category, cost_center, asset
-                     FROM dbo.iot_machine_master_bawal_raw
-                     WHERE equipment IS NOT NULL AND description IS NOT NULL
-                       AND (
-                         maint_plant = ?
-                         OR planning_plant LIKE ?
-                       )`;
-        params.push(plantCode, `%${plantCode}%`);
-        if (division) {
-          const divPattern = getDivisionPattern(division);
-          query += ` AND (plant_section LIKE ? OR functional_loc LIKE ? OR division LIKE ?)`;
-          params.push(divPattern, divPattern, divPattern);
+      const params = [plantCode];
+      let divFilter = '';
+      if (division) {
+        const divLower = division.toLowerCase();
+        if (divLower.includes('hpdc')) {
+          divFilter = ` AND (category LIKE '%HPDC%' OR category LIKE '%Die Cast%' OR cost_center LIKE '%110C%')`;
+        } else if (divLower.includes('machine') || divLower.includes('machining')) {
+          divFilter = ` AND (category LIKE '%Machine%' OR category LIKE '%MCS%' OR cost_center LIKE '%110M%')`;
         }
-        query += ` ORDER BY description`;
-        const { rows } = await db.query(query, params);
-        return res.json({ success: true, data: rows });
-      } else {
-        const params = [plantCode];
-        let divFilter = '';
-        if (division) {
-          const divLower = division.toLowerCase();
-          if (divLower.includes('hpdc')) {
-            divFilter = ` AND (category LIKE '%HPDC%' OR category LIKE '%Die Cast%' OR cost_center LIKE '%110C%')`;
-          } else if (divLower.includes('machine') || divLower.includes('machining')) {
-            divFilter = ` AND (category LIKE '%Machine%' OR category LIKE '%MCS%' OR cost_center LIKE '%110M%')`;
-          }
-        }
-        const query = `
-          SELECT machine_code, name, category, cost_center, asset
-          FROM (
-            SELECT machine_code, name, category, cost_center, asset,
-                   ROW_NUMBER() OVER (PARTITION BY name ORDER BY id) AS rn
-            FROM dbo.iot_machines
-            WHERE plant_code = ? AND name IS NOT NULL${divFilter}
-          ) t WHERE rn = 1
-          ORDER BY name
-        `;
-        const { rows } = await db.query(query, params);
-        return res.json({ success: true, data: rows });
       }
+      const query = `
+        SELECT machine_code, name, category, cost_center, asset
+        FROM (
+          SELECT machine_code, name, category, cost_center, asset,
+                 ROW_NUMBER() OVER (PARTITION BY name ORDER BY id) AS rn
+          FROM dbo.iot_machines
+          WHERE plant_code = ? AND name IS NOT NULL${divFilter}
+        ) t WHERE rn = 1
+        ORDER BY name
+      `;
+      const { rows } = await db.query(query, params);
+      return res.json({ success: true, data: rows });
     }
 
     if (type === 'operations') {

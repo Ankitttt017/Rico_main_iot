@@ -6,18 +6,18 @@ import { SidebarProvider } from "./context/SidebarContext";
 
 // ─── Rico IoT Pages ────────────────────────────────────────────────
 const LoginPage = lazy(() => import("./pages/LoginPage"));
-const LineMasterPage = lazy(() => import("./pages/LineMasterPage"));
-const OperatorWorkstationPage = lazy(() => import("./pages/OperatorWorkstationPage"));
+const LineMasterPage = lazy(() => import("./modules/lines/pages/LineMasterPage"));
+const OperatorWorkstationPage = lazy(() => import("./modules/workstation/pages/OperatorWorkstationPage"));
 const IotDashboardPage = lazy(() => import("./pages/IotDashboardPage"));
 const LocationMasterPage = lazy(() => import("./modules/locations/pages/LocationMasterPage"));
 const DepartmentMasterPage = lazy(() => import("./modules/departments/pages/DepartmentMasterPage"));
-const MachineDashboard = lazy(() => import("./modules/machine/MachineDashboard"));
-const MachineProfilePage = lazy(() => import("./modules/machine/MachineProfilePage"));
-const PartMasterPage = lazy(() => import("./pages/PartMasterPage"));
-const PartProfilePage = lazy(() => import("./pages/PartProfilePage"));
-const OperationsMasterPage = lazy(() => import("./pages/OperationsMasterPage"));
-const PlcMonitorPage = lazy(() => import("./modules/plc-monitor/PlcMonitorPage"));
-const PlcReportPage = lazy(() => import("./modules/plc-report/PlcReportPage"));
+const MachineDashboard = lazy(() => import("./modules/machine/pages/MachineDashboard"));
+const MachineProfilePage = lazy(() => import("./modules/machine/pages/MachineProfilePage"));
+const PartMasterPage = lazy(() => import("./modules/parts/pages/PartMasterPage"));
+const PartProfilePage = lazy(() => import("./modules/parts/pages/PartProfilePage"));
+const OperationsMasterPage = lazy(() => import("./modules/operations/pages/OperationsMasterPage"));
+const PlcMonitorPage = lazy(() => import("./modules/plc-monitor/pages/PlcMonitorPage"));
+const PlcReportPage = lazy(() => import("./modules/plc-report/pages/PlcReportPage"));
 const UserAccessPage = lazy(() => import("./modules/access/pages/UserAccessPage"));
 const UnderDevelopmentPage = lazy(() => import("./pages/UnderDevelopmentPage"));
 
@@ -276,7 +276,7 @@ const App = () => {
 
             {/* Legacy redirects */}
             <Route path="/organisation-master/machines" element={<Navigate to="/machines" />} />
-            <Route path="/part-operations/part-master" element={<Navigate to="/machines" />} />
+            <Route path="/part-operations/part-master" element={<Navigate to="/parts" />} />
             <Route path="/ube-machine-setup" element={<Navigate to="/machine-plc-setup" />} />
 
             <Route path="*" element={<Navigate to="/" />} />

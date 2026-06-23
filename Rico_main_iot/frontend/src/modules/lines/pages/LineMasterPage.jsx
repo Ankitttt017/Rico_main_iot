@@ -29,7 +29,7 @@ import { sortBySearchRelevance } from "../../../utils/searchRelevance";
 
 const LineMasterPage = ({ onLogout, currentUser }) => {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [selectedPlant, setSelectedPlant] = useState(PLANTS[0]);
+  const [selectedPlant, setSelectedPlant] = useState(PLANTS[0] || null);
   const [plants, setPlants] = useState(PLANTS);
   const [departments, setDepartments] = useState([]);
   const [lines, setLines] = useState([]);
@@ -44,6 +44,11 @@ const LineMasterPage = ({ onLogout, currentUser }) => {
   const [page, setPage] = useState(1);
 
   const loadLines = useCallback(() => {
+    if (!selectedPlant?.code) {
+      setLines([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError("");
     getLines({
@@ -54,15 +59,21 @@ const LineMasterPage = ({ onLogout, currentUser }) => {
       .then((res) => setLines(Array.isArray(res.data?.data) ? res.data.data : []))
       .catch(() => setError("Unable to load lines. Please check backend connection."))
       .finally(() => setLoading(false));
-  }, [divisionFilter, selectedPlant.code, statusFilter]);
+  }, [divisionFilter, selectedPlant?.code, statusFilter]);
 
-  const loadDepartments = useCallback((plantCode = selectedPlant.code) =>
+  const loadDepartments = useCallback((plantCode = selectedPlant?.code) => {
+    if (!plantCode) {
+      setDepartments([]);
+      return Promise.resolve();
+    }
+    return (
     getDepartments({ active: 1, plant: plantCode, _: Date.now() })
       .then((res) => {
         setDepartments(Array.isArray(res.data?.data) ? res.data.data : []);
       })
-      .catch(() => setDepartments([])),
-  [selectedPlant.code]);
+      .catch(() => setDepartments([]))
+    );
+  }, [selectedPlant?.code]);
 
   useEffect(() => {
     getLocations({ active: 1 })
@@ -73,14 +84,14 @@ const LineMasterPage = ({ onLogout, currentUser }) => {
           .map((row) => ({ code: row.code, name: row.name, location: row.location }));
         if (!activePlants.length) return;
         setPlants(activePlants);
-        setSelectedPlant((current) => activePlants.find((plant) => plant.code === current.code) || activePlants[0]);
+        setSelectedPlant((current) => activePlants.find((plant) => plant.code === current?.code) || activePlants[0]);
       })
       .catch(() => {});
   }, []);
 
   useEffect(() => {
-    loadDepartments(selectedPlant.code);
-  }, [loadDepartments, selectedPlant.code]);
+    loadDepartments(selectedPlant?.code);
+  }, [loadDepartments, selectedPlant?.code]);
 
   useEffect(() => {
     setSearch(searchParams.get("search") || "");
@@ -102,7 +113,7 @@ const LineMasterPage = ({ onLogout, currentUser }) => {
   const departmentOptions = useMemo(() => {
     const specificRows = departments.filter((department) =>
       department.plant_code &&
-      String(department.plant_code).toUpperCase() === String(selectedPlant.code).toUpperCase()
+      String(department.plant_code).toUpperCase() === String(selectedPlant?.code || "").toUpperCase()
     );
     const rows = specificRows.length
       ? specificRows
@@ -114,7 +125,7 @@ const LineMasterPage = ({ onLogout, currentUser }) => {
       keywords: `${department.code} ${department.name} ${department.description || ""}`,
     }));
     return options;
-  }, [departments, selectedPlant.code]);
+  }, [departments, selectedPlant?.code]);
 
   const filterDepartmentOptions = useMemo(() => [
     { value: "", label: "All Departments" },
@@ -127,11 +138,11 @@ const LineMasterPage = ({ onLogout, currentUser }) => {
 
   useEffect(() => {
     setPage(1);
-  }, [divisionFilter, search, selectedPlant.code, statusFilter]);
+  }, [divisionFilter, search, selectedPlant?.code, statusFilter]);
 
   const openWorkspace = async (line = null) => {
     setWorkspaceLoading(true);
-    await loadDepartments(line?.plant_code || selectedPlant.code);
+    await loadDepartments(line?.plant_code || selectedPlant?.code);
     setWorkspace(line || "new");
     setWorkspaceLoading(false);
   };
@@ -196,7 +207,7 @@ const LineMasterPage = ({ onLogout, currentUser }) => {
       {workspace && !workspaceLoading && (
         <LineWorkspaceModal
           initialLine={workspace === "new" ? null : workspace}
-          plant={selectedPlant}
+          plant={selectedPlant || { code: "", name: "Plant" }}
           plantOptions={plantOptions.length ? plantOptions : PLANT_OPTIONS}
           departmentOptions={departmentOptions}
           onPlantChange={(plantCode) => {
@@ -239,7 +250,7 @@ const LineMasterPage = ({ onLogout, currentUser }) => {
         <div className="mb-5 grid gap-4 rounded-xl border border-slate-100 bg-slate-50/70 p-4 sm:grid-cols-2 xl:grid-cols-4">
           <Field label="Location / Plant">
             <SearchableSelect
-              value={selectedPlant.code}
+              value={selectedPlant?.code || ""}
               options={plantOptions.length ? plantOptions : PLANT_OPTIONS}
               placeholder="Search plant..."
               onChange={(value) => setSelectedPlant(plants.find((plant) => plant.code === value) || getPlantByCode(value))}
@@ -276,7 +287,7 @@ const LineMasterPage = ({ onLogout, currentUser }) => {
           </Field>
         </div>
 
-        <p className="mb-4 text-xs text-gray-400">Showing {filtered.length} of {lines.length} loaded lines for {selectedPlant.name}</p>
+        <p className="mb-4 text-xs text-gray-400">Showing {filtered.length} of {lines.length} loaded lines{selectedPlant?.name ? ` for ${selectedPlant.name}` : ""}</p>
         <div className="border-t border-slate-100 pt-5">
           <h3 className="mb-1 text-sm font-bold text-slate-800">Overall Statistics</h3>
           <p className="mb-4 text-xs text-slate-400">Summary of production lines and mapped machines for the selected plant.</p>

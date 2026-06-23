@@ -469,7 +469,7 @@ const getPartOperations = async (req, res) => {
   }
 };
 
-// GET /api/operations?plant=1002&part=80000000&search=die&page=1&limit=10
+// GET /api/operations?plant=<plant-code>&part=80000000&search=die&page=1&limit=10
 const getOperationMaster = async (req, res) => {
   try {
     const { plant, part, search, page = 1, limit = 10 } = req.query;
