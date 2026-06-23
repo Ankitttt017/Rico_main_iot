@@ -1,6 +1,7 @@
 const express = require("express");
 const {
   getMachines,
+  getMachineById,
   createMachine,
   updateMachine,
   deleteMachine,
@@ -13,6 +14,7 @@ const router = express.Router();
 
 router.get("/machines", getMachines);
 router.post("/machines", createMachine);
+router.get("/machines/:id", getMachineById);
 router.put("/machines/:id", updateMachine);
 router.delete("/machines/:id", deleteMachine);
 router.get("/machines/:id/operations", getMachineOperations);

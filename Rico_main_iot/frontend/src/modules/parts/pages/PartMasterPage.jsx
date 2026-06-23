@@ -116,7 +116,7 @@ const PartMasterPage = ({ onLogout, currentUser }) => {
 
   const savePart = async () => {
     if (!partDraft.material_code.trim() || !partDraft.description.trim() || !partDraft.plant_code) {
-      toast.error("Part code, part name aur location required hai");
+      toast.error("Part code, part name, and location are required.");
       return;
     }
 

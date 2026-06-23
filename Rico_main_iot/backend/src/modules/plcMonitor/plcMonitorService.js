@@ -1,4 +1,4 @@
-﻿"use strict";
+"use strict";
 
 const net = require("net");
 const fs = require("fs");
@@ -71,6 +71,11 @@ function clampLimit(value, fallback = 200, max = Number(process.env.PLC_HISTORY_
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed < 1) return fallback;
   return Math.min(parsed, max);
+}
+
+function clampPage(value) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
 }
 
 function pad2(value) {
@@ -1216,22 +1221,77 @@ async function getLatestReadingsForMachinesUnlocked(machineSnapshots = getMachin
   return results;
 }
 
-async function getReadingHistory({ ip, limit = 200, from, to } = {}) {
+async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, shotNumber, shift, shotResult } = {}) {
   await ensureTableOnce();
 
-  const safeLimit = clampLimit(limit);
+  const isPaged = page !== undefined || pageSize !== undefined;
+  const safeLimit = clampLimit(pageSize || limit);
+  const safePage = clampPage(page);
+  const offset = (safePage - 1) * safeLimit;
   const targetId = ip || "";
   const configuredMachines = await getConfiguredMachines();
   const targetMachine = configuredMachines.find(
     (m) => (m.key || m.ip) === targetId || m.ip === targetId
   );
 
+  const appendProductionFilters = (filters, values) => {
+    if (shotNumber) {
+      filters.push("CAST(shot_number AS NVARCHAR(80)) LIKE ?");
+      values.push(`%${String(shotNumber).trim()}%`);
+    }
+    const resultMap = { ok: 1, warm: 3, ng: 5 };
+    if (resultMap[shotResult]) {
+      filters.push("TRY_CONVERT(INT, shot_status) = ?");
+      values.push(resultMap[shotResult]);
+    }
+    if (shift && shift !== "all") {
+      const hourExpr = "COALESCE(TRY_CONVERT(INT, shot_hour), DATEPART(hour, recorded_at))";
+      const minuteExpr = "COALESCE(TRY_CONVERT(INT, shot_minute), DATEPART(minute, recorded_at))";
+      if (shift === "A") filters.push(`(${hourExpr} >= 6 AND (${hourExpr} < 14 OR (${hourExpr} = 14 AND ${minuteExpr} < 30)))`);
+      if (shift === "B") filters.push(`((${hourExpr} > 14 OR (${hourExpr} = 14 AND ${minuteExpr} >= 30)) AND ${hourExpr} < 23)`);
+      if (shift === "C") filters.push(`(${hourExpr} < 6 OR ${hourExpr} >= 23)`);
+    }
+  };
+
   if (!targetId) {
     const filters = [];
     const values = [];
     if (from) { filters.push("recorded_at >= ?"); values.push(from); }
     if (to) { filters.push("recorded_at < DATEADD(day, 1, CAST(? AS date))"); values.push(to); }
+    appendProductionFilters(filters, values);
     const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+    if (isPaged) {
+      const [{ rows }, { rows: countRows }, { rows: kpiRows }] = await Promise.all([
+        db.query(
+          `SELECT *
+           FROM ${TABLE}
+           ${where}
+           ORDER BY recorded_at DESC, id DESC
+           OFFSET ${offset} ROWS FETCH NEXT ${safeLimit} ROWS ONLY`,
+          values
+        ),
+        db.query(`SELECT COUNT(1) AS total FROM ${TABLE} ${where}`, values),
+        db.query(`
+          SELECT
+            SUM(CASE WHEN TRY_CONVERT(INT, shot_status) = 1 THEN 1 ELSE 0 END) AS ok,
+            SUM(CASE WHEN TRY_CONVERT(INT, shot_status) = 3 THEN 1 ELSE 0 END) AS warm,
+            SUM(CASE WHEN TRY_CONVERT(INT, shot_status) = 5 THEN 1 ELSE 0 END) AS off_count
+          FROM ${TABLE}
+          ${where}
+        `, values),
+      ]);
+      return {
+        rows: sortHistoryRows(rows.map(formatDbRowForClient)),
+        total: Number(countRows[0]?.total || 0),
+        page: safePage,
+        pageSize: safeLimit,
+        kpis: {
+          ok: Number(kpiRows[0]?.ok || 0),
+          warm: Number(kpiRows[0]?.warm || 0),
+          off: Number(kpiRows[0]?.off_count || 0),
+        },
+      };
+    }
     const { rows } = await db.query(
       `SELECT TOP (${safeLimit}) *
        FROM ${TABLE}
@@ -1292,6 +1352,41 @@ async function getReadingHistory({ ip, limit = 200, from, to } = {}) {
   const values = [machineKey, machineIp, legacyKey];
   if (from) { filters.push("recorded_at >= ?"); values.push(from); }
   if (to) { filters.push("recorded_at < DATEADD(day, 1, CAST(? AS date))"); values.push(to); }
+  appendProductionFilters(filters, values);
+
+  if (isPaged) {
+    const where = `WHERE ${filters.join(" AND ")}`;
+    const [{ rows }, { rows: countRows }, { rows: kpiRows }] = await Promise.all([
+      db.query(
+        `SELECT *
+         FROM ${TABLE}
+         ${where}
+         ORDER BY recorded_at DESC, id DESC
+         OFFSET ${offset} ROWS FETCH NEXT ${safeLimit} ROWS ONLY`,
+        values
+      ),
+      db.query(`SELECT COUNT(1) AS total FROM ${TABLE} ${where}`, values),
+      db.query(`
+        SELECT
+          SUM(CASE WHEN TRY_CONVERT(INT, shot_status) = 1 THEN 1 ELSE 0 END) AS ok,
+          SUM(CASE WHEN TRY_CONVERT(INT, shot_status) = 3 THEN 1 ELSE 0 END) AS warm,
+          SUM(CASE WHEN TRY_CONVERT(INT, shot_status) = 5 THEN 1 ELSE 0 END) AS off_count
+        FROM ${TABLE}
+        ${where}
+      `, values),
+    ]);
+    return {
+      rows: sortHistoryRows(rows.map(formatDbRowForClient)),
+      total: Number(countRows[0]?.total || 0),
+      page: safePage,
+      pageSize: safeLimit,
+      kpis: {
+        ok: Number(kpiRows[0]?.ok || 0),
+        warm: Number(kpiRows[0]?.warm || 0),
+        off: Number(kpiRows[0]?.off_count || 0),
+      },
+    };
+  }
 
   const { rows } = await db.query(
     `SELECT TOP (${safeLimit}) *
@@ -1464,7 +1559,6 @@ async function saveToDBUnlocked(machine, partName, readings) {
     normalizeReadingForDB("cycle_end_time", readings.cycle_end_time) ||
     normalizeReadingForDB("shot_datetime", readings.shot_datetime);
   const shotDate = normalizeReadingForDB("shot_date", readings.shot_date);
-  const shotTime = normalizeReadingForDB("shot_time", readings.shot_time);
   const shotNumber = normalizeReadingForDB("shot_number", readings.shot_number ?? readings["SHOT NO."]);
   const hasPlcRecordedAt = Boolean(plcRecordedAt);
 
@@ -1486,20 +1580,14 @@ async function saveToDBUnlocked(machine, partName, readings) {
     if (duplicateShotRows.length) return { skipped: true, reason: "duplicate-shot-number" };
   }
 
-  if ((shotDate && shotTime) || hasPlcRecordedAt) {
+  if (hasPlcRecordedAt) {
     const duplicateFilters = [
       "(machine_key = ? OR plc_ip = ?)",
     ];
     const duplicateValues = [machine.key || machine.ip, machine.ip];
 
-    if (shotDate && shotTime) {
-      duplicateFilters.push("shot_date = ?");
-      duplicateFilters.push("shot_time = ?");
-      duplicateValues.push(shotDate, shotTime);
-    } else if (hasPlcRecordedAt) {
-      duplicateFilters.push("ABS(DATEDIFF(second, recorded_at, ?)) <= ?");
-      duplicateValues.push(plcRecordedAt, Number(process.env.PLC_DUPLICATE_SHOT_WINDOW_SEC || 15));
-    }
+    duplicateFilters.push("ABS(DATEDIFF(second, recorded_at, ?)) <= ?");
+    duplicateValues.push(plcRecordedAt, Number(process.env.PLC_DUPLICATE_SHOT_WINDOW_SEC || 15));
 
     const { rows: duplicateRows } = await db.query(
       `SELECT TOP 1 id FROM ${TABLE}
@@ -1518,6 +1606,8 @@ async function saveToDBUnlocked(machine, partName, readings) {
     machine.port,
     partName,
   ];
+
+  addInsertValue(columns, values, "Counter", shotNumber);
 
   for (const [name, value] of Object.entries(readings)) {
     if (DROPPED_READING_COLUMNS.has(name)) continue;
@@ -1619,705 +1709,10 @@ async function saveLeakTestToDB(machine, partName, readings) {
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function ensureTable() {
-  await db.run(`
-IF COL_LENGTH('${TABLE}', 'cycle_start_time') IS NULL ALTER TABLE ${TABLE} ADD [cycle_start_time] DATETIME2(3) NULL;
-IF COL_LENGTH('${TABLE}', 'cycle_end_time') IS NULL ALTER TABLE ${TABLE} ADD [cycle_end_time] DATETIME2(3) NULL;
-IF COL_LENGTH('${TABLE}', 'cycle_duration') IS NULL ALTER TABLE ${TABLE} ADD [cycle_duration] DECIMAL(18,2) NULL;
-IF COL_LENGTH('${TABLE}', 'actual_cycle_time') IS NULL ALTER TABLE ${TABLE} ADD [actual_cycle_time] DECIMAL(18,2) NULL;
-IF COL_LENGTH('${TABLE}', 'plc_cycle_time') IS NULL ALTER TABLE ${TABLE} ADD [plc_cycle_time] DECIMAL(18,2) NULL;
-`);
-
-  const columnDefinitions = [
-    ...getReadingNames().map((name) => [name, readingSqlType(name)]),
-    ...Array.from(new Set(Object.values(LEGACY_COLUMNS_BY_PARAMETER))).map((name) => [
-      name,
-      legacySqlType(name),
-    ]),
-    ...EXTRA_READING_COLUMNS,
-    ...M_BIT_DURATION_COLUMNS,
-  ]
-    .map((name) => {
-      const columnName = Array.isArray(name) ? name[0] : name;
-      const columnType = Array.isArray(name) ? name[1] : readingSqlType(name);
-      const column = readingColumnName(columnName);
-      return `
-IF COL_LENGTH('${TABLE}', '${column}') IS NULL
-BEGIN
-  ALTER TABLE ${TABLE} ADD ${sqlColumn(columnName)} ${columnType} NULL
-END`;
-    })
-    .join("\n");
-
-  const decimalAlterSql = getReadingNames()
-    .filter((name) => readingSqlType(name).startsWith("DECIMAL("))
-    .map((name) => {
-      const column = readingColumnName(name);
-      const columnType = readingSqlType(name);
-      return `
-IF COL_LENGTH('${TABLE}', '${column}') IS NOT NULL
-BEGIN
-  ALTER TABLE ${TABLE} ALTER COLUMN ${sqlColumn(name)} ${columnType} NULL
-END`;
-    })
-    .join("\n");
-
-  const twoDigitAlterSql = Array.from(TWO_DIGIT_READING_COLUMNS)
-    .map(
-      (name) => `
-IF COL_LENGTH('${TABLE}', '${name}') IS NOT NULL
-BEGIN
-  UPDATE ${TABLE}
-  SET [${name}] = RIGHT('00' + CAST(ABS(TRY_CONVERT(INT, [${name}])) % 100 AS VARCHAR(2)), 2)
-  WHERE [${name}] IS NOT NULL
-    AND TRY_CONVERT(INT, [${name}]) IS NOT NULL
-  ALTER TABLE ${TABLE} ALTER COLUMN [${name}] NVARCHAR(2) NULL
-END`
-    )
-    .join("\n");
-
-  const canonicalDataMigrationSql = Object.entries(LEGACY_COLUMNS_BY_PARAMETER)
-    .map(
-      ([sourceName, targetName]) => `
-IF COL_LENGTH('${TABLE}', '${targetName.replace(/'/g, "''")}') IS NOT NULL AND COL_LENGTH('${TABLE}', '${sourceName.replace(/'/g, "''")}') IS NOT NULL
-BEGIN
-  ${dynamicSql(`UPDATE ${TABLE}
-    SET ${sqlColumn(targetName)} = COALESCE(${sqlColumn(targetName)}, TRY_CONVERT(${legacySqlType(targetName)}, ${sqlColumn(sourceName)}))
-    WHERE ${sqlColumn(targetName)} IS NULL`)}
-END`
-    )
-    .join("\n");
-
-  const duplicateDataMigrationSql = `
-${canonicalDataMigrationSql}
-
-IF COL_LENGTH('${TABLE}', 'shot_number') IS NOT NULL AND COL_LENGTH('${TABLE}', 'Counter') IS NOT NULL
-BEGIN
-  ${dynamicSql(`UPDATE ${TABLE} SET [shot_number] = COALESCE([shot_number], TRY_CONVERT(INT, [Counter])) WHERE [shot_number] IS NULL`)}
-END
-
-IF COL_LENGTH('${TABLE}', 'ok_shot') IS NOT NULL AND COL_LENGTH('${TABLE}', 'high_shot_count') IS NOT NULL
-BEGIN
-  ${dynamicSql(`UPDATE ${TABLE} SET [ok_shot] = COALESCE([ok_shot], TRY_CONVERT(INT, [high_shot_count])) WHERE [ok_shot] IS NULL`)}
-END
-
-IF COL_LENGTH('${TABLE}', 'ok_shot') IS NOT NULL AND COL_LENGTH('${TABLE}', 'HIGH SHOT COUNT value') IS NOT NULL
-BEGIN
-  ${dynamicSql(`UPDATE ${TABLE} SET [ok_shot] = COALESCE([ok_shot], TRY_CONVERT(INT, [HIGH SHOT COUNT value])) WHERE [ok_shot] IS NULL`)}
-END
-
-IF COL_LENGTH('${TABLE}', 'ng_shot') IS NOT NULL AND COL_LENGTH('${TABLE}', 'ng_counter') IS NOT NULL
-BEGIN
-  ${dynamicSql(`UPDATE ${TABLE} SET [ng_shot] = COALESCE([ng_shot], TRY_CONVERT(INT, [ng_counter])) WHERE [ng_shot] IS NULL`)}
-END
-
-IF COL_LENGTH('${TABLE}', 'ng_counter') IS NOT NULL AND COL_LENGTH('${TABLE}', 'ng_shot') IS NOT NULL
-BEGIN
-  ${dynamicSql(`UPDATE ${TABLE} SET [ng_counter] = COALESCE([ng_counter], TRY_CONVERT(INT, [ng_shot])) WHERE [ng_counter] IS NULL`)}
-END
-
-IF COL_LENGTH('${TABLE}', 'ng_counter') IS NOT NULL AND COL_LENGTH('${TABLE}', 'NG COUNTER value') IS NOT NULL
-BEGIN
-  ${dynamicSql(`UPDATE ${TABLE} SET [ng_counter] = COALESCE([ng_counter], TRY_CONVERT(INT, [NG COUNTER value])) WHERE [ng_counter] IS NULL`)}
-END
-
-IF COL_LENGTH('${TABLE}', 'ng_shot') IS NOT NULL AND COL_LENGTH('${TABLE}', 'NG COUNTER value') IS NOT NULL
-BEGIN
-  ${dynamicSql(`UPDATE ${TABLE} SET [ng_shot] = COALESCE([ng_shot], TRY_CONVERT(INT, [NG COUNTER value])) WHERE [ng_shot] IS NULL`)}
-END`;
-
-  const shotDateDataMigrationSql = `
-IF COL_LENGTH('${TABLE}', 'shot_date') IS NOT NULL
-  AND COL_LENGTH('${TABLE}', 'shot_year') IS NOT NULL
-  AND COL_LENGTH('${TABLE}', 'shot_month') IS NOT NULL
-  AND COL_LENGTH('${TABLE}', 'shot_day') IS NOT NULL
-BEGIN
-  ${dynamicSql(`UPDATE ${TABLE}
-    SET [shot_date] = COALESCE([shot_date], TRY_CONVERT(date, CONCAT(
-      CASE
-        WHEN TRY_CONVERT(INT, [shot_year]) < 100 THEN 2000 + TRY_CONVERT(INT, [shot_year])
-        ELSE TRY_CONVERT(INT, [shot_year])
-      END,
-      '-',
-      RIGHT('00' + CAST(TRY_CONVERT(INT, [shot_month]) AS VARCHAR(2)), 2),
-      '-',
-      RIGHT('00' + CAST(TRY_CONVERT(INT, [shot_day]) AS VARCHAR(2)), 2)
-    ))),
-    [shot_time] = COALESCE([shot_time], TRY_CONVERT(time(0), CONCAT(
-      RIGHT('00' + CAST(TRY_CONVERT(INT, [shot_hour]) AS VARCHAR(2)), 2),
-      ':',
-      RIGHT('00' + CAST(TRY_CONVERT(INT, [shot_minute]) AS VARCHAR(2)), 2),
-      ':',
-      RIGHT('00' + CAST(TRY_CONVERT(INT, [shot_second]) AS VARCHAR(2)), 2)
-    ))),
-    [shot_datetime] = COALESCE([shot_datetime], TRY_CONVERT(datetime2(0), CONCAT(
-      CASE
-        WHEN TRY_CONVERT(INT, [shot_year]) < 100 THEN 2000 + TRY_CONVERT(INT, [shot_year])
-        ELSE TRY_CONVERT(INT, [shot_year])
-      END,
-      '-',
-      RIGHT('00' + CAST(TRY_CONVERT(INT, [shot_month]) AS VARCHAR(2)), 2),
-      '-',
-      RIGHT('00' + CAST(TRY_CONVERT(INT, [shot_day]) AS VARCHAR(2)), 2),
-      'T',
-      RIGHT('00' + CAST(TRY_CONVERT(INT, [shot_hour]) AS VARCHAR(2)), 2),
-      ':',
-      RIGHT('00' + CAST(TRY_CONVERT(INT, [shot_minute]) AS VARCHAR(2)), 2),
-      ':',
-      RIGHT('00' + CAST(TRY_CONVERT(INT, [shot_second]) AS VARCHAR(2)), 2)
-    ))),
-    [recorded_at] = COALESCE(TRY_CONVERT(datetime2(0), CONCAT(
-      CASE
-        WHEN TRY_CONVERT(INT, [shot_year]) < 100 THEN 2000 + TRY_CONVERT(INT, [shot_year])
-        ELSE TRY_CONVERT(INT, [shot_year])
-      END,
-      '-',
-      RIGHT('00' + CAST(TRY_CONVERT(INT, [shot_month]) AS VARCHAR(2)), 2),
-      '-',
-      RIGHT('00' + CAST(TRY_CONVERT(INT, [shot_day]) AS VARCHAR(2)), 2),
-      'T',
-      RIGHT('00' + CAST(TRY_CONVERT(INT, [shot_hour]) AS VARCHAR(2)), 2),
-      ':',
-      RIGHT('00' + CAST(TRY_CONVERT(INT, [shot_minute]) AS VARCHAR(2)), 2),
-      ':',
-      RIGHT('00' + CAST(TRY_CONVERT(INT, [shot_second]) AS VARCHAR(2)), 2)
-    )), [recorded_at])
-    WHERE TRY_CONVERT(INT, [shot_year]) IS NOT NULL
-      AND TRY_CONVERT(INT, [shot_month]) BETWEEN 1 AND 12
-      AND TRY_CONVERT(INT, [shot_day]) BETWEEN 1 AND 31
-      AND TRY_CONVERT(INT, [shot_hour]) BETWEEN 0 AND 23
-      AND TRY_CONVERT(INT, [shot_minute]) BETWEEN 0 AND 59
-      AND TRY_CONVERT(INT, [shot_second]) BETWEEN 0 AND 59`)}
-END
-
-${dynamicSql(`CREATE OR ALTER TRIGGER dbo.trg_PlcCycleReadings_ShotDate
-ON ${TABLE}
-AFTER INSERT, UPDATE
-AS
-BEGIN
-  SET NOCOUNT ON;
-
-  UPDATE target
-  SET [shot_date] = COALESCE(target.[shot_date], TRY_CONVERT(date, CONCAT(
-    CASE
-      WHEN TRY_CONVERT(INT, target.[shot_year]) < 100 THEN 2000 + TRY_CONVERT(INT, target.[shot_year])
-      ELSE TRY_CONVERT(INT, target.[shot_year])
-    END,
-    '-',
-    RIGHT('00' + CAST(TRY_CONVERT(INT, target.[shot_month]) AS VARCHAR(2)), 2),
-    '-',
-    RIGHT('00' + CAST(TRY_CONVERT(INT, target.[shot_day]) AS VARCHAR(2)), 2)
-  ))),
-  [shot_time] = COALESCE(target.[shot_time], TRY_CONVERT(time(0), CONCAT(
-    RIGHT('00' + CAST(TRY_CONVERT(INT, target.[shot_hour]) AS VARCHAR(2)), 2),
-    ':',
-    RIGHT('00' + CAST(TRY_CONVERT(INT, target.[shot_minute]) AS VARCHAR(2)), 2),
-    ':',
-    RIGHT('00' + CAST(TRY_CONVERT(INT, target.[shot_second]) AS VARCHAR(2)), 2)
-  ))),
-  [shot_datetime] = COALESCE(target.[shot_datetime], TRY_CONVERT(datetime2(0), CONCAT(
-    CASE
-      WHEN TRY_CONVERT(INT, target.[shot_year]) < 100 THEN 2000 + TRY_CONVERT(INT, target.[shot_year])
-      ELSE TRY_CONVERT(INT, target.[shot_year])
-    END,
-    '-',
-    RIGHT('00' + CAST(TRY_CONVERT(INT, target.[shot_month]) AS VARCHAR(2)), 2),
-    '-',
-    RIGHT('00' + CAST(TRY_CONVERT(INT, target.[shot_day]) AS VARCHAR(2)), 2),
-    'T',
-    RIGHT('00' + CAST(TRY_CONVERT(INT, target.[shot_hour]) AS VARCHAR(2)), 2),
-    ':',
-    RIGHT('00' + CAST(TRY_CONVERT(INT, target.[shot_minute]) AS VARCHAR(2)), 2),
-    ':',
-    RIGHT('00' + CAST(TRY_CONVERT(INT, target.[shot_second]) AS VARCHAR(2)), 2)
-  ))),
-  [recorded_at] = COALESCE(TRY_CONVERT(datetime2(0), CONCAT(
-    CASE
-      WHEN TRY_CONVERT(INT, target.[shot_year]) < 100 THEN 2000 + TRY_CONVERT(INT, target.[shot_year])
-      ELSE TRY_CONVERT(INT, target.[shot_year])
-    END,
-    '-',
-    RIGHT('00' + CAST(TRY_CONVERT(INT, target.[shot_month]) AS VARCHAR(2)), 2),
-    '-',
-    RIGHT('00' + CAST(TRY_CONVERT(INT, target.[shot_day]) AS VARCHAR(2)), 2),
-    'T',
-    RIGHT('00' + CAST(TRY_CONVERT(INT, target.[shot_hour]) AS VARCHAR(2)), 2),
-    ':',
-    RIGHT('00' + CAST(TRY_CONVERT(INT, target.[shot_minute]) AS VARCHAR(2)), 2),
-    ':',
-    RIGHT('00' + CAST(TRY_CONVERT(INT, target.[shot_second]) AS VARCHAR(2)), 2)
-  )), target.[recorded_at])
-  FROM ${TABLE} target
-  INNER JOIN inserted i ON i.[id] = target.[id]
-  WHERE TRY_CONVERT(INT, target.[shot_year]) IS NOT NULL
-    AND TRY_CONVERT(INT, target.[shot_month]) BETWEEN 1 AND 12
-    AND TRY_CONVERT(INT, target.[shot_day]) BETWEEN 1 AND 31
-    AND TRY_CONVERT(INT, target.[shot_hour]) BETWEEN 0 AND 23
-    AND TRY_CONVERT(INT, target.[shot_minute]) BETWEEN 0 AND 59
-    AND TRY_CONVERT(INT, target.[shot_second]) BETWEEN 0 AND 59;
-END`)}`;
-
-  const dropDuplicateColumnsSql = Array.from(DROPPED_READING_COLUMNS)
-    .map(
-      (name) => `
-IF COL_LENGTH('${TABLE}', '${name.replace(/'/g, "''")}') IS NOT NULL
-BEGIN
-  ${dynamicSql(`ALTER TABLE ${TABLE} DROP COLUMN ${sqlColumn(name)}`)}
-END`
-    )
-    .join("\n");
-
-  const leakTestDropColumns = [
-    "machine_key", "raw_readings_json", "recorded_at", "created_at", "machine_name",
-    "plc_port", "part_name", "scan_data", "cycle_start", "cycle_end", "auto_mode",
-    "manual_mode", "dry_mode", "wey_mode", "both_mode",
-  ];
-
-  const plcDropColumns = [
-    "scan_data", "body_leak_value", "gall_1", "gall_2", "result", "cycle_start",
-    "auto_mode", "dry_mode", "wey_mode", "both_mode",
-  ];
-
-  const buildDropColumnSql = (table, prefix, columns) =>
-    columns
-      .map(
-        (column) => `
-IF COL_LENGTH('${table}', '${column}') IS NOT NULL
-BEGIN
-  DECLARE @${prefix}_${column.replace(/[^a-zA-Z0-9]/g, "_")}_drop_indexes NVARCHAR(MAX) = N''
-  SELECT @${prefix}_${column.replace(/[^a-zA-Z0-9]/g, "_")}_drop_indexes = @${prefix}_${column.replace(/[^a-zA-Z0-9]/g, "_")}_drop_indexes
-    + N'DROP INDEX [' + i.name + N'] ON ${table};'
-  FROM sys.indexes i
-  INNER JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
-  INNER JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
-  WHERE i.object_id = OBJECT_ID(N'${table}')
-    AND c.name = N'${column}'
-    AND i.is_primary_key = 0
-    AND i.is_unique_constraint = 0
-  IF @${prefix}_${column.replace(/[^a-zA-Z0-9]/g, "_")}_drop_indexes <> N''
-  BEGIN
-    EXEC sp_executesql @${prefix}_${column.replace(/[^a-zA-Z0-9]/g, "_")}_drop_indexes
-  END
-  DECLARE @${prefix}_${column.replace(/[^a-zA-Z0-9]/g, "_")}_constraint NVARCHAR(128)
-  SELECT @${prefix}_${column.replace(/[^a-zA-Z0-9]/g, "_")}_constraint = dc.name
-  FROM sys.default_constraints dc
-  INNER JOIN sys.columns c ON c.default_object_id = dc.object_id
-  WHERE dc.parent_object_id = OBJECT_ID(N'${table}')
-    AND c.name = N'${column}'
-  IF @${prefix}_${column.replace(/[^a-zA-Z0-9]/g, "_")}_constraint IS NOT NULL
-  BEGIN
-    EXEC(N'ALTER TABLE ${table} DROP CONSTRAINT [' + @${prefix}_${column.replace(/[^a-zA-Z0-9]/g, "_")}_constraint + N']')
-  END
-  ALTER TABLE ${table} DROP COLUMN [${column}]
-END`
-      )
-      .join("\n");
-
-  await db.run(`
-IF OBJECT_ID(N'dbo.PlcCycleReadingsIdSeq', N'SO') IS NULL
-BEGIN
-  EXEC(N'CREATE SEQUENCE dbo.PlcCycleReadingsIdSeq AS BIGINT START WITH 1 INCREMENT BY 1')
-END
-
-IF OBJECT_ID(N'dbo.PlcConnectionEventsIdSeq', N'SO') IS NULL
-BEGIN
-  EXEC(N'CREATE SEQUENCE dbo.PlcConnectionEventsIdSeq AS BIGINT START WITH 1 INCREMENT BY 1')
-END
-
-IF OBJECT_ID(N'${TABLE}', N'U') IS NULL
-BEGIN
-  CREATE TABLE ${TABLE} (
-    [id] BIGINT NOT NULL CONSTRAINT [DF_PlcCycleReadings_id] DEFAULT NEXT VALUE FOR dbo.PlcCycleReadingsIdSeq,
-    [recorded_at] DATETIME2(3) NOT NULL CONSTRAINT [DF_PlcCycleReadings_recorded_at] DEFAULT SYSDATETIME(),
-    [created_at] DATETIME2(3) NOT NULL CONSTRAINT [DF_PlcCycleReadings_created_at] DEFAULT SYSUTCDATETIME(),
-    [machine_key] NVARCHAR(80) NULL,
-    [machine_name] NVARCHAR(100) NULL,
-    [plc_ip] NVARCHAR(45) NULL,
-    [plc_port] INT NULL,
-    [part_name] NVARCHAR(100) NULL,
-    CONSTRAINT [PK_PlcCycleReadings] PRIMARY KEY CLUSTERED ([id] DESC)
-  )
-END
-
-IF OBJECT_ID(N'${CONNECTION_EVENTS_TABLE}', N'U') IS NULL
-BEGIN
-  CREATE TABLE ${CONNECTION_EVENTS_TABLE} (
-    [id] BIGINT NOT NULL CONSTRAINT [DF_PlcConnectionEvents_id] DEFAULT NEXT VALUE FOR dbo.PlcConnectionEventsIdSeq,
-    [machine_key] NVARCHAR(80) NULL,
-    [machine_name] NVARCHAR(100) NULL,
-    [plc_ip] NVARCHAR(45) NULL,
-    [plc_port] INT NULL,
-    [event_type] NVARCHAR(40) NOT NULL,
-    [started_at] DATETIME2(3) NOT NULL,
-    [ended_at] DATETIME2(3) NULL,
-    [duration_seconds] INT NULL,
-    [reason] NVARCHAR(400) NULL,
-    [created_at] DATETIME2(3) NOT NULL CONSTRAINT [DF_PlcConnectionEvents_created_at] DEFAULT SYSUTCDATETIME(),
-    CONSTRAINT [PK_PlcConnectionEvents] PRIMARY KEY CLUSTERED ([id] DESC)
-  )
-END
-
-IF COL_LENGTH('${TABLE}', 'created_at') IS NULL
-BEGIN
-  ALTER TABLE ${TABLE} ADD [created_at] DATETIME2(3) NOT NULL CONSTRAINT [DF_PlcCycleReadings_created_at] DEFAULT SYSUTCDATETIME()
-END
-
-${columnDefinitions}
-${decimalAlterSql}
-${twoDigitAlterSql}
-${duplicateDataMigrationSql}
-${shotDateDataMigrationSql}
-${dropDuplicateColumnsSql}
-
-IF COL_LENGTH('${TABLE}', 'raw_readings_json') IS NULL
-BEGIN
-  ALTER TABLE ${TABLE} ADD [raw_readings_json] NVARCHAR(MAX) NULL
-END
-
-IF COL_LENGTH('${TABLE}', 'minor_stoppage_machine') IS NOT NULL
-   AND '${String(process.env.PLC_MINOR_STOPPAGE_MACHINE_ENABLED || "false").replace(/'/g, "''").toLowerCase()}' = 'true'
-BEGIN
-  ;WITH recent_rows AS (
-    SELECT TOP (5000)
-      [id],
-      COALESCE([shot_datetime], [recorded_at]) AS shot_at,
-      [machine_key],
-      [plc_ip],
-      [cycle_time],
-      [minor_stoppage_machine]
-    FROM ${TABLE}
-    ORDER BY [id] DESC
-  ),
-  ordered AS (
-    SELECT
-      [id],
-      [shot_at],
-      TRY_CONVERT(DECIMAL(18,2), [cycle_time]) AS cycle_time_value,
-      LEAD([shot_at]) OVER (
-        PARTITION BY COALESCE([machine_key], [plc_ip])
-        ORDER BY [shot_at] ASC, [id] ASC
-      ) AS next_shot_at
-    FROM recent_rows
-    WHERE [shot_at] IS NOT NULL
-  )
-  UPDATE target
-  SET [minor_stoppage_machine] = CAST(
-    CASE
-      WHEN ordered.next_shot_at IS NULL OR ordered.cycle_time_value IS NULL THEN NULL
-      WHEN DATEDIFF(second, ordered.shot_at, ordered.next_shot_at) - ordered.cycle_time_value < 0 THEN 0
-      ELSE DATEDIFF(second, ordered.shot_at, ordered.next_shot_at) - ordered.cycle_time_value
-    END AS DECIMAL(18,2)
-  )
-  FROM ${TABLE} target
-  INNER JOIN ordered ON target.[id] = ordered.[id]
-END
-
-IF OBJECT_ID(N'${LEAK_TEST_TABLE}', N'U') IS NULL
-BEGIN
-  CREATE TABLE ${LEAK_TEST_TABLE} (
-    [Id] INT IDENTITY(1,1) NOT NULL CONSTRAINT [PK_Leaktest] PRIMARY KEY,
-    [Machine] NVARCHAR(100) NOT NULL,
-    [PLC_IP] NVARCHAR(50) NOT NULL,
-    [Status] NVARCHAR(50) NOT NULL,
-    [Cycle_End_Time] DATETIME NOT NULL,
-    [Part_QR_Code] NVARCHAR(100) NULL,
-    [Result] NVARCHAR(20) NULL,
-    [Body_Leak_Value] FLOAT NULL,
-    [Gall_1] FLOAT NULL,
-    [Gall_2] FLOAT NULL,
-    [Cycle_Time] INT NULL,
-    [Running_Mode] NVARCHAR(40) NULL,
-    [Manual] BIT NULL,
-    [Dry] BIT NULL,
-    [Wey] BIT NULL,
-    [Both] BIT NULL
-  )
-END
-
-IF COL_LENGTH('${LEAK_TEST_TABLE}', 'DB_STATUS') IS NOT NULL
-BEGIN
-  DECLARE @leaktest_db_status_constraint NVARCHAR(128)
-  SELECT @leaktest_db_status_constraint = dc.name
-  FROM sys.default_constraints dc
-  INNER JOIN sys.columns c ON c.default_object_id = dc.object_id
-  WHERE dc.parent_object_id = OBJECT_ID(N'${LEAK_TEST_TABLE}')
-    AND c.name = N'DB_STATUS'
-  IF @leaktest_db_status_constraint IS NOT NULL
-    EXEC(N'ALTER TABLE ${LEAK_TEST_TABLE} DROP CONSTRAINT [' + @leaktest_db_status_constraint + N']')
-  ALTER TABLE ${LEAK_TEST_TABLE} DROP COLUMN [DB_STATUS]
-END
-
-IF COL_LENGTH('${TABLE}', 'scan_data') IS NOT NULL
-  AND COL_LENGTH('${TABLE}', 'manual_mode') IS NOT NULL
-BEGIN
-  ${dynamicSql(`INSERT INTO ${LEAK_TEST_TABLE}
-    ([Machine],[PLC_IP],[Status],[Cycle_End_Time],[Part_QR_Code],[Result],[Body_Leak_Value],[Gall_1],[Gall_2],[Cycle_Time],[Running_Mode],[Manual],[Dry],[Wey],[Both])
-    SELECT
-      COALESCE([machine_name], N'Leak Test'),
-      [plc_ip],
-      CASE
-        WHEN UPPER(LTRIM(RTRIM(TRY_CONVERT(NVARCHAR(20), [result])))) IN (N'OK',N'O',N'PASS',N'PASSED',N'GOOD',N'G',N'Y',N'YES',N'TRUE',N'1') THEN N'OK'
-        WHEN UPPER(LTRIM(RTRIM(TRY_CONVERT(NVARCHAR(20), [result])))) IN (N'NG',N'N',N'FAIL',N'FAILED',N'BAD',N'B',N'NO',N'FALSE',N'0') THEN N'NG'
-        ELSE TRY_CONVERT(NVARCHAR(20), [result])
-      END,
-      CAST([recorded_at] AS DATETIME),
-      COALESCE([scan_data], [part_name]),
-      CASE
-        WHEN UPPER(LTRIM(RTRIM(TRY_CONVERT(NVARCHAR(20), [result])))) IN (N'OK',N'O',N'PASS',N'PASSED',N'GOOD',N'G',N'Y',N'YES',N'TRUE',N'1') THEN N'OK'
-        WHEN UPPER(LTRIM(RTRIM(TRY_CONVERT(NVARCHAR(20), [result])))) IN (N'NG',N'N',N'FAIL',N'FAILED',N'BAD',N'B',N'NO',N'FALSE',N'0') THEN N'NG'
-        ELSE TRY_CONVERT(NVARCHAR(20), [result])
-      END,
-      TRY_CONVERT(FLOAT, [body_leak_value]),
-      TRY_CONVERT(FLOAT, [gall_1]),
-      TRY_CONVERT(FLOAT, [gall_2]),
-      TRY_CONVERT(INT, [cycle_time]),
-      CASE WHEN TRY_CONVERT(INT, [auto_mode]) = 1 THEN N'AUTO' ELSE N'MANUAL' END,
-      TRY_CONVERT(BIT, COALESCE([manual_mode], 0)),
-      TRY_CONVERT(BIT, COALESCE([dry_mode], 0)),
-      TRY_CONVERT(BIT, COALESCE([wey_mode], 0)),
-      TRY_CONVERT(BIT, COALESCE([both_mode], 0))
-    FROM ${TABLE} source
-    WHERE [plc_ip] IN (N'192.168.119.40',N'192.168.119.41',N'192.168.119.42')
-      AND ([scan_data] IS NOT NULL OR [body_leak_value] IS NOT NULL OR [gall_1] IS NOT NULL OR [gall_2] IS NOT NULL OR [result] IS NOT NULL)
-      AND NOT EXISTS (
-        SELECT 1 FROM ${LEAK_TEST_TABLE} target
-        WHERE target.[PLC_IP] = source.[plc_ip]
-          AND target.[Cycle_End_Time] = CAST(source.[recorded_at] AS DATETIME)
-          AND ISNULL(target.[Part_QR_Code], N'') = ISNULL(COALESCE(source.[scan_data], source.[part_name]), N'')
-      )`)}
-END
-
-${buildDropColumnSql(LEAK_TEST_TABLE, "leaktest", leakTestDropColumns)}
-${buildDropColumnSql(TABLE, "plc", plcDropColumns)}
-
-IF NOT EXISTS (
-  SELECT 1 FROM sys.indexes
-  WHERE [name] = N'IX_PlcCycleReadings_id_desc'
-    AND [object_id] = OBJECT_ID(N'${TABLE}')
-)
-BEGIN
-  CREATE INDEX [IX_PlcCycleReadings_id_desc] ON ${TABLE} ([id] DESC)
-END
-
-IF NOT EXISTS (
-  SELECT 1 FROM sys.indexes
-  WHERE [name] = N'IX_PlcCycleReadings_machine_key_recorded_desc'
-    AND [object_id] = OBJECT_ID(N'${TABLE}')
-)
-BEGIN
-  CREATE INDEX [IX_PlcCycleReadings_machine_key_recorded_desc]
-    ON ${TABLE} ([machine_key], [recorded_at] DESC, [id] DESC)
-END
-
-IF NOT EXISTS (
-  SELECT 1 FROM sys.indexes
-  WHERE [name] = N'IX_PlcCycleReadings_plc_ip_recorded_desc'
-    AND [object_id] = OBJECT_ID(N'${TABLE}')
-)
-BEGIN
-  CREATE INDEX [IX_PlcCycleReadings_plc_ip_recorded_desc]
-    ON ${TABLE} ([plc_ip], [recorded_at] DESC, [id] DESC)
-END
-
-IF NOT EXISTS (
-  SELECT 1 FROM sys.indexes
-  WHERE [name] = N'IX_PlcCycleReadings_machine_shot_date_number'
-    AND [object_id] = OBJECT_ID(N'${TABLE}')
-)
-BEGIN
-  CREATE INDEX [IX_PlcCycleReadings_machine_shot_date_number]
-    ON ${TABLE} ([machine_key], [shot_date], [shot_number], [recorded_at] DESC, [id] DESC)
-END
-
-IF NOT EXISTS (
-  SELECT 1 FROM sys.indexes
-  WHERE [name] = N'IX_PlcCycleReadings_ip_shot_date_number'
-    AND [object_id] = OBJECT_ID(N'${TABLE}')
-)
-BEGIN
-  CREATE INDEX [IX_PlcCycleReadings_ip_shot_date_number]
-    ON ${TABLE} ([plc_ip], [shot_date], [shot_number], [recorded_at] DESC, [id] DESC)
-END
-
-IF EXISTS (
-  SELECT 1 FROM sys.indexes
-  WHERE [name] = N'UX_MachineShot'
-    AND [object_id] = OBJECT_ID(N'${TABLE}')
-)
-BEGIN
-  DROP INDEX [UX_MachineShot] ON ${TABLE}
-END
-
-IF EXISTS (
-  SELECT 1 FROM sys.indexes
-  WHERE [name] = N'UX_PlcCycleReadings_shot_uid'
-    AND [object_id] = OBJECT_ID(N'${TABLE}')
-)
-BEGIN
-  DROP INDEX [UX_PlcCycleReadings_shot_uid] ON ${TABLE}
-END
-
-IF EXISTS (
-  SELECT 1 FROM sys.indexes
-  WHERE [name] = N'IX_Leaktest_machine_recorded_at_desc'
-    AND [object_id] = OBJECT_ID(N'${LEAK_TEST_TABLE}')
-)
-BEGIN
-  DROP INDEX [IX_Leaktest_machine_recorded_at_desc] ON ${LEAK_TEST_TABLE}
-END
-
-IF EXISTS (
-  SELECT 1 FROM sys.indexes
-  WHERE [name] = N'IX_Leaktest_ip_cycle_end_desc'
-    AND [object_id] = OBJECT_ID(N'${LEAK_TEST_TABLE}')
-)
-BEGIN
-  DROP INDEX [IX_Leaktest_ip_cycle_end_desc] ON ${LEAK_TEST_TABLE}
-END
-
-IF NOT EXISTS (
-  SELECT 1 FROM sys.indexes
-  WHERE [name] = N'IX_Leaktest_ip_cycle_end_desc'
-    AND [object_id] = OBJECT_ID(N'${LEAK_TEST_TABLE}')
-)
-BEGIN
-  CREATE INDEX [IX_Leaktest_ip_cycle_end_desc] ON ${LEAK_TEST_TABLE} ([PLC_IP], [Cycle_End_Time] DESC, [Id] DESC)
-END
-
-IF NOT EXISTS (
-  SELECT 1 FROM sys.indexes
-  WHERE [name] = N'IX_PlcConnectionEvents_started_at_desc'
-    AND [object_id] = OBJECT_ID(N'${CONNECTION_EVENTS_TABLE}')
-)
-BEGIN
-  CREATE INDEX [IX_PlcConnectionEvents_started_at_desc] ON ${CONNECTION_EVENTS_TABLE} ([started_at] DESC, [id] DESC)
-END
-`);
+  // Schema creation is centralized in backend/schema.mssql.sql.
+  // Runtime monitor must not create ad-hoc PLC columns.
+  return db.initializeSchema();
 }
-
-async function hasUsablePlcSchema() {
-  const { rows } = await db.query(`
-SELECT
-  CASE WHEN OBJECT_ID(N'${TABLE}', N'U') IS NOT NULL THEN 1 ELSE 0 END AS has_plc_table,
-      CASE WHEN OBJECT_ID(N'${LEAK_TEST_TABLE}', N'U') IS NOT NULL THEN 1 ELSE 0 END AS has_leak_table,
-      CASE WHEN COL_LENGTH('${TABLE}', 'recorded_at') IS NOT NULL THEN 1 ELSE 0 END AS has_recorded_at,
-      CASE WHEN COL_LENGTH('${TABLE}', 'machine_key') IS NOT NULL THEN 1 ELSE 0 END AS has_machine_key,
-      CASE WHEN COL_LENGTH('${TABLE}', 'plc_ip') IS NOT NULL THEN 1 ELSE 0 END AS has_plc_ip,
-      CASE WHEN EXISTS (
-        SELECT 1 FROM sys.indexes
-        WHERE [name] = N'IX_PlcCycleReadings_machine_key_recorded_desc'
-          AND [object_id] = OBJECT_ID(N'${TABLE}')
-      ) THEN 1 ELSE 0 END AS has_machine_key_index,
-      CASE WHEN EXISTS (
-        SELECT 1 FROM sys.indexes
-        WHERE [name] = N'IX_PlcCycleReadings_plc_ip_recorded_desc'
-          AND [object_id] = OBJECT_ID(N'${TABLE}')
-      ) THEN 1 ELSE 0 END AS has_plc_ip_index,
-      CASE WHEN EXISTS (
-        SELECT 1 FROM sys.indexes
-        WHERE [name] = N'IX_Leaktest_ip_cycle_end_desc'
-          AND [object_id] = OBJECT_ID(N'${LEAK_TEST_TABLE}')
-      ) THEN 1 ELSE 0 END AS has_leak_index
-  `);
-
-  const schema = rows[0] || {};
-  return [
-    "has_plc_table",
-    "has_leak_table",
-    "has_recorded_at",
-    "has_machine_key",
-    "has_plc_ip",
-    "has_machine_key_index",
-    "has_plc_ip_index",
-    "has_leak_index",
-  ].every((key) => Number(schema[key]) === 1);
-}
-
-async function ensureCriticalUbeSaveColumns() {
-  await db.run(`
-IF OBJECT_ID(N'${TABLE}', N'U') IS NOT NULL
-BEGIN
-  IF COL_LENGTH('${TABLE}', 'shot_date') IS NULL
-  BEGIN
-    ALTER TABLE ${TABLE} ADD [shot_date] DATE NULL
-  END
-
-  IF COL_LENGTH('${TABLE}', 'shot_time') IS NULL
-  BEGIN
-    ALTER TABLE ${TABLE} ADD [shot_time] TIME(0) NULL
-  END
-
-  IF COL_LENGTH('${TABLE}', 'shot_datetime') IS NULL
-  BEGIN
-    ALTER TABLE ${TABLE} ADD [shot_datetime] DATETIME2(0) NULL
-  END
-
-  IF COL_LENGTH('${TABLE}', 'shot_year') IS NULL
-  BEGIN
-    ALTER TABLE ${TABLE} ADD [shot_year] NVARCHAR(2) NULL
-  END
-
-  IF COL_LENGTH('${TABLE}', 'shot_month') IS NULL
-  BEGIN
-    ALTER TABLE ${TABLE} ADD [shot_month] NVARCHAR(2) NULL
-  END
-
-  IF COL_LENGTH('${TABLE}', 'shot_day') IS NULL
-  BEGIN
-    ALTER TABLE ${TABLE} ADD [shot_day] NVARCHAR(2) NULL
-  END
-
-  IF COL_LENGTH('${TABLE}', 'shot_hour') IS NULL
-  BEGIN
-    ALTER TABLE ${TABLE} ADD [shot_hour] NVARCHAR(2) NULL
-  END
-
-  IF COL_LENGTH('${TABLE}', 'shot_minute') IS NULL
-  BEGIN
-    ALTER TABLE ${TABLE} ADD [shot_minute] NVARCHAR(2) NULL
-  END
-
-  IF COL_LENGTH('${TABLE}', 'shot_second') IS NULL
-  BEGIN
-    ALTER TABLE ${TABLE} ADD [shot_second] NVARCHAR(2) NULL
-  END
-
-  IF COL_LENGTH('${TABLE}', 'shot_number') IS NULL
-  BEGIN
-    ALTER TABLE ${TABLE} ADD [shot_number] INT NULL
-  END
-
-  IF COL_LENGTH('${TABLE}', 'cycle_time') IS NULL
-  BEGIN
-    ALTER TABLE ${TABLE} ADD [cycle_time] DECIMAL(18,2) NULL
-  END
-
-  IF COL_LENGTH('${TABLE}', 'minor_stoppage') IS NULL
-  BEGIN
-    ALTER TABLE ${TABLE} ADD [minor_stoppage] DECIMAL(18,2) NULL
-  END
-
-  IF COL_LENGTH('${TABLE}', 'ok_shot') IS NULL
-  BEGIN
-    ALTER TABLE ${TABLE} ADD [ok_shot] INT NULL
-  END
-
-  IF COL_LENGTH('${TABLE}', 'ng_counter') IS NULL
-  BEGIN
-    ALTER TABLE ${TABLE} ADD [ng_counter] INT NULL
-  END
-
-  IF COL_LENGTH('${TABLE}', 'minor_stoppage_machine') IS NULL
-  BEGIN
-    ALTER TABLE ${TABLE} ADD [minor_stoppage_machine] DECIMAL(18,2) NULL
-  END
-
-  IF COL_LENGTH('${TABLE}', 'raw_readings_json') IS NULL
-  BEGIN
-    ALTER TABLE ${TABLE} ADD [raw_readings_json] NVARCHAR(MAX) NULL
-  END
-END`);
-}
-
 async function backfillRecentMinorStoppageMachine() {
   if (String(process.env.PLC_MINOR_STOPPAGE_MACHINE_ENABLED || "false").toLowerCase() !== "true") {
     return;
@@ -2402,10 +1797,21 @@ BEGIN
 END`);
 }
 
+async function hasUsablePlcSchema() {
+  const { rows } = await db.query(`
+    SELECT CASE
+      WHEN OBJECT_ID(N'${TABLE}', N'U') IS NULL THEN 0
+      WHEN COL_LENGTH(N'${TABLE}', 'id') IS NULL THEN 0
+      WHEN COL_LENGTH(N'${TABLE}', 'recorded_at') IS NULL THEN 0
+      ELSE 1
+    END AS ok
+  `);
+  return Number(rows[0]?.ok || 0) === 1;
+}
+
 function ensureTableOnce() {
   if (!schemaReadyPromise) {
     schemaReadyPromise = (async () => {
-      await ensureCriticalUbeSaveColumns();
       if (!(await hasUsablePlcSchema())) {
         await ensureTable();
       }
@@ -2790,11 +2196,8 @@ function startPlcMonitor(io) {
         : Number(((endedAt - startedAt) / 1000).toFixed(2));
 
       if (Number.isFinite(durationSec) && durationSec >= 0) {
-        readings.plc_cycle_time = readings.cycle_time ?? readings["CYCLE TIME sec."] ?? null;
         readings.cycle_start_time = startedAt.toISOString();
         readings.cycle_end_time = endedAt.toISOString();
-        readings.cycle_duration = durationSec;
-        readings.actual_cycle_time = durationSec;
         readings.cycle_time = durationSec;
         readings["CYCLE TIME sec."] = durationSec;
       }
@@ -3875,7 +3278,10 @@ function startPlcMonitor(io) {
     }),
     getLatestReadings: () =>
       getLatestReadingsForMachines(Array.from(machineState.values())),
-    getReadingHistory: async (args = {}) => mergeLiveReadingsIntoHistory(await getReadingHistory(args), args),
+    getReadingHistory: async (args = {}) => {
+      const history = await getReadingHistory(args);
+      return Array.isArray(history) ? mergeLiveReadingsIntoHistory(history, args) : history;
+    },
     getConnectionEvents,
     buildReadingsCsv,
     buildReadingsExcelXml,
@@ -3898,4 +3304,6 @@ module.exports = {
   buildReadingsExcelXml,
   buildConnectionEventsExcelXml,
 };
+
+
 

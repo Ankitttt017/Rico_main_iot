@@ -27,7 +27,26 @@ function createPlcMonitorRoutes(service) {
         limit: req.query.limit,
         from: req.query.from,
         to: req.query.to,
+        page: req.query.page,
+        pageSize: req.query.pageSize,
+        shotNumber: req.query.shotNumber,
+        shift: req.query.shift,
+        shotResult: req.query.shotResult,
       });
+      if (data && !Array.isArray(data) && Array.isArray(data.rows)) {
+        res.json({
+          success: true,
+          data: data.rows,
+          pagination: {
+            page: data.page,
+            pageSize: data.pageSize,
+            total: data.total,
+            totalPages: Math.max(1, Math.ceil((data.total || 0) / (data.pageSize || 1))),
+          },
+          kpis: data.kpis || {},
+        });
+        return;
+      }
       res.json({ success: true, data });
     } catch (error) {
       res.status(500).json({

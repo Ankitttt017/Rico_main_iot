@@ -98,7 +98,9 @@ export function getReadingShotNumber(readings = {}) {
 export function buildShotTimeFromRow(row = {}) {
   if (row.shot_time) return formatTimeOnly(row.shot_time);
   const parts = [row.shot_hour, row.shot_minute, row.shot_second].map((value) => pad2(value));
-  return parts.every(Boolean) ? parts.join(":") : "";
+  if (parts.every(Boolean)) return parts.join(":");
+  const timestamp = row.shot_datetime || row.recorded_at || row.created_at;
+  return timestamp ? formatTimeOnly(timestamp) : "";
 }
 
 export function buildShotDateFromRow(row = {}) {

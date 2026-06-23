@@ -8,7 +8,6 @@ import {
   getLocations,
   getMachines,
   getPlcMachineConfigs,
-  savePlcRegisterTemplate,
   savePlcMachineConfig,
   testPlcMachineConfig,
 } from "../../services/api";
@@ -21,7 +20,6 @@ export const DEFAULT_PLC_DRAFT = {
   ip_address: "",
   port: "",
   protocol: "SLMP",
-  register_profile_key: "UBE_850T",
   sequence_no: null,
   is_active: true,
   register_config: [],
@@ -45,17 +43,11 @@ function isActiveLocation(location = {}) {
   return location.is_active !== false && location.is_active !== 0 && location.is_active !== "0";
 }
 
-function firstTemplateForType(registerTemplates = [], type = "ube") {
-  return registerTemplates.find((template) => template.machine_type === type && template.is_active !== false);
-}
-
-function nextDraft(_machines = [], type = "ube", defaultRegistersByType = {}, registerTemplates = []) {
-  const template = firstTemplateForType(registerTemplates, type);
+function nextDraft(_machines = [], type = "ube", defaultRegistersByType = {}) {
   return {
     ...DEFAULT_PLC_DRAFT,
     machine_type: type,
-    register_profile_key: template?.template_key || profileForType(type),
-    register_config: template?.register_config || getDefaultRegisters(defaultRegistersByType, type),
+    register_config: getDefaultRegisters(defaultRegistersByType, type),
   };
 }
 
@@ -65,18 +57,6 @@ export function getMachineType(machine = {}) {
 
 export function getDefaultRegisters(defaultRegistersByType, type) {
   return defaultRegistersByType?.[type] || [];
-}
-
-export function profileForType(type) {
-  return type === "leaktest" ? "LEAK_TEST" : "UBE_850T";
-}
-
-function cleanTemplateKey(value) {
-  return String(value || "")
-    .trim()
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
 }
 
 export function keyFromMachine(machine = {}) {
@@ -133,7 +113,6 @@ export function withRegisterDefaults(machine, defaultRegistersByType) {
     ...machine,
     machine_type: type,
     protocol: machine.protocol || "SLMP",
-    register_profile_key: machine.register_profile_key || profileForType(type),
     register_config: Array.isArray(machine.register_config) && machine.register_config.length
       ? machine.register_config
       : getDefaultRegisters(defaultRegistersByType, type),
@@ -238,7 +217,6 @@ export function MachineForm({
   testing,
   testResult,
   defaultRegistersByType,
-  registerTemplates,
   machineAssets = [],
   locationOptions = [],
   plantFilter = "",
@@ -260,27 +238,14 @@ export function MachineForm({
       machine_key: selected ? keyFromMachine(selected) : prev.machine_key,
       machine_name: selected ? selected.name || selected.machine_code : prev.machine_name,
       machine_type: nextType,
-      register_profile_key: firstTemplateForType(registerTemplates, nextType)?.template_key || profileForType(nextType),
-      register_config: selected ? (firstTemplateForType(registerTemplates, nextType)?.register_config || getDefaultRegisters(defaultRegistersByType, nextType)) : prev.register_config,
-    }));
-  };
-  const applyTemplate = (templateKey, forcedType = null) => {
-    const template = registerTemplates.find((item) => item.template_key === templateKey);
-    if (!template) return;
-    setDraft((prev) => ({
-      ...prev,
-      machine_type: forcedType || template.machine_type || prev.machine_type,
-      register_profile_key: template.template_key,
-      register_config: template.register_config || [],
+      register_config: selected ? getDefaultRegisters(defaultRegistersByType, nextType) : prev.register_config,
     }));
   };
   const setMachineType = (type) => {
-    const template = firstTemplateForType(registerTemplates, type);
     setDraft((prev) => ({
       ...prev,
       machine_type: type,
-      register_profile_key: template?.template_key || profileForType(type),
-      register_config: template?.register_config || getDefaultRegisters(defaultRegistersByType, type),
+      register_config: getDefaultRegisters(defaultRegistersByType, type),
     }));
   };
   const importRegisters = async (event) => {
@@ -322,18 +287,6 @@ export function MachineForm({
         };
       });
   }, [assetTypeFilter, locationOptions, machineAssets, plantFilter]);
-  const templateOptions = useMemo(() => {
-    const type = getMachineType(draft);
-    return registerTemplates
-      .filter((template) => template.machine_type === type)
-      .map((template) => ({
-        value: template.template_key,
-        label: template.template_name,
-        description: `${template.template_key} - ${(template.register_config || []).length} registers${template.is_system ? " - System" : ""}`,
-        keywords: `${template.template_key} ${template.template_name} ${template.notes || ""}`,
-      }));
-  }, [draft, registerTemplates]);
-
   return (
     <section className={cardClass}>
       <div className="border-b border-slate-100 px-5 py-4">
@@ -387,16 +340,6 @@ export function MachineForm({
                 <option value="ube">Die Casting / PLC</option>
                 <option value="leaktest">Leak Test</option>
               </select>
-            </label>
-            <label>
-              <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-slate-400">Register Template</span>
-              <SearchableSelect
-                value={draft.register_profile_key || ""}
-                options={templateOptions}
-                placeholder="Select template..."
-                inputClassName={inputClass}
-                onChange={(value) => applyTemplate(value)}
-              />
             </label>
             <label>
               <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-slate-400">Selected Machine Name</span>
@@ -584,7 +527,6 @@ export default function UbeMachineSetupPage({ onLogout, currentUser }) {
   const [machines, setMachines] = useState([]);
   const [machineAssets, setMachineAssets] = useState([]);
   const [locations, setLocations] = useState([]);
-  const [registerTemplates, setRegisterTemplates] = useState([]);
   const [defaultRegistersByType, setDefaultRegistersByType] = useState({ ube: [], leaktest: [] });
   const [draft, setDraft] = useState(DEFAULT_PLC_DRAFT);
   const [plantFilter, setPlantFilter] = useState("");
@@ -605,7 +547,6 @@ export default function UbeMachineSetupPage({ onLogout, currentUser }) {
     const assetRows = Array.isArray(machineResponse.data) ? machineResponse.data : machineResponse.data?.data || [];
     const locationRows = Array.isArray(locationResponse.data?.data) ? locationResponse.data.data : [];
     const defaults = response.data?.default_registers_by_type || { ube: response.data?.default_registers || [], leaktest: [] };
-    const templates = Array.isArray(response.data?.register_templates) ? response.data.register_templates : [];
     setDefaultRegistersByType(defaults);
     setMachines(rows);
     const activeLocationCodes = new Set(locationRows.filter(isActiveLocation).map((location) => String(location.code || "").trim()).filter(Boolean));
@@ -615,14 +556,13 @@ export default function UbeMachineSetupPage({ onLogout, currentUser }) {
     });
     setMachineAssets(activeLocationAssets);
     setLocations(locationRows.filter(isActiveLocation));
-    setRegisterTemplates(templates);
-    return { rows, defaults, templates };
+    return { rows, defaults };
   };
 
   useEffect(() => {
     setLoading(true);
     load()
-      .then(({ defaults, templates }) => setDraft(nextDraft([], "ube", defaults, templates)))
+      .then(({ defaults }) => setDraft(nextDraft([], "ube", defaults)))
       .catch((error) => toast.error(error.response?.data?.message || "Unable to load UBE machine setup"))
       .finally(() => setLoading(false));
   }, []);
@@ -672,13 +612,12 @@ export default function UbeMachineSetupPage({ onLogout, currentUser }) {
       await savePlcMachineConfig({
         ...draft,
         machine_type: type,
-        register_profile_key: draft.register_profile_key || profileForType(type),
         port: Number(draft.port || 5002),
         register_config: draft.register_config || getDefaultRegisters(defaultRegistersByType, type),
       });
       toast.success("PLC configuration saved. Monitor will pick it up automatically.");
-      const { rows, defaults, templates } = await load();
-      setDraft(nextDraft(rows, type, defaults, templates));
+      const { rows, defaults } = await load();
+      setDraft(nextDraft(rows, type, defaults));
       setTestResult(null);
     } catch (error) {
       toast.error(error.response?.data?.message || "Unable to save PLC configuration");
@@ -710,7 +649,7 @@ export default function UbeMachineSetupPage({ onLogout, currentUser }) {
   };
 
   const createNewMachine = () => {
-    setDraft(nextDraft(machines, getMachineType(draft), defaultRegistersByType, registerTemplates));
+    setDraft(nextDraft(machines, getMachineType(draft), defaultRegistersByType));
     setTestResult(null);
   };
 
@@ -737,7 +676,7 @@ export default function UbeMachineSetupPage({ onLogout, currentUser }) {
       await deletePlcMachineConfig(machine.id);
       toast.success(`${machine.machine_name} deleted from setup.`);
       const remaining = machines.filter((item) => item.id !== machine.id);
-      setDraft(nextDraft(remaining, getMachineType(draft), defaultRegistersByType, registerTemplates));
+      setDraft(nextDraft(remaining, getMachineType(draft), defaultRegistersByType));
       setTestResult(null);
       await load();
     } catch (error) {
@@ -752,31 +691,6 @@ export default function UbeMachineSetupPage({ onLogout, currentUser }) {
       ...current,
       register_config: importedRegisters,
     }));
-  };
-
-  const saveCurrentAsTemplate = async () => {
-    const name = window.prompt("Template name likho, jaise Leak Test - Vendor A");
-    if (!name) return;
-    try {
-      const type = getMachineType(draft);
-      const templateKey = cleanTemplateKey(name);
-      await savePlcRegisterTemplate({
-        template_key: templateKey,
-        template_name: name,
-        machine_type: type,
-        register_config: draft.register_config || getDefaultRegisters(defaultRegistersByType, type),
-        notes: `Created from ${draft.machine_name || machineTypeLabel(type)} PLC config`,
-      });
-      toast.success("Register template saved.");
-      const { templates } = await load();
-      setDraft((current) => ({
-        ...current,
-        register_profile_key: templateKey,
-        register_config: templates.find((template) => template.template_key === templateKey)?.register_config || current.register_config,
-      }));
-    } catch (error) {
-      toast.error(error.response?.data?.message || "Unable to save template");
-    }
   };
 
   return (
@@ -824,7 +738,6 @@ export default function UbeMachineSetupPage({ onLogout, currentUser }) {
           testing={testing}
           testResult={testResult}
           defaultRegistersByType={defaultRegistersByType}
-          registerTemplates={registerTemplates}
           machineAssets={machineAssets}
           locationOptions={locationOptions}
           plantFilter={plantFilter}
@@ -842,10 +755,9 @@ export default function UbeMachineSetupPage({ onLogout, currentUser }) {
           }))}
         />
         <div className="-mt-2 flex justify-end">
-          <button type="button" onClick={saveCurrentAsTemplate} className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-black text-blue-700 hover:bg-blue-100">
-            <Save className="h-4 w-4" />
-            Save Current Registers as Template
-          </button>
+          <p className="text-xs font-bold text-slate-400">
+            Register map is saved directly with this machine configuration.
+          </p>
         </div>
 
         <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">

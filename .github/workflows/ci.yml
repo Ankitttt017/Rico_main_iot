@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - master
+      - local
   pull_request:
     branches:
       - master
@@ -12,13 +13,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: rico-iot-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-check:
     name: Build frontend and check backend
-    runs-on: self-hosted
-    defaults:
-      run:
-        shell: cmd
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -26,26 +28,27 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: |
             Rico_main_iot/frontend/package-lock.json
             Rico_main_iot/backend/package-lock.json
 
-      - name: Install Rico IoT frontend dependencies
-        working-directory: ${{ github.workspace }}\Rico_main_iot\frontend
-        run: npm ci
-
-      - name: Build Rico IoT frontend
-        working-directory: ${{ github.workspace }}\Rico_main_iot\frontend
-        run: npm run build
-
-      - name: Install Rico IoT backend dependencies
-        working-directory: ${{ github.workspace }}\Rico_main_iot\backend
-        run: npm ci
-
-      - name: Check Rico IoT backend syntax
-        working-directory: ${{ github.workspace }}\Rico_main_iot\backend
+      - name: Install native SQL driver prerequisites
         run: |
+          sudo apt-get update
+          sudo apt-get install -y unixodbc-dev
+
+      - name: Install and build frontend
+        working-directory: Rico_main_iot/frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install and check backend
+        working-directory: Rico_main_iot/backend
+        run: |
+          npm ci
           node --check server.js
-          node --check src\modules\plcMonitor\plcMonitorService.js
+          node --check scripts/database-schema.js
+          node --check src/modules/plcMonitor/plcMonitorService.js

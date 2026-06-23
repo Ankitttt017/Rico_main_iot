@@ -8,8 +8,8 @@ export const normalizePlants = (rows = []) => {
     map.set(code, {
       id: plant.id || code,
       code,
-      name: code === "1002" ? "Gurugram Plant" : code === "1008" ? "Bawal Plant" : plant.name || `${code} Plant`,
-      location: code === "1002" ? "Gurugram, Haryana" : code === "1008" ? "Bawal, Haryana" : plant.location || "",
+      name: plant.name || `${code} Plant`,
+      location: plant.location || "",
     });
     return map;
   }, new Map());

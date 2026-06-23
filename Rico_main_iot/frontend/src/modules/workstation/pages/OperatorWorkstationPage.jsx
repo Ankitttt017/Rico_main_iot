@@ -22,6 +22,7 @@ import {
 import {
   getLineMachines,
   getLines,
+  getPlants,
   getPlcHistoryExportUrl,
   getPlcLatestReadings,
   getPlcReadingHistory,
@@ -30,12 +31,7 @@ import {
 } from "../../../services/api";
 import { SOCKET_URL } from "../../../services/endpoints";
 
-const PLANTS = [
-  { code: "1002", name: "Gurugram Plant", location: "Rico, Gurugram" },
-  { code: "1008", name: "Bawal Plant", location: "Rico, Bawal" },
-  { code: "PATHREDI", name: "Pathredi Plant", location: "Rico, Pathredi" },
-  { code: "CHENNAI", name: "Chennai Plant", location: "Rico, Chennai" },
-];
+const PLANTS = [];
 
 const DIVISION_OPTIONS = [
   { value: "", label: "All Departments" },
@@ -161,7 +157,8 @@ const PLC_REGISTER_GROUPS = [
 
 const PLC_TABLE_FIELD_NAMES = new Set(PLC_REGISTER_GROUPS.flatMap((group) => group.keys.map((item) => item.name)));
 
-const getPlantByCode = (code) => PLANTS.find((plant) => plant.code === code) || PLANTS[0];
+const getPlantByCode = (plants, code) =>
+  plants.find((plant) => plant.code === code) || { code, name: code || "Plant", location: "" };
 
 const SelectField = ({ label, value, onChange, children, theme = "light" }) => (
   <label className="block">
@@ -230,6 +227,15 @@ const formatTimeOnly = (value) => {
   });
 };
 
+const buildShotTimeFromReading = (row = {}) => {
+  if (!row) return "-";
+  if (row.shot_time) return formatTimeOnly(row.shot_time);
+  const parts = [row.shot_hour, row.shot_minute, row.shot_second]
+    .map((value) => (value === null || value === undefined || value === "" ? "" : String(value).padStart(2, "0")));
+  if (parts.every(Boolean)) return parts.join(":");
+  return formatTimeOnly(row.shot_datetime || row.recorded_at || row.created_at);
+};
+
 const getReadingValue = (reading, name) => {
   if (!reading) return null;
   return reading[name] ?? null;
@@ -249,7 +255,7 @@ const getPlcTableRows = (reading) => {
         : field.name === "shot_date"
           ? formatDateOnly(getReadingValue(reading, field.name))
           : field.name === "shot_time"
-            ? formatTimeOnly(getReadingValue(reading, field.name))
+            ? buildShotTimeFromReading(reading)
             : field.name === "shot_datetime"
               ? formatDateTime(getReadingValue(reading, field.name))
         : formatValue(getReadingValue(reading, field.name)),
@@ -280,7 +286,7 @@ const OldPlcMachineCard = ({ reading, machineInfo, lineInfo, theme = "light", cu
   const productionMetrics = [
     { label: "Cycle Time", value: reading?.cycle_time, unit: "s", icon: Timer, tone: successTone },
     { label: "Shot Date", value: formatDateOnly(reading?.shot_date), icon: ClipboardList, tone: successTone },
-    { label: "Shot Time", value: formatTimeOnly(reading?.shot_time), icon: Timer, tone: successTone },
+    { label: "Shot Time", value: buildShotTimeFromReading(reading), icon: Timer, tone: successTone },
     { label: "Shot Number", value: reading?.shot_number, icon: Activity, tone: successTone },
     { label: "OK Shot", value: reading?.ok_shot, icon: Gauge, tone: successTone },
     { label: "Clamp Tonnage", value: reading?.clamp_tonnage, unit: "T", icon: Gauge, tone: dangerTone },
@@ -456,7 +462,7 @@ const PlcMachineCard = ({ reading, machineInfo, lineInfo, onOpenTable, liveState
   const partLabel = workstationSummary?.part?.part_name || reading?.part_name || lineInfo?.part_name || machineInfo?.part_name || "No part assigned";
   const isBreakdown = liveState?.status === "breakdown";
   const elapsedMs = liveState?.elapsedMs || 0;
-  const cycleActual = getFirstValue(workstationSummary?.live?.cycle_time, reading?.cycle_time, reading?.actual_cycle_time, 0);
+  const cycleActual = getFirstValue(workstationSummary?.live?.cycle_time, reading?.cycle_time, 0);
   const cycleTarget = getFirstValue(workstationSummary?.part?.cycle_time_sec, reading?.target_cycle_time, reading?.standard_cycle_time, reading?.ideal_cycle_time, 0);
   const loadUnloadActual = getFirstValue(reading?.load_unload_time, reading?.load_unload_actual, 0);
   const loadUnloadTarget = getFirstValue(reading?.load_unload_target, reading?.target_load_unload_time, 0);
@@ -827,7 +833,7 @@ const PlcTableModal = ({ reading, theme = "dark", onClose }) => {
                     <tr key={row.id || `${row.plc_ip}-${row.recorded_at}`} className={isDark ? "hover:bg-white/5" : "hover:bg-slate-50"}>
                       <td className={`border-b px-3 py-3 font-bold ${isDark ? "border-zinc-900 text-zinc-200" : "border-slate-100 text-slate-700"}`}>{formatDateTime(row.recorded_at)}</td>
                       <td className={`border-b px-3 py-3 font-bold ${isDark ? "border-zinc-900 text-zinc-200" : "border-slate-100 text-slate-700"}`}>{formatDateOnly(row.shot_date)}</td>
-                      <td className={`border-b px-3 py-3 font-bold ${isDark ? "border-zinc-900 text-zinc-200" : "border-slate-100 text-slate-700"}`}>{formatTimeOnly(row.shot_time)}</td>
+                      <td className={`border-b px-3 py-3 font-bold ${isDark ? "border-zinc-900 text-zinc-200" : "border-slate-100 text-slate-700"}`}>{buildShotTimeFromReading(row)}</td>
                       <td className={`border-b px-3 py-3 font-black ${isDark ? "border-zinc-900 text-white" : "border-slate-100 text-slate-950"}`}>{formatValue(row.shot_number)}</td>
                       <td className={`border-b px-3 py-3 font-bold ${isDark ? "border-zinc-900 text-zinc-200" : "border-slate-100 text-slate-700"}`}>{formatValue(row.part_name)}</td>
                       <td className={`border-b px-3 py-3 font-black text-emerald-400 ${isDark ? "border-zinc-900" : "border-slate-100"}`}>{formatValue(row.cycle_time, "s")}</td>
@@ -846,7 +852,8 @@ const PlcTableModal = ({ reading, theme = "dark", onClose }) => {
 
 const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
   const theme = "dark";
-  const [selectedPlant, setSelectedPlant] = useState(PLANTS[0]);
+  const [plants, setPlants] = useState(PLANTS);
+  const [selectedPlant, setSelectedPlant] = useState(PLANTS[0] || null);
   const [divisionFilter, setDivisionFilter] = useState("HPDC");
   const [selectedLine, setSelectedLine] = useState("");
   const [selectedCell, setSelectedCell] = useState("");
@@ -874,6 +881,12 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
   const lastStatusRef = useRef({});
 
   const loadWorkstation = useCallback(async () => {
+    if (!selectedPlant?.code) {
+      setLines([]);
+      setMachinesByLine({});
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError("");
     try {
@@ -904,7 +917,28 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
     } finally {
       setLoading(false);
     }
-  }, [divisionFilter, selectedPlant.code]);
+  }, [divisionFilter, selectedPlant?.code]);
+
+  useEffect(() => {
+    getPlants()
+      .then((response) => {
+        const rows = Array.isArray(response.data?.data) ? response.data.data : [];
+        const activePlants = rows
+          .filter((plant) => plant?.is_active !== false && plant?.is_active !== 0)
+          .map((plant) => ({
+            code: String(plant.code || "").trim(),
+            name: plant.name || plant.code,
+            location: plant.location || plant.address || "",
+          }))
+          .filter((plant) => plant.code);
+        setPlants(activePlants);
+        setSelectedPlant((current) => activePlants.find((plant) => plant.code === current?.code) || activePlants[0] || null);
+      })
+      .catch(() => {
+        setPlants([]);
+        setSelectedPlant(null);
+      });
+  }, []);
 
   useEffect(() => {
     loadWorkstation();
@@ -1237,16 +1271,17 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
             </div>
           </div>
           <div className={`rounded-lg border px-3 py-2 text-sm font-bold ${isDark ? "border-zinc-800 bg-white/5 text-zinc-300" : "border-[#c9d8ea] bg-white/80 text-slate-600"}`}>
-            {selectedPlant.name} | {divisionFilter || "All Departments"} | {selectedLineData?.line_name || "Select Line"}
+            {selectedPlant?.name || "Select Plant"} | {divisionFilter || "All Departments"} | {selectedLineData?.line_name || "Select Line"}
           </div>
         </div>
 
         <div className="mb-5 grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(190px,1fr))] 2xl:[grid-template-columns:repeat(5,minmax(220px,280px))]">
-          <SelectField theme={theme} label="Select Plant" value={selectedPlant.code} onChange={(value) => {
-            setSelectedPlant(getPlantByCode(value));
+          <SelectField theme={theme} label="Select Plant" value={selectedPlant?.code || ""} onChange={(value) => {
+            setSelectedPlant(getPlantByCode(plants, value));
             setSelectedLine("");
           }}>
-            {PLANTS.map((plant) => <option key={plant.code} value={plant.code}>{plant.name}</option>)}
+            {!plants.length && <option value="">No plants available</option>}
+            {plants.map((plant) => <option key={plant.code} value={plant.code}>{plant.name}</option>)}
           </SelectField>
           <SelectField theme={theme} label="Select Department" value={divisionFilter} onChange={(value) => {
             setDivisionFilter(value);

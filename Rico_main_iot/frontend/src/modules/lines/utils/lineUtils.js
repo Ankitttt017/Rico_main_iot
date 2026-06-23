@@ -6,21 +6,24 @@ export const normalizeProtocolLabel = (protocol) => {
   return protocol || "SLMP";
 };
 
-export const getPlantByCode = (code) => PLANTS.find((plant) => plant.code === code) || PLANTS[0];
+export const getPlantByCode = (code) => {
+  const value = String(code || "").trim();
+  return PLANTS.find((plant) => plant.code === value) || { code: value, name: value || "Plant" };
+};
 
-export const getPlantCodeFromValue = (value, fallbackCode = "1002") => {
+export const getPlantCodeFromValue = (value, fallbackCode = "") => {
   const text = String(value || "").trim();
   if (!text) return fallbackCode;
   const byCode = PLANTS.find((plant) => plant.code === text);
   if (byCode) return byCode.code;
   const byName = PLANTS.find((plant) => text.toLowerCase().includes(plant.name.toLowerCase().split(" ")[0]));
   if (byName) return byName.code;
-  if (/bawal/i.test(text)) return "1008";
-  if (/gurugram|gurgaon/i.test(text)) return "1002";
+  const numericCode = text.match(/\b\d{3,10}\b/);
+  if (numericCode) return numericCode[0];
   return text || fallbackCode;
 };
 
-export const getLinePlantCode = (line = {}, fallbackCode = "1002") =>
+export const getLinePlantCode = (line = {}, fallbackCode = "") =>
   getPlantCodeFromValue(line.plant_code || line.plant, fallbackCode);
 
 export const divisionMatches = (lineDivision, selectedDivision) => {

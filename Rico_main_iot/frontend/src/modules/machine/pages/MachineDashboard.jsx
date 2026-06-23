@@ -8,6 +8,7 @@ import {
   deleteMachine,
   getDepartments,
   getLines,
+  getMachineById,
   getMachines,
   getPlants,
   getPlcMachineConfigs,
@@ -31,7 +32,6 @@ import {
   getMachineType as getPlcMachineType,
   inferAssetType,
   keyFromMachine,
-  profileForType,
   withRegisterDefaults,
 } from "../../plc-machines/UbeMachineSetupPage";
 
@@ -44,17 +44,23 @@ const makeMachineCode = (draft = {}) => {
   return base || `MACHINE-${Date.now()}`;
 };
 
+const normalizeLookupText = (value) => String(value || "")
+  .trim()
+  .replace(/^"+|"+$/g, "")
+  .toLowerCase();
+
 const MachineDashboard = ({ onLogout, currentUser }) => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [machines, setMachines]         = useState([]);
   const [plants, setPlants]             = useState(DEFAULT_PLANTS);
   const [departments, setDepartments]   = useState([]);
   const [lines, setLines]               = useState([]);
+  const [modalDepartments, setModalDepartments] = useState([]);
+  const [modalLines, setModalLines]     = useState([]);
   const [machineModalOpen, setMachineModalOpen] = useState(false);
   const [machineDraft, setMachineDraft] = useState(null);
   const [plcConfigs, setPlcConfigs]     = useState([]);
   const [plcDraft, setPlcDraft]         = useState(DEFAULT_PLC_DRAFT);
-  const [registerTemplates, setRegisterTemplates] = useState([]);
   const [defaultRegistersByType, setDefaultRegistersByType] = useState({ ube: [], leaktest: [] });
   const [plcTesting, setPlcTesting]     = useState(false);
   const [plcTestResult, setPlcTestResult] = useState(null);
@@ -67,7 +73,7 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
   const lastSuccessfulPlantRef          = useRef("");
 
   // Filters
-  const [plant, setPlant]               = useState("1002");
+  const [plant, setPlant]               = useState("");
   const [division, setDivision]         = useState("");
   const [line, setLine]                 = useState("");
   const [search, setSearch]             = useState(searchParams.get("search") || "");
@@ -115,17 +121,26 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
   const loadPlcSetup = useCallback(async () => {
     const response = await getPlcMachineConfigs();
     const defaults = response.data?.default_registers_by_type || { ube: response.data?.default_registers || [], leaktest: [] };
-    const templates = Array.isArray(response.data?.register_templates) ? response.data.register_templates : [];
     setPlcConfigs(Array.isArray(response.data?.data) ? response.data.data : []);
     setDefaultRegistersByType(defaults);
-    setRegisterTemplates(templates);
-    return { defaults, templates, configs: Array.isArray(response.data?.data) ? response.data.data : [] };
+    return { defaults, configs: Array.isArray(response.data?.data) ? response.data.data : [] };
+  }, []);
+
+  const loadMachineReferenceData = useCallback(async (plantCode = "") => {
+    const [departmentResponse, lineResponse] = await Promise.all([
+      getDepartments({ active: 1, plant: plantCode }),
+      getLines({ plant: plantCode }),
+    ]);
+    const nextDepartments = Array.isArray(departmentResponse.data?.data) ? departmentResponse.data.data : [];
+    const nextLines = Array.isArray(lineResponse.data?.data) ? lineResponse.data.data : [];
+    setModalDepartments(nextDepartments);
+    setModalLines(nextLines);
+    return { departments: nextDepartments, lines: nextLines };
   }, []);
 
   useEffect(() => {
     loadPlcSetup().catch(() => {
       setPlcConfigs([]);
-      setRegisterTemplates([]);
       setDefaultRegistersByType({ ube: [], leaktest: [] });
     });
   }, [loadPlcSetup]);
@@ -271,28 +286,56 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
     ];
   }, [division, enriched, line]);
 
+  const modalDepartmentRows = useMemo(() => {
+    const draftPlant = machineDraft?.plant_code || "";
+    const source = modalDepartments.length ? modalDepartments : baseDepartmentRows;
+    const plantSpecific = source.filter((department) =>
+      department.plant_code &&
+      String(department.plant_code).toUpperCase() === String(draftPlant).toUpperCase()
+    );
+    return plantSpecific.length
+      ? plantSpecific
+      : source.filter((department) => !department.plant_code || !draftPlant);
+  }, [baseDepartmentRows, machineDraft?.plant_code, modalDepartments]);
+
   const departmentOptions = useMemo(() => [
     { label: "Select Department", value: "" },
-    ...baseDepartmentRows.map((department) => ({ label: department.name, value: department.name })),
-  ], [baseDepartmentRows]);
+    ...modalDepartmentRows.map((department) => ({ label: department.name, value: department.name })),
+  ], [modalDepartmentRows]);
 
   const assignLineOptions = useMemo(() => {
     const selectedDepartment = machineDraft?.category || "";
+    const lineSource = modalLines.length ? modalLines : lines;
     const source = selectedDepartment
-      ? lines.filter((lineRow) => String(lineRow.division || "") === String(selectedDepartment))
-      : lines;
+      ? lineSource.filter((lineRow) => String(lineRow.division || "") === String(selectedDepartment))
+      : lineSource;
+    const selectedLineId = String(machineDraft?.line_id || "");
+    const selectedLine = selectedLineId
+      ? lineSource.find((lineRow) => String(lineRow.line_id) === selectedLineId) || {
+          line_id: selectedLineId,
+          line_name: machineDraft?.line_name || machineDraft?._lineName || `Line ${selectedLineId}`,
+          line_code: machineDraft?.line_code || "",
+          division: machineDraft?.category || "",
+          plant_code: machineDraft?.plant_code || "",
+        }
+      : null;
+    const rows = selectedLine && !source.some((lineRow) => String(lineRow.line_id) === selectedLineId)
+      ? [selectedLine, ...source]
+      : source;
     return [
       { label: "Select Line", value: "" },
-      ...source.map((lineRow) => ({
+      ...rows.map((lineRow) => ({
         label: lineRow.line_name || lineRow.line_code || `Line ${lineRow.line_id}`,
         value: String(lineRow.line_id),
       })),
     ];
-  }, [lines, machineDraft?.category]);
+  }, [lines, machineDraft?.category, machineDraft?.line_code, machineDraft?.line_id, machineDraft?.line_name, machineDraft?.plant_code, machineDraft?._lineName, modalLines]);
 
   const getSelectedLine = useCallback((lineId) =>
-    lines.find((lineRow) => String(lineRow.line_id) === String(lineId)) || null,
-  [lines]);
+    modalLines.find((lineRow) => String(lineRow.line_id) === String(lineId)) ||
+    lines.find((lineRow) => String(lineRow.line_id) === String(lineId)) ||
+    null,
+  [lines, modalLines]);
 
   const applyLineToDraft = useCallback((lineId) => {
     const selectedLine = getSelectedLine(lineId);
@@ -301,15 +344,16 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
       line_id: lineId,
       plant_code: selectedLine?.plant_code || current.plant_code,
       category: selectedLine?.division || current.category || "",
+      line_name: selectedLine?.line_name || current.line_name || "",
+      line_code: selectedLine?.line_code || current.line_code || "",
     }));
   }, [getSelectedLine]);
 
-  const buildPlcDraftForMachine = useCallback((machine, configs = plcConfigs, defaults = defaultRegistersByType, templates = registerTemplates) => {
+  const buildPlcDraftForMachine = useCallback((machine, configs = plcConfigs, defaults = defaultRegistersByType) => {
     const existing = configs.find((config) => String(config.machine_id || "") === String(machine?.id || ""));
     if (existing) return withRegisterDefaults(existing, defaults);
 
     const type = inferAssetType(machine);
-    const template = templates.find((item) => item.machine_type === type && item.is_active !== false);
     return {
       ...DEFAULT_PLC_DRAFT,
       machine_id: machine?.id || null,
@@ -317,16 +361,68 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
       machine_name: machine?.name || machine?.machine_code || "",
       plant_code: machine?.plant_code || plant,
       machine_type: type,
-      register_profile_key: template?.template_key || profileForType(type),
-      register_config: template?.register_config || getDefaultRegisters(defaults, type),
+      register_config: getDefaultRegisters(defaults, type),
     };
-  }, [defaultRegistersByType, plant, plcConfigs, registerTemplates]);
+  }, [defaultRegistersByType, plant, plcConfigs]);
 
-  const openCreateMachine = () => {
+  const findMachineForPlcConfig = useCallback(async (config = {}) => {
+    if (!config) return null;
+    if (config.machine_id) {
+      const response = await getMachineById(config.machine_id).catch(() => null);
+      const directMachine = response?.data?.data || null;
+      if (directMachine) return directMachine;
+    }
+
+    const configKey = normalizeLookupText(config.machine_key);
+    const configIp = normalizeLookupText(config.ip_address);
+    const configName = normalizeLookupText(config.machine_name);
+    const localMatch = machinesRef.current.find((item) => {
+      const itemKey = normalizeLookupText(keyFromMachine(item) || item.machine_key || item.machine_code);
+      const itemIp = normalizeLookupText(item.ip_address || item.plc_ip);
+      const itemName = normalizeLookupText(item.name || item.machine_name);
+      return (
+        (config.machine_id && String(item.id || "") === String(config.machine_id)) ||
+        (configKey && itemKey === configKey) ||
+        (configIp && itemIp === configIp) ||
+        (configName && itemName === configName)
+      );
+    });
+    if (localMatch) return localMatch;
+
+    const response = await getMachines({ plant: config.plant_code || plant }).catch(() => null);
+    const payload = Array.isArray(response?.data) ? response.data : response?.data?.data;
+    const rows = Array.isArray(payload) ? payload : [];
+    return rows.find((item) => {
+      const itemKey = normalizeLookupText(keyFromMachine(item) || item.machine_key || item.machine_code);
+      const itemIp = normalizeLookupText(item.ip_address || item.plc_ip);
+      const itemName = normalizeLookupText(item.name || item.machine_name);
+      return (
+        (config.machine_id && String(item.id || "") === String(config.machine_id)) ||
+        (configKey && itemKey === configKey) ||
+        (configIp && itemIp === configIp) ||
+        (configName && itemName === configName)
+      );
+    }) || null;
+  }, [plant]);
+
+  const findLineForMachine = useCallback((machine, sourceLines = []) => {
+    if (!machine) return null;
+    const machineLineId = String(machine.line_id || "");
+    const machineLineCode = String(machine.line_code || machine._lineCode || "");
+    const machineLineName = String(machine.line_name || machine._lineName || "");
+    return sourceLines.find((lineRow) =>
+      (machineLineId && String(lineRow.line_id) === machineLineId) ||
+      (machineLineCode && String(lineRow.line_code || "") === machineLineCode) ||
+      (machineLineName && String(lineRow.line_name || "") === machineLineName)
+    ) || null;
+  }, []);
+
+  const openCreateMachine = async () => {
+    const reference = await loadMachineReferenceData(plant).catch(() => ({ lines }));
     const availableLines = division
-      ? lines.filter((lineRow) => String(lineRow.division || "") === String(division))
-      : lines;
-    const firstLine = lines.find((lineRow) => String(lineRow.line_id) === String(line)) || availableLines[0] || null;
+      ? reference.lines.filter((lineRow) => String(lineRow.division || "") === String(division))
+      : reference.lines;
+    const firstLine = reference.lines.find((lineRow) => String(lineRow.line_id) === String(line)) || availableLines[0] || null;
     setMachineDraft({
       machine_code: "",
       name: "",
@@ -343,54 +439,73 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
       name: "",
       asset: "",
       category: firstLine?.division || division || "",
+      plant_code: firstLine?.plant_code || plant,
     }));
     setPlcTestResult(null);
     setMachineModalOpen(true);
   };
 
   const openEditMachine = async (machine) => {
-    if (machine?._plcOnly) {
-      const setup = await loadPlcSetup().catch(() => ({
+    let targetMachine = machine;
+    if (targetMachine?._plcOnly) {
+      const setupPromise = loadPlcSetup().catch(() => ({
         configs: plcConfigs,
         defaults: defaultRegistersByType,
-        templates: registerTemplates,
       }));
-      const config = setup.configs.find((item) => String(item.id || "") === String(machine._plcConfig?.id || "")) || machine._plcConfig;
+      const referencePromise = loadMachineReferenceData(targetMachine._plcConfig?.plant_code || targetMachine.plant_code || plant)
+        .catch(() => ({ lines }));
+      const [setup] = await Promise.all([setupPromise, referencePromise]);
+      const config = setup.configs.find((item) => String(item.id || "") === String(targetMachine._plcConfig?.id || "")) || targetMachine._plcConfig;
+      const linkedMachine = await findMachineForPlcConfig(config).catch(() => null);
+      if (linkedMachine) {
+        targetMachine = { ...linkedMachine, _plcConfig: config, _plcOnly: false };
+      }
+    }
+
+    if (targetMachine?._plcOnly) {
+      const config = targetMachine._plcConfig;
       const type = getPlcMachineType(config);
       setMachineDraft({
         id: config?.machine_id || null,
         machine_code: config?.machine_key || "",
-        name: config?.machine_name || machine.name || "",
+        name: config?.machine_name || targetMachine.name || "",
         category: "",
         plant_code: config?.plant_code || plant,
         line_id: "",
+        line_name: "",
+        line_code: "",
         asset: type === "leaktest" ? "Leak Test" : "Die Casting / PLC",
         cost_center: "",
         is_active: config?.is_active !== false,
       });
-      setPlcDraft(withRegisterDefaults(config, setup.defaults));
+      setPlcDraft(withRegisterDefaults(config, defaultRegistersByType));
       setPlcTestResult(null);
       setMachineModalOpen(true);
       return;
     }
 
-    setMachineDraft({
-      id: machine.id,
-      machine_code: machine.machine_code || "",
-      name: machine.name || "",
-      category: machine.category || machine.line_division || "",
-      plant_code: machine.plant_code || plant,
-      line_id: machine.line_id ? String(machine.line_id) : "",
-      asset: machine.asset || "",
-      cost_center: machine.cost_center || "",
-      is_active: machine.is_active !== false,
-    });
-    const setup = await loadPlcSetup().catch(() => ({
+    const machinePlant = targetMachine.plant_code || plant;
+    const referencePromise = loadMachineReferenceData(machinePlant).catch(() => ({ lines }));
+    const setupPromise = loadPlcSetup().catch(() => ({
       configs: plcConfigs,
       defaults: defaultRegistersByType,
-      templates: registerTemplates,
     }));
-    setPlcDraft(buildPlcDraftForMachine(machine, setup.configs, setup.defaults, setup.templates));
+    const [reference, setup] = await Promise.all([referencePromise, setupPromise]);
+    const selectedLine = findLineForMachine(targetMachine, reference.lines);
+    setMachineDraft({
+      id: targetMachine.id,
+      machine_code: targetMachine.machine_code || "",
+      name: targetMachine.name || "",
+      category: selectedLine?.division || targetMachine.line_division || targetMachine.category || "",
+      plant_code: selectedLine?.plant_code || machinePlant,
+      line_id: selectedLine?.line_id ? String(selectedLine.line_id) : (targetMachine.line_id ? String(targetMachine.line_id) : ""),
+      line_name: selectedLine?.line_name || targetMachine.line_name || targetMachine._lineName || "",
+      line_code: selectedLine?.line_code || targetMachine.line_code || targetMachine._lineCode || "",
+      asset: targetMachine.asset || "",
+      cost_center: targetMachine.cost_center || "",
+      is_active: targetMachine.is_active !== false,
+    });
+    setPlcDraft(buildPlcDraftForMachine(targetMachine, setup.configs, setup.defaults));
     setPlcTestResult(null);
     setMachineModalOpen(true);
   };
@@ -398,7 +513,7 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
   const saveMachine = async () => {
     try {
       if (!machineDraft.line_id) {
-        toast.error("Machine save karne se pehle line select karo");
+        toast.error("Select a line before saving the machine.");
         return;
       }
       const selectedLine = getSelectedLine(machineDraft.line_id);
@@ -418,7 +533,7 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
         hasExistingPlcConfig
       );
       if (hasPlcInput && !String(plcDraft.ip_address || "").trim()) {
-        toast.error("PLC config save karne ke liye PLC IP address required hai");
+        toast.error("PLC IP address is required before saving the PLC config.");
         return;
       }
 
@@ -440,7 +555,6 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
           machine_name: payload.name,
           plant_code: payload.plant_code,
           machine_type: type,
-          register_profile_key: plcDraft.register_profile_key || profileForType(type),
           port: Number(plcDraft.port || 5002),
           register_config: plcDraft.register_config || getDefaultRegisters(defaultRegistersByType, type),
         });
@@ -600,15 +714,27 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
                       label="Location / Plant"
                       value={machineDraft.plant_code}
                       onChange={(value) => {
-                        setPlant(value);
                         setMachineDraft((current) => ({ ...current, plant_code: value, category: "", line_id: "" }));
+                        loadMachineReferenceData(value).catch(() => {
+                          setModalDepartments([]);
+                          setModalLines([]);
+                        });
                       }}
                       options={plants}
                     />
                     <MachineSelect
                       label="Department"
                       value={machineDraft.category}
-                      onChange={(value) => setMachineDraft((current) => ({ ...current, category: value, line_id: "" }))}
+                      onChange={(value) => setMachineDraft((current) => {
+                        const matchingLine = modalLines.find((lineRow) => String(lineRow.division || "") === String(value));
+                        return {
+                          ...current,
+                          category: value,
+                          line_id: matchingLine?.line_id ? String(matchingLine.line_id) : "",
+                          line_name: matchingLine?.line_name || "",
+                          line_code: matchingLine?.line_code || "",
+                        };
+                      })}
                       options={departmentOptions}
                     />
                     <MachineSelect
@@ -626,7 +752,6 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
                         setPlcDraft((current) => ({
                           ...current,
                           machine_type: nextType,
-                          register_profile_key: current.register_profile_key || profileForType(nextType),
                         }));
                       }} placeholder="Die Casting / CNC / Leak Test" className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none focus:border-teal-500 focus:ring-4 focus:ring-teal-50" />
                     </label>
@@ -661,7 +786,6 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
                       testing={plcTesting}
                       testResult={plcTestResult}
                       defaultRegistersByType={defaultRegistersByType}
-                      registerTemplates={registerTemplates}
                       showMachineSelector={false}
                       showActions={false}
                       title="PLC Config / Tags"

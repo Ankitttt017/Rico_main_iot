@@ -6,6 +6,8 @@
   "scripts": {
     "start": "pm2 startOrRestart ../ecosystem.config.js --only rico-main-iot-backend --update-env",
     "dev": "pm2 startOrRestart ../ecosystem.config.js --only rico-main-iot-backend --update-env",
+    "db:init": "node scripts/database-schema.js --init",
+    "db:verify": "node scripts/database-schema.js",
     "restart": "pm2 restart rico-main-iot-backend --update-env",
     "stop": "pm2 stop rico-main-iot-backend",
     "logs": "pm2 logs rico-main-iot-backend"

@@ -1,4 +1,4 @@
-name: Rico IoT - Auto Deploy
+name: Rico IoT - Deploy Linux Production
 
 on:
   workflow_dispatch:
@@ -9,15 +9,24 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: rico-iot-linux-production
+  cancel-in-progress: false
+
 jobs:
   deploy:
-    name: Build and Deploy
-    runs-on: self-hosted
+    name: Build and deploy to 192.168.100.136
+    runs-on: [self-hosted, Linux, X64, rico-iot-production]
+    timeout-minutes: 20
     env:
-      PM2_HOME: C:\Users\IOT1\.pm2
-    defaults:
-      run:
-        shell: cmd
+      APP_SOURCE: ${{ github.workspace }}/Rico_main_iot
+      APP_DIR: /home/automation/apps/Rico_main_iot
+      WEB_ROOT: /var/www/rico-iot
+      PM2_HOME: /home/automation/.pm2
+      VITE_API_BASE_URL: /api
+      VITE_API_FALLBACK_BASE_URL: /api
+      VITE_SOCKET_URL: http://192.168.100.136
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -25,46 +34,61 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: |
             Rico_main_iot/frontend/package-lock.json
             Rico_main_iot/backend/package-lock.json
 
-      - name: Install Rico IoT Frontend Dependencies
-        working-directory: ${{ github.workspace }}\Rico_main_iot\frontend
-        run: npm ci
-
-      - name: Build Rico IoT Frontend
-        working-directory: ${{ github.workspace }}\Rico_main_iot\frontend
-        run: npm run build
-
-      - name: Copy Rico IoT Frontend Build
-        run: robocopy "${{ github.workspace }}\Rico_main_iot\frontend\dist" "C:\Users\IOT1\Desktop\Rico_Main_Iot_Production\Rico_main_iot\frontend\dist" /E & if %ERRORLEVEL% LEQ 7 exit /b 0 else exit /b %ERRORLEVEL%
-
-      - name: Install Rico IoT Backend Dependencies
-        working-directory: ${{ github.workspace }}\Rico_main_iot\backend
-        run: npm ci
-
-      - name: Check Rico IoT Backend Syntax
-        working-directory: ${{ github.workspace }}\Rico_main_iot\backend
+      - name: Build frontend
+        working-directory: Rico_main_iot/frontend
         run: |
+          npm ci
+          npm run build
+
+      - name: Check backend
+        working-directory: Rico_main_iot/backend
+        run: |
+          npm ci
           node --check server.js
-          node --check src\modules\plcMonitor\plcMonitorService.js
+          node --check scripts/database-schema.js
+          node --check src/modules/plcMonitor/plcMonitorService.js
 
-      - name: Copy Rico IoT Backend
-        run: robocopy "${{ github.workspace }}\Rico_main_iot\backend" "C:\Users\IOT1\Desktop\Rico_Main_Iot_Production\Rico_main_iot\backend" /E /XD node_modules .git /XF *.log .env & if %ERRORLEVEL% LEQ 7 exit /b 0 else exit /b %ERRORLEVEL%
+      - name: Sync backend without secrets or runtime data
+        run: |
+          mkdir -p "$APP_DIR/backend"
+          rsync -a --delete \
+            --exclude='.env' \
+            --exclude='node_modules/' \
+            --exclude='uploads/' \
+            --exclude='*.log' \
+            "$APP_SOURCE/backend/" "$APP_DIR/backend/"
+          cp "$APP_SOURCE/ecosystem.config.js" "$APP_DIR/ecosystem.config.js"
 
-      - name: Copy Rico IoT PM2 Config
-        run: copy /Y "${{ github.workspace }}\Rico_main_iot\ecosystem.config.js" "C:\Users\IOT1\Desktop\Rico_Main_Iot_Production\Rico_main_iot\ecosystem.config.js"
+      - name: Install production backend dependencies
+        working-directory: /home/automation/apps/Rico_main_iot/backend
+        run: npm ci --omit=dev
 
-      - name: Install Rico IoT Production Backend Dependencies
-        working-directory: C:\Users\IOT1\Desktop\Rico_Main_Iot_Production\Rico_main_iot\backend
-        run: npm install
+      - name: Apply and verify database schema
+        working-directory: /home/automation/apps/Rico_main_iot/backend
+        run: npm run db:init
 
-      - name: Restart Rico IoT Backend
-        working-directory: C:\Users\IOT1\Desktop\Rico_Main_Iot_Production\Rico_main_iot
-        run: C:\Users\IOT1\AppData\Roaming\npm\pm2.cmd startOrRestart ecosystem.config.js --only rico-main-iot-backend --update-env && C:\Users\IOT1\AppData\Roaming\npm\pm2.cmd save
+      - name: Publish frontend
+        run: rsync -a --delete "$APP_SOURCE/frontend/dist/" "$WEB_ROOT/"
 
-      - name: Reload Nginx
-        run: cd C:\nginx && nginx.exe -s reload
+      - name: Restart backend
+        working-directory: /home/automation/apps/Rico_main_iot
+        run: |
+          pm2 startOrRestart ecosystem.config.js --only rico-main-iot-backend --update-env
+          pm2 save
+
+      - name: Verify production health
+        run: |
+          for attempt in {1..10}; do
+            if curl --fail --silent http://127.0.0.1/api/health; then
+              exit 0
+            fi
+            sleep 3
+          done
+          pm2 logs rico-main-iot-backend --lines 50 --nostream
+          exit 1

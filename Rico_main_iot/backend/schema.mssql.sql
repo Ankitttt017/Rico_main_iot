@@ -1,6 +1,12 @@
 -- RICO IoT backend - SQL Server schema for IoT/master-data API tables.
--- Run this in SSMS against the database configured in backend/.env.
--- This script is non-destructive: it creates missing tables/indexes only.
+-- Run this against the database configured in backend/.env.
+-- The script is idempotent: it creates missing objects, adds required columns,
+-- and merges the application's baseline master data without dropping tables.
+
+SET XACT_ABORT ON;
+
+BEGIN TRY
+  BEGIN TRANSACTION;
 
 IF OBJECT_ID(N'dbo.iot_plants', N'U') IS NULL
 BEGIN
@@ -70,6 +76,59 @@ IF COL_LENGTH('dbo.line_master', 'created_at') IS NULL
   ALTER TABLE dbo.line_master ADD created_at DATETIME2 NOT NULL CONSTRAINT df_line_master_created_at DEFAULT SYSUTCDATETIME();
 IF COL_LENGTH('dbo.line_master', 'updated_at') IS NULL
   ALTER TABLE dbo.line_master ADD updated_at DATETIME2 NOT NULL CONSTRAINT df_line_master_updated_at DEFAULT SYSUTCDATETIME();
+
+IF OBJECT_ID(N'dbo.app_users', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.app_users (
+    id INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_app_users PRIMARY KEY,
+    username NVARCHAR(80) NOT NULL CONSTRAINT UQ_app_users_username UNIQUE,
+    display_name NVARCHAR(120) NULL,
+    full_name NVARCHAR(160) NULL,
+    employee_id NVARCHAR(60) NULL,
+    email NVARCHAR(160) NULL,
+    department NVARCHAR(120) NULL,
+    role NVARCHAR(40) NOT NULL,
+    password_hash NVARCHAR(256) NOT NULL,
+    permissions_json NVARCHAR(MAX) NULL,
+    landing_path NVARCHAR(160) NULL,
+    failed_attempts INT NOT NULL CONSTRAINT DF_app_users_failed_attempts DEFAULT 0,
+    locked_until DATETIME2 NULL,
+    force_password_change BIT NOT NULL CONSTRAINT DF_app_users_force_pwd DEFAULT 0,
+    is_active BIT NOT NULL CONSTRAINT DF_app_users_is_active DEFAULT 1,
+    created_at DATETIME2 NOT NULL CONSTRAINT DF_app_users_created_at DEFAULT SYSUTCDATETIME(),
+    updated_at DATETIME2 NOT NULL CONSTRAINT DF_app_users_updated_at DEFAULT SYSUTCDATETIME()
+  );
+END;
+
+IF OBJECT_ID(N'dbo.audit_log', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.audit_log (
+    id INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_audit_log PRIMARY KEY,
+    action NVARCHAR(80) NOT NULL,
+    performed_by NVARCHAR(120) NULL,
+    target_user NVARCHAR(120) NULL,
+    details NVARCHAR(MAX) NULL,
+    timestamp DATETIME2 NOT NULL CONSTRAINT DF_audit_log_timestamp DEFAULT SYSUTCDATETIME()
+  );
+END;
+
+IF OBJECT_ID(N'dbo.workstation_downtime_events', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.workstation_downtime_events (
+    id INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_workstation_downtime_events PRIMARY KEY,
+    machine_key NVARCHAR(120) NULL,
+    machine_name NVARCHAR(160) NULL,
+    plc_ip VARCHAR(50) NULL,
+    line_id INT NULL,
+    operator_name NVARCHAR(120) NULL,
+    reason NVARCHAR(120) NOT NULL,
+    status NVARCHAR(30) NOT NULL CONSTRAINT DF_workstation_downtime_status DEFAULT 'open',
+    started_at DATETIME2 NOT NULL CONSTRAINT DF_workstation_downtime_started_at DEFAULT SYSDATETIME(),
+    ended_at DATETIME2 NULL,
+    remarks NVARCHAR(500) NULL,
+    created_at DATETIME2 NOT NULL CONSTRAINT DF_workstation_downtime_created_at DEFAULT SYSUTCDATETIME()
+  );
+END;
 
 IF OBJECT_ID(N'dbo.iot_materials', N'U') IS NULL
 BEGIN
@@ -235,44 +294,6 @@ BEGIN
   );
 END;
 
-IF OBJECT_ID(N'dbo.iot_parts_master_bawal_raw', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.iot_parts_master_bawal_raw (
-    sl_no INT NULL,
-    material NVARCHAR(80) NULL,
-    material_description NVARCHAR(MAX) NULL,
-    plant NVARCHAR(20) NULL,
-    storage_location NVARCHAR(20) NULL,
-    unrestricted NVARCHAR(50) NULL,
-    base_unit_of_measure NVARCHAR(20) NULL,
-    quality_inspection NVARCHAR(50) NULL,
-    returns NVARCHAR(50) NULL,
-    material_type NVARCHAR(50) NULL,
-    material_group NVARCHAR(50) NULL
-  );
-END;
-
-IF OBJECT_ID(N'dbo.iot_machine_master_bawal_raw', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.iot_machine_master_bawal_raw (
-    sl_no INT NULL,
-    equipment NVARCHAR(80) NULL,
-    description NVARCHAR(MAX) NULL,
-    valid_to NVARCHAR(50) NULL,
-    maint_plant NVARCHAR(20) NULL,
-    location NVARCHAR(50) NULL,
-    plant_section NVARCHAR(100) NULL,
-    abc_indicator NVARCHAR(50) NULL,
-    asset NVARCHAR(100) NULL,
-    business_area NVARCHAR(100) NULL,
-    cost_center NVARCHAR(100) NULL,
-    functional_loc NVARCHAR(200) NULL,
-    serial_number NVARCHAR(100) NULL,
-    division NVARCHAR(100) NULL,
-    planning_plant NVARCHAR(20) NULL
-  );
-END;
-
 IF OBJECT_ID(N'dbo.iot_machines', N'U') IS NULL
 BEGIN
   CREATE TABLE dbo.iot_machines (
@@ -340,22 +361,6 @@ BEGIN
   );
 END;
 
-IF OBJECT_ID(N'dbo.[machine master Ggn (1002)]', N'U') IS NOT NULL
-   AND NOT EXISTS (SELECT 1 FROM dbo.iot_machine_master_raw)
-BEGIN
-  INSERT INTO dbo.iot_machine_master_raw (
-    old_equipment, s4hana, description, plant_code, asset, cost_center
-  )
-  SELECT
-    CONVERT(NVARCHAR(MAX), Old_Equipment),
-    CONVERT(NVARCHAR(MAX), S4hana),
-    Description,
-    CONVERT(NVARCHAR(MAX), Plant_Code),
-    CONVERT(NVARCHAR(MAX), Asset),
-    Cost_Center
-  FROM dbo.[machine master Ggn (1002)];
-END;
-
 IF OBJECT_ID(N'dbo.parts_master', N'U') IS NOT NULL
    AND NOT EXISTS (SELECT 1 FROM dbo.iot_parts_master_raw)
 BEGIN
@@ -409,17 +414,6 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'ux_iot_machine_operation
     ON dbo.iot_machine_operations (machine_id, part_code, operation_no)
     WHERE is_active = 1;
 
-MERGE dbo.iot_plants AS target
-USING (
-  SELECT '1002' AS code, 'Gurugram Plant' AS name, 'Gurugram, Haryana' AS location
-  UNION ALL SELECT '1008', 'Bawal Plant', 'Bawal, Haryana'
-) AS source
-ON target.code = source.code
-WHEN MATCHED THEN
-  UPDATE SET name = source.name, location = COALESCE(target.location, source.location)
-WHEN NOT MATCHED THEN
-  INSERT (code, name, location) VALUES (source.code, source.name, source.location);
-
 MERGE dbo.iot_departments AS target
 USING (
   SELECT 'HPDC' AS code, 'HPDC' AS name, NULL AS plant_code, 'High Pressure Die Casting' AS description
@@ -434,19 +428,29 @@ WHEN NOT MATCHED THEN
 
 MERGE dbo.iot_parts AS target
 USING (
-  SELECT
-    TRY_CONVERT(INT, NULLIF(sl_no, '')) AS sl_no,
-    NULLIF(material, '') AS material_code,
-    material_description,
-    plant,
-    storage_location,
-    base_unit_of_measure,
-    material_group,
-    TRY_CONVERT(DECIMAL(10,2), NULLIF(cycle_time, '')) AS cycle_time_sec,
-    customer,
-    manufacturing_type
-  FROM dbo.iot_parts_master_raw
-  WHERE NULLIF(material, '') IS NOT NULL
+  SELECT sl_no, material_code, material_description, plant, storage_location,
+         base_unit_of_measure, material_group, cycle_time_sec, customer, manufacturing_type
+  FROM (
+    SELECT
+      TRY_CONVERT(INT, NULLIF(sl_no, '')) AS sl_no,
+      NULLIF(material, '') AS material_code,
+      material_description,
+      plant,
+      storage_location,
+      base_unit_of_measure,
+      material_group,
+      TRY_CONVERT(DECIMAL(10,2), NULLIF(cycle_time, '')) AS cycle_time_sec,
+      customer,
+      manufacturing_type,
+      ROW_NUMBER() OVER (
+        PARTITION BY NULLIF(material, '')
+        ORDER BY CASE WHEN NULLIF(material_description, '') IS NULL THEN 1 ELSE 0 END,
+                 TRY_CONVERT(INT, NULLIF(sl_no, ''))
+      ) AS rn
+    FROM dbo.iot_parts_master_raw
+    WHERE NULLIF(material, '') IS NOT NULL
+  ) deduped_parts
+  WHERE rn = 1
 ) AS source
 ON target.material_code = source.material_code
 WHEN NOT MATCHED THEN
@@ -462,82 +466,23 @@ WHEN NOT MATCHED THEN
 
 MERGE dbo.iot_part_plants AS target
 USING (
-  SELECT
-    NULLIF(material, '') AS part_code,
-    NULLIF(plant, '') AS plant_code,
-    storage_location,
-    base_unit_of_measure AS unit_of_measure,
-    NULL AS material_type,
-    material_group
-  FROM dbo.iot_parts_master_raw
-  WHERE NULLIF(material, '') IS NOT NULL
-    AND NULLIF(plant, '') IS NOT NULL
-) AS source
-ON target.part_code = source.part_code AND target.plant_code = source.plant_code
-WHEN MATCHED THEN
-  UPDATE SET
-    storage_location = source.storage_location,
-    unit_of_measure = source.unit_of_measure,
-    material_group = source.material_group,
-    updated_at = SYSUTCDATETIME()
-WHEN NOT MATCHED THEN
-  INSERT (part_code, plant_code, storage_location, unit_of_measure, material_type, material_group)
-  VALUES (source.part_code, source.plant_code, source.storage_location, source.unit_of_measure, source.material_type, source.material_group);
-
-MERGE dbo.iot_parts AS target
-USING (
-  SELECT sl_no, material_code, material_description, plant, storage_location,
-         base_unit_of_measure, material_group, material_type
-  FROM (
-    SELECT
-      sl_no,
-      NULLIF(CONVERT(VARCHAR(40), material), '') AS material_code,
-      material_description,
-      NULLIF(CONVERT(VARCHAR(20), plant), '') AS plant,
-      storage_location,
-      base_unit_of_measure,
-      material_group,
-      material_type,
-      ROW_NUMBER() OVER (
-        PARTITION BY NULLIF(CONVERT(VARCHAR(40), material), '')
-        ORDER BY CASE WHEN NULLIF(material_description, '') IS NULL THEN 1 ELSE 0 END, sl_no
-      ) AS rn
-    FROM dbo.iot_parts_master_bawal_raw
-    WHERE NULLIF(CONVERT(VARCHAR(40), material), '') IS NOT NULL
-      AND NULLIF(CONVERT(VARCHAR(20), plant), '') = '1008'
-  ) deduped_parts
-  WHERE rn = 1
-) AS source
-ON target.material_code = source.material_code
-WHEN NOT MATCHED THEN
-  INSERT (
-    sl_no, material_code, description, plant_code, storage_location, unit_of_measure,
-    material_group, manufacturing_type, status
-  )
-  VALUES (
-    source.sl_no, source.material_code, source.material_description, source.plant,
-    source.storage_location, source.base_unit_of_measure, source.material_group,
-    source.material_type, 'ENABLED'
-  );
-
-MERGE dbo.iot_part_plants AS target
-USING (
   SELECT part_code, plant_code, storage_location, unit_of_measure, material_type, material_group
   FROM (
     SELECT
-      NULLIF(CONVERT(VARCHAR(40), material), '') AS part_code,
-      NULLIF(CONVERT(VARCHAR(20), plant), '') AS plant_code,
+      NULLIF(material, '') AS part_code,
+      NULLIF(plant, '') AS plant_code,
       storage_location,
       base_unit_of_measure AS unit_of_measure,
-      material_type,
+      CAST(NULL AS VARCHAR(50)) AS material_type,
       material_group,
       ROW_NUMBER() OVER (
-        PARTITION BY NULLIF(CONVERT(VARCHAR(40), material), ''), NULLIF(CONVERT(VARCHAR(20), plant), '')
-        ORDER BY CASE WHEN NULLIF(material_description, '') IS NULL THEN 1 ELSE 0 END, sl_no
+        PARTITION BY NULLIF(material, ''), NULLIF(plant, '')
+        ORDER BY CASE WHEN NULLIF(material_description, '') IS NULL THEN 1 ELSE 0 END,
+                 TRY_CONVERT(INT, NULLIF(sl_no, ''))
       ) AS rn
-    FROM dbo.iot_parts_master_bawal_raw
-    WHERE NULLIF(CONVERT(VARCHAR(40), material), '') IS NOT NULL
-      AND NULLIF(CONVERT(VARCHAR(20), plant), '') = '1008'
+    FROM dbo.iot_parts_master_raw
+    WHERE NULLIF(material, '') IS NOT NULL
+      AND NULLIF(plant, '') IS NOT NULL
   ) deduped_part_plants
   WHERE rn = 1
 ) AS source
@@ -546,7 +491,6 @@ WHEN MATCHED THEN
   UPDATE SET
     storage_location = source.storage_location,
     unit_of_measure = source.unit_of_measure,
-    material_type = source.material_type,
     material_group = source.material_group,
     updated_at = SYSUTCDATETIME()
 WHEN NOT MATCHED THEN
@@ -586,42 +530,6 @@ ON target.machine_code = source.machine_code
 WHEN MATCHED THEN
   UPDATE SET
     name = source.name,
-    plant_code = source.plant_code,
-    asset = source.asset,
-    cost_center = source.cost_center
-WHEN NOT MATCHED THEN
-  INSERT (machine_code, name, category, plant_code, asset, cost_center)
-  VALUES (source.machine_code, source.name, source.category, source.plant_code, source.asset, source.cost_center);
-
-MERGE dbo.iot_machines AS target
-USING (
-  SELECT machine_code, name, category, plant_code, asset, cost_center
-  FROM (
-    SELECT
-      NULLIF(CONVERT(VARCHAR(80), equipment), '') AS machine_code,
-      COALESCE(NULLIF(CONVERT(VARCHAR(200), description), ''), NULLIF(CONVERT(VARCHAR(80), equipment), '')) AS name,
-      COALESCE(NULLIF(CONVERT(VARCHAR(80), plant_section), ''), 'Machine') AS category,
-      '1008' AS plant_code,
-      NULLIF(asset, '') AS asset,
-      NULLIF(cost_center, '') AS cost_center,
-      ROW_NUMBER() OVER (
-        PARTITION BY NULLIF(CONVERT(VARCHAR(80), equipment), '')
-        ORDER BY CASE WHEN NULLIF(CONVERT(VARCHAR(200), description), '') IS NULL THEN 1 ELSE 0 END, sl_no
-      ) AS rn
-    FROM dbo.iot_machine_master_bawal_raw
-    WHERE NULLIF(CONVERT(VARCHAR(80), equipment), '') IS NOT NULL
-      AND (
-        NULLIF(CONVERT(VARCHAR(20), maint_plant), '') = '1008'
-        OR CONVERT(VARCHAR(20), planning_plant) LIKE '%1008%'
-      )
-  ) deduped_machines
-  WHERE rn = 1
-) AS source
-ON target.machine_code = source.machine_code
-WHEN MATCHED THEN
-  UPDATE SET
-    name = source.name,
-    category = source.category,
     plant_code = source.plant_code,
     asset = source.asset,
     cost_center = source.cost_center
@@ -692,71 +600,100 @@ BEGIN
     [plc_ip] NVARCHAR(45) NULL,
     [plc_port] INT NULL,
     [part_name] NVARCHAR(100) NULL,
-    [shot_year] INT NULL,
-    [shot_month] INT NULL,
-    [shot_day] INT NULL,
+    [shot_year] NVARCHAR(2) NULL,
+    [shot_month] NVARCHAR(2) NULL,
+    [shot_day] NVARCHAR(2) NULL,
     [shot_date] DATE NULL,
-    [shot_hour] INT NULL,
-    [shot_minute] INT NULL,
-    [shot_second] INT NULL,
-    [shot_time] TIME(0) NULL,
+    [shot_hour] NVARCHAR(2) NULL,
+    [shot_minute] NVARCHAR(2) NULL,
+    [shot_second] NVARCHAR(2) NULL,
     [shot_datetime] DATETIME2(0) NULL,
-    [Sr. No] INT NULL,
     [Counter] INT NULL,
-    [cycletime EndDateTime] NVARCHAR(30) NULL,
-    [cycletime value (sec)] DECIMAL(18,2) NULL,
-    [DIE CLOSE/CORE IN -step value (sec)] DECIMAL(18,2) NULL,
-    [AUTO/OK-step value (sec)] DECIMAL(18,2) NULL,
-    [POURING -step value (sec)] DECIMAL(18,2) NULL,
-    [SHOT FWD -step value (sec)] DECIMAL(18,2) NULL,
-    [COOLING -step value (sec)] DECIMAL(18,2) NULL,
-    [DIE OPEN/CORE OUT -step value (sec)] DECIMAL(18,2) NULL,
-    [EXTRACTOR -step value (sec)] DECIMAL(18,2) NULL,
-    [EJECTOR -step value (sec)] DECIMAL(18,2) NULL,
-    [SPRAY -step value (sec)] DECIMAL(18,2) NULL,
-    [HIGH SHOT COUNT value] INT NULL,
-    [NG COUNTER value] INT NULL,
-    [V1 m/sec value] DECIMAL(18,2) NULL,
-    [V2 m/sec) value] DECIMAL(18,2) NULL,
-    [V3 m/sec value] DECIMAL(18,2) NULL,
-    [ACCEL. POINT mm value] DECIMAL(18,2) NULL,
-    [DEACEL. POINT mm value] DECIMAL(18,2) NULL,
-    [METAL PRESS. Mpa value] DECIMAL(18,2) NULL,
-    [INTEN. TIME msec value] DECIMAL(18,2) NULL,
-    [BISCUIT THICKNESS mm value] DECIMAL(18,2) NULL,
-    [CLAMP TONNAGE(HE.LOW) % value] DECIMAL(18,2) NULL,
-    [CLAMP TONNAGE(HE.LOW) MN value] DECIMAL(18,2) NULL,
-    [CLAMP TONNAGE(OP.LOW) % value] DECIMAL(18,2) NULL,
-    [CLAMP TONNAGE(HE.UP) % value] DECIMAL(18,2) NULL,
-    [VACUUM PRESSURE mbar value] DECIMAL(18,2) NULL,
-    [COOLING WATER FLOW RATE(MOV.) L/min value] DECIMAL(18,2) NULL,
-    [COOLING WATER FLOW RATE(STA.) L/min value] DECIMAL(18,2) NULL,
-    [FURNACE METAL TEMP. C value] DECIMAL(18,2) NULL,
-    [DIE-CLOSE CORE IN TIME sec value] DECIMAL(18,2) NULL,
-    [POURING TIME sec value] DECIMAL(18,2) NULL,
-    [CURING TIME sec value] DECIMAL(18,2) NULL,
-    [DIE OPEN CORE OUT TIME sec value] DECIMAL(18,2) NULL,
-    [EJECTOR TIME sec value] DECIMAL(18,2) NULL,
-    [EXTRACT TIME sec value] DECIMAL(18,2) NULL,
-    [SPRAY TIME sec value] DECIMAL(18,2) NULL,
-    [CLAMP FORCE (%) value] DECIMAL(18,2) NULL,
-    [CLAMP TONNAGE (T) value] DECIMAL(18,2) NULL,
-    [SHOT ACC. PRESSURE MPa value] DECIMAL(18,2) NULL,
-    [INTENSIFICATION ACC. PRESSURE MPa value] DECIMAL(18,2) NULL,
-    [JET COOLING PRESSURE kgf/cm2 value] DECIMAL(18,2) NULL,
-    [FIXED DIE TEMP (F-1) C value] DECIMAL(18,2) NULL,
-    [FIXED DIE TEMP (F-2) C value] DECIMAL(18,2) NULL,
-    [MOVING DIE TEMP (M-1) C value] DECIMAL(18,2) NULL,
-    [MOVING DIE TEMP (M-2) C value] DECIMAL(18,2) NULL,
-    [SLIDE TEMP-1 (S-1) C value] DECIMAL(18,2) NULL,
-    [V4 m/sec value] DECIMAL(18,2) NULL,
-    [CLAMP TONNAGE(OP.UP) % value] DECIMAL(18,2) NULL,
-    [SHOT FWD TIME sec value] DECIMAL(18,2) NULL,
-    [AUTO/ROBOT/OK-step value (sec)] DECIMAL(18,2) NULL,
-    [MANUAL MODE -step value (sec)] INT NULL,
-    [EMG. STOP -step value (sec)] INT NULL,
-    [HYD.OIL LEVEL LOW LIMIT -step value (sec)] INT NULL,
     [raw_readings_json] NVARCHAR(MAX) NULL,
+    [shot_number] INT NULL,
+    [ok_shot] INT NULL,
+    [ng_counter] INT NULL,
+    [cycle_start_time] DATETIME2(3) NULL,
+    [cycle_end_time] DATETIME2(3) NULL,
+    [minor_stoppage_machine] DECIMAL(18,2) NULL,
+    [cycle_time] DECIMAL(18,2) NULL,
+    [minor_stoppage] DECIMAL(18,2) NULL,
+    [cycle_end] INT NULL,
+    [Cycle Start] INT NULL,
+    [die_close_core_in_time_status] INT NULL,
+    [pouring_time_status] INT NULL,
+    [shot_fwd_time_status] INT NULL,
+    [curing_time_status] INT NULL,
+    [die_open_core_out_time_status] INT NULL,
+    [ejector_time_status] INT NULL,
+    [extract_time_status] INT NULL,
+    [spray_time_status] INT NULL,
+    [v1_speed_status] INT NULL,
+    [v2_speed_status] INT NULL,
+    [v3_speed_status] INT NULL,
+    [v4_speed_status] INT NULL,
+    [metal_pressure_status] INT NULL,
+    [furnace_metal_temp_status] INT NULL,
+    [cooling_water_mov_status] INT NULL,
+    [cooling_water_sta_status] INT NULL,
+    [accel_point_status] INT NULL,
+    [deaccel_point_status] INT NULL,
+    [intensification_time_status] INT NULL,
+    [biscuit_thickness_status] INT NULL,
+    [jet_cooling_pressure_status] INT NULL,
+    [clamp_tonnage_he_low_pct_status] INT NULL,
+    [clamp_tonnage_he_low_mn_status] INT NULL,
+    [clamp_tonnage_op_up_pct_status] INT NULL,
+    [clamp_tonnage_op_low_pct_status] INT NULL,
+    [clamp_tonnage_he_up_pct_status] INT NULL,
+    [vacuum_pressure_status] INT NULL,
+    [die_close_core_in_time] DECIMAL(18,2) NULL,
+    [pouring_time] DECIMAL(18,2) NULL,
+    [shot_fwd_time] DECIMAL(18,2) NULL,
+    [curing_time] DECIMAL(18,2) NULL,
+    [die_open_core_out_time] DECIMAL(18,2) NULL,
+    [ejector_time] DECIMAL(18,2) NULL,
+    [extract_time] DECIMAL(18,2) NULL,
+    [spray_time] DECIMAL(18,2) NULL,
+    [v1_speed] DECIMAL(18,2) NULL,
+    [v2_speed] DECIMAL(18,2) NULL,
+    [v3_speed] DECIMAL(18,2) NULL,
+    [v4_speed] DECIMAL(18,2) NULL,
+    [metal_pressure] DECIMAL(18,2) NULL,
+    [furnace_metal_temp] DECIMAL(18,2) NULL,
+    [cooling_water_mov] DECIMAL(18,2) NULL,
+    [cooling_water_sta] DECIMAL(18,2) NULL,
+    [accel_point] DECIMAL(18,2) NULL,
+    [deaccel_point] DECIMAL(18,2) NULL,
+    [intensification_time] DECIMAL(18,2) NULL,
+    [biscuit_thickness] DECIMAL(18,2) NULL,
+    [jet_cooling_pressure] DECIMAL(18,2) NULL,
+    [clamp_tonnage_he_low_pct] DECIMAL(18,2) NULL,
+    [clamp_tonnage_he_low_mn] DECIMAL(18,2) NULL,
+    [clamp_tonnage_op_up_pct] DECIMAL(18,2) NULL,
+    [clamp_tonnage_op_low_pct] DECIMAL(18,2) NULL,
+    [clamp_tonnage_he_up_pct] DECIMAL(18,2) NULL,
+    [vacuum_pressure] DECIMAL(18,2) NULL,
+    [clamp_force_pct] DECIMAL(18,2) NULL,
+    [clamp_tonnage] DECIMAL(18,2) NULL,
+    [shot_acc_pressure] DECIMAL(18,2) NULL,
+    [intensification_acc_pressure] DECIMAL(18,2) NULL,
+    [fixed_die_temp_f1] DECIMAL(18,2) NULL,
+    [fixed_die_temp_f2] DECIMAL(18,2) NULL,
+    [moving_die_temp_m1] DECIMAL(18,2) NULL,
+    [moving_die_temp_m2] DECIMAL(18,2) NULL,
+    [slide_temp_s1] DECIMAL(18,2) NULL,
+    [fix_1_flow] DECIMAL(18,2) NULL,
+    [fix_2_flow] DECIMAL(18,2) NULL,
+    [fix_3_flow] DECIMAL(18,2) NULL,
+    [mov_1_flow] DECIMAL(18,2) NULL,
+    [mov_2_flow] DECIMAL(18,2) NULL,
+    [mov_3_flow] DECIMAL(18,2) NULL,
+    [vacuum_pressure_mmhg] DECIMAL(18,2) NULL,
+    [average_die_clamp_tonnage_count] INT NULL,
+    [time_for_stroke] INT NULL,
+    [stroke] DECIMAL(18,2) NULL,
+    [shot_status] INT NULL,
     CONSTRAINT [PK_PlcCycleReadings] PRIMARY KEY CLUSTERED ([id] DESC)
   );
 END;
@@ -766,23 +703,257 @@ IF COL_LENGTH('dbo.PlcCycleReadings', 'raw_readings_json') IS NULL
 IF COL_LENGTH('dbo.PlcCycleReadings', 'machine_key') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [machine_key] NVARCHAR(80) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_year') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [shot_year] INT NULL;
+  ALTER TABLE dbo.PlcCycleReadings ADD [shot_year] NVARCHAR(2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_month') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [shot_month] INT NULL;
+  ALTER TABLE dbo.PlcCycleReadings ADD [shot_month] NVARCHAR(2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_day') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [shot_day] INT NULL;
+  ALTER TABLE dbo.PlcCycleReadings ADD [shot_day] NVARCHAR(2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_date') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [shot_date] DATE NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_hour') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [shot_hour] INT NULL;
+  ALTER TABLE dbo.PlcCycleReadings ADD [shot_hour] NVARCHAR(2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_minute') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [shot_minute] INT NULL;
+  ALTER TABLE dbo.PlcCycleReadings ADD [shot_minute] NVARCHAR(2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_second') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [shot_second] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_time') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [shot_time] TIME(0) NULL;
+  ALTER TABLE dbo.PlcCycleReadings ADD [shot_second] NVARCHAR(2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_datetime') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [shot_datetime] DATETIME2(0) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'Counter') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [Counter] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_number') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [shot_number] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'ok_shot') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [ok_shot] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'ng_counter') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [ng_counter] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'cycle_start_time') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [cycle_start_time] DATETIME2(3) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'cycle_end_time') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [cycle_end_time] DATETIME2(3) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'cycle_end') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [cycle_end] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'minor_stoppage_machine') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [minor_stoppage_machine] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'cycle_time') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [cycle_time] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'minor_stoppage') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [minor_stoppage] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'Cycle Start') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [Cycle Start] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'die_close_core_in_time_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [die_close_core_in_time_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'pouring_time_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [pouring_time_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_fwd_time_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [shot_fwd_time_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'curing_time_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [curing_time_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'die_open_core_out_time_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [die_open_core_out_time_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'ejector_time_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [ejector_time_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'extract_time_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [extract_time_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'spray_time_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [spray_time_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'v1_speed_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [v1_speed_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'v2_speed_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [v2_speed_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'v3_speed_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [v3_speed_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'v4_speed_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [v4_speed_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'metal_pressure_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [metal_pressure_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'furnace_metal_temp_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [furnace_metal_temp_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'cooling_water_mov_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [cooling_water_mov_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'cooling_water_sta_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [cooling_water_sta_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'accel_point_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [accel_point_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'deaccel_point_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [deaccel_point_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'intensification_time_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [intensification_time_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'biscuit_thickness_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [biscuit_thickness_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'jet_cooling_pressure_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [jet_cooling_pressure_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_he_low_pct_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_he_low_pct_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_he_low_mn_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_he_low_mn_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_op_up_pct_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_op_up_pct_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_op_low_pct_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_op_low_pct_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_he_up_pct_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_he_up_pct_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'vacuum_pressure_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [vacuum_pressure_status] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'die_close_core_in_time') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [die_close_core_in_time] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'pouring_time') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [pouring_time] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_fwd_time') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [shot_fwd_time] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'curing_time') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [curing_time] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'die_open_core_out_time') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [die_open_core_out_time] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'ejector_time') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [ejector_time] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'extract_time') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [extract_time] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'spray_time') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [spray_time] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'v1_speed') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [v1_speed] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'v2_speed') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [v2_speed] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'v3_speed') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [v3_speed] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'v4_speed') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [v4_speed] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'metal_pressure') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [metal_pressure] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'furnace_metal_temp') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [furnace_metal_temp] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'cooling_water_mov') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [cooling_water_mov] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'cooling_water_sta') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [cooling_water_sta] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'accel_point') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [accel_point] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'deaccel_point') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [deaccel_point] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'intensification_time') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [intensification_time] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'biscuit_thickness') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [biscuit_thickness] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'jet_cooling_pressure') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [jet_cooling_pressure] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_he_low_pct') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_he_low_pct] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_he_low_mn') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_he_low_mn] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_op_up_pct') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_op_up_pct] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_op_low_pct') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_op_low_pct] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_he_up_pct') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_he_up_pct] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'vacuum_pressure') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [vacuum_pressure] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_force_pct') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_force_pct] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_acc_pressure') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [shot_acc_pressure] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'intensification_acc_pressure') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [intensification_acc_pressure] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'fixed_die_temp_f1') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [fixed_die_temp_f1] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'fixed_die_temp_f2') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [fixed_die_temp_f2] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'moving_die_temp_m1') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [moving_die_temp_m1] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'moving_die_temp_m2') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [moving_die_temp_m2] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'slide_temp_s1') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [slide_temp_s1] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'fix_1_flow') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [fix_1_flow] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'fix_2_flow') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [fix_2_flow] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'fix_3_flow') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [fix_3_flow] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'mov_1_flow') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [mov_1_flow] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'mov_2_flow') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [mov_2_flow] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'mov_3_flow') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [mov_3_flow] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'vacuum_pressure_mmhg') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [vacuum_pressure_mmhg] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'average_die_clamp_tonnage_count') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [average_die_clamp_tonnage_count] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'time_for_stroke') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [time_for_stroke] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'stroke') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [stroke] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_status') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [shot_status] INT NULL;
+
+IF OBJECT_ID(N'dbo.PlcConnectionEventsIdSeq', N'SO') IS NULL
+BEGIN
+  EXEC(N'CREATE SEQUENCE dbo.PlcConnectionEventsIdSeq AS BIGINT START WITH 1 INCREMENT BY 1');
+END;
+
+IF OBJECT_ID(N'dbo.PlcConnectionEvents', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.PlcConnectionEvents (
+    [id] BIGINT NOT NULL CONSTRAINT [DF_PlcConnectionEvents_id] DEFAULT NEXT VALUE FOR dbo.PlcConnectionEventsIdSeq,
+    [machine_key] NVARCHAR(80) NULL,
+    [machine_name] NVARCHAR(100) NULL,
+    [plc_ip] NVARCHAR(45) NULL,
+    [plc_port] INT NULL,
+    [event_type] NVARCHAR(40) NOT NULL,
+    [started_at] DATETIME2(3) NOT NULL,
+    [ended_at] DATETIME2(3) NULL,
+    [duration_seconds] INT NULL,
+    [reason] NVARCHAR(400) NULL,
+    [created_at] DATETIME2(3) NOT NULL CONSTRAINT [DF_PlcConnectionEvents_created_at] DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT [PK_PlcConnectionEvents] PRIMARY KEY CLUSTERED ([id] DESC)
+  );
+END;
+
+IF OBJECT_ID(N'dbo.Leaktest', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.Leaktest (
+    [Id] INT IDENTITY(1,1) NOT NULL CONSTRAINT [PK_Leaktest] PRIMARY KEY,
+    [Machine] NVARCHAR(100) NOT NULL,
+    [PLC_IP] NVARCHAR(50) NOT NULL,
+    [Status] NVARCHAR(50) NOT NULL,
+    [Cycle_End_Time] DATETIME NOT NULL,
+    [Part_QR_Code] NVARCHAR(100) NULL,
+    [Result] NVARCHAR(20) NULL,
+    [Body_Leak_Value] FLOAT NULL,
+    [Gall_1] FLOAT NULL,
+    [Gall_2] FLOAT NULL,
+    [Cycle_Time] INT NULL,
+    [Running_Mode] NVARCHAR(40) NULL,
+    [Manual] BIT NULL,
+    [Dry] BIT NULL,
+    [Wey] BIT NULL,
+    [Both] BIT NULL
+  );
+END;
+
+IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.plc_machine_configs (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    machine_key NVARCHAR(80) NOT NULL UNIQUE,
+    machine_name NVARCHAR(160) NOT NULL,
+    machine_type NVARCHAR(40) NOT NULL DEFAULT 'ube',
+    machine_id BIGINT NULL,
+    plant_code NVARCHAR(40) NULL,
+    ip_address VARCHAR(50) NOT NULL,
+    port INT NOT NULL DEFAULT 5002,
+    protocol NVARCHAR(30) NOT NULL DEFAULT 'SLMP',
+    sequence_no INT NULL,
+    is_active BIT NOT NULL DEFAULT 1,
+    register_config_json NVARCHAR(MAX) NULL,
+    notes NVARCHAR(500) NULL,
+    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+  );
+END;
 
 IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
    AND COL_LENGTH('dbo.plc_machine_configs', 'machine_id') IS NULL
@@ -791,22 +962,6 @@ IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
 IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
    AND COL_LENGTH('dbo.plc_machine_configs', 'plant_code') IS NULL
   ALTER TABLE dbo.plc_machine_configs ADD plant_code NVARCHAR(40) NULL;
-
-IF OBJECT_ID(N'dbo.plc_register_templates', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.plc_register_templates (
-    id INT IDENTITY(1,1) PRIMARY KEY,
-    template_key NVARCHAR(80) NOT NULL UNIQUE,
-    template_name NVARCHAR(160) NOT NULL,
-    machine_type NVARCHAR(40) NOT NULL DEFAULT 'ube',
-    register_config_json NVARCHAR(MAX) NOT NULL,
-    notes NVARCHAR(500) NULL,
-    is_active BIT NOT NULL DEFAULT 1,
-    is_system BIT NOT NULL DEFAULT 0,
-    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
-    updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
-  );
-END;
 
 EXEC(N'CREATE OR ALTER TRIGGER dbo.trg_PlcCycleReadings_ShotDate
 ON dbo.PlcCycleReadings
@@ -825,13 +980,6 @@ BEGIN
     RIGHT(''00'' + CAST(TRY_CONVERT(INT, target.[shot_month]) AS VARCHAR(2)), 2),
     ''-'',
     RIGHT(''00'' + CAST(TRY_CONVERT(INT, target.[shot_day]) AS VARCHAR(2)), 2)
-  ))),
-  [shot_time] = COALESCE(target.[shot_time], TRY_CONVERT(time(0), CONCAT(
-    RIGHT(''00'' + CAST(TRY_CONVERT(INT, target.[shot_hour]) AS VARCHAR(2)), 2),
-    '':'',
-    RIGHT(''00'' + CAST(TRY_CONVERT(INT, target.[shot_minute]) AS VARCHAR(2)), 2),
-    '':'',
-    RIGHT(''00'' + CAST(TRY_CONVERT(INT, target.[shot_second]) AS VARCHAR(2)), 2)
   ))),
   [shot_datetime] = COALESCE(target.[shot_datetime], TRY_CONVERT(datetime2(0), CONCAT(
     CASE
@@ -910,8 +1058,8 @@ IF NOT EXISTS (
     AND [object_id] = OBJECT_ID(N'dbo.PlcCycleReadings')
 )
 BEGIN
-  CREATE INDEX [IX_PlcCycleReadings_machine_shot_date_number]
-    ON dbo.PlcCycleReadings ([machine_key], [shot_date], [shot_number], [recorded_at] DESC, [id] DESC);
+  EXEC(N'CREATE INDEX [IX_PlcCycleReadings_machine_shot_date_number]
+    ON dbo.PlcCycleReadings ([machine_key], [shot_date], [shot_number], [recorded_at] DESC, [id] DESC)');
 END;
 
 IF NOT EXISTS (
@@ -920,6 +1068,34 @@ IF NOT EXISTS (
     AND [object_id] = OBJECT_ID(N'dbo.PlcCycleReadings')
 )
 BEGIN
-  CREATE INDEX [IX_PlcCycleReadings_ip_shot_date_number]
-    ON dbo.PlcCycleReadings ([plc_ip], [shot_date], [shot_number], [recorded_at] DESC, [id] DESC);
+  EXEC(N'CREATE INDEX [IX_PlcCycleReadings_ip_shot_date_number]
+    ON dbo.PlcCycleReadings ([plc_ip], [shot_date], [shot_number], [recorded_at] DESC, [id] DESC)');
 END;
+
+IF NOT EXISTS (
+  SELECT 1 FROM sys.indexes
+  WHERE [name] = N'IX_PlcConnectionEvents_started_at_desc'
+    AND [object_id] = OBJECT_ID(N'dbo.PlcConnectionEvents')
+)
+BEGIN
+  CREATE INDEX [IX_PlcConnectionEvents_started_at_desc]
+    ON dbo.PlcConnectionEvents ([started_at] DESC, [id] DESC);
+END;
+
+IF NOT EXISTS (
+  SELECT 1 FROM sys.indexes
+  WHERE [name] = N'IX_Leaktest_ip_cycle_end_desc'
+    AND [object_id] = OBJECT_ID(N'dbo.Leaktest')
+)
+BEGIN
+  CREATE INDEX [IX_Leaktest_ip_cycle_end_desc]
+    ON dbo.Leaktest ([PLC_IP], [Cycle_End_Time] DESC, [Id] DESC);
+END;
+
+  COMMIT TRANSACTION;
+END TRY
+BEGIN CATCH
+  IF @@TRANCOUNT > 0
+    ROLLBACK TRANSACTION;
+  THROW;
+END CATCH;

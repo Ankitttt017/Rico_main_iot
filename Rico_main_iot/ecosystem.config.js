@@ -3,7 +3,7 @@
     {
       name: "rico-main-iot-backend",
       script: "server.js",
-      cwd: "C:\\Users\\IOT1\\Desktop\\Rico_Main_Iot\\Rico_main_iot\\backend",
+      cwd: require("path").join(__dirname, "backend"),
       exec_mode: "fork",
       autorestart: true,
       watch: false,
@@ -18,8 +18,8 @@
         PLC_RECONNECT_BACKOFF_FACTOR: 1.6,
         PLC_RECONNECT_JITTER_MS: 1000
       },
-      error_file: "C:\\Users\\IOT1\\Desktop\\Rico_Main_Iot\\Rico_main_iot\\backend\\backend.err.log",
-      out_file: "C:\\Users\\IOT1\\Desktop\\Rico_Main_Iot\\Rico_main_iot\\backend\\backend.log",
+      error_file: require("path").join(__dirname, "backend", "backend.err.log"),
+      out_file: require("path").join(__dirname, "backend", "backend.log"),
       log_date_format: "YYYY-MM-DD HH:mm:ss"
     }
   ]

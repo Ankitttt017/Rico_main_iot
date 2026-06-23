@@ -69,6 +69,7 @@ function PLCDashboard() {
   const [sparkByIp, setSparkByIp] = useState({});
   const [metaByIp, setMetaByIp] = useState({});
   const socketRef = useRef(null);
+  const machinesRef = useRef(DEFAULT_MACHINES);
   const selectedKeyRef = useRef(plcConfig.key || plcConfig.ip);
   const selectedSnapshotRef = useRef({ shotNumber: null, observedAtMs: 0, source: "" });
   const disconnectTimerRef = useRef(null);
@@ -79,6 +80,10 @@ function PLCDashboard() {
   useEffect(() => {
     readingsHasDataRef.current = hasReadingData(readings);
   }, [readings]);
+
+  useEffect(() => {
+    machinesRef.current = machines;
+  }, [machines]);
 
   const rememberSelectedSnapshot = useCallback((readingsSnapshot = {}, { observedAt, source } = {}) => {
     const shotNumber = getReadingShotNumber(readingsSnapshot);
@@ -267,20 +272,24 @@ function PLCDashboard() {
     const nextMeta = snapshotKey ? metaByIp[snapshotKey] || {} : {};
     const nextHistory = snapshotKey ? historyByIp[snapshotKey] || [] : [];
     const nextSparks = snapshotKey ? sparkByIp[snapshotKey] || {} : {};
+    const hasSnapshot = hasReadingData(nextReadings) || Boolean(nextMeta.timestamp) || nextHistory.length || Object.keys(nextSparks).length;
+    if (!hasSnapshot) return;
 
-    setReadings(nextReadings);
-    setCycleHistory(nextHistory);
-    setCycleCount(nextHistory.length);
-    setSparklines(nextSparks);
-    setLastTimestamp(nextMeta.timestamp ? toValidDate(nextMeta.timestamp) : null);
-    setPartName(firstReadableValue(
+    setReadings(prev => prev === nextReadings ? prev : nextReadings);
+    setCycleHistory(prev => prev === nextHistory ? prev : nextHistory);
+    setCycleCount(prev => prev === nextHistory.length ? prev : nextHistory.length);
+    setSparklines(prev => prev === nextSparks ? prev : nextSparks);
+    const nextTimestamp = nextMeta.timestamp ? toValidDate(nextMeta.timestamp) : null;
+    setLastTimestamp(prev => String(prev || "") === String(nextTimestamp || "") ? prev : nextTimestamp);
+    const nextPartName = firstReadableValue(
       nextMeta.partName,
       nextReadings.part_name?.value,
       nextReadings.part_qr_code?.value,
       nextReadings.scan_data?.value
-    ));
-    setShotTime(nextMeta.shotTime || "");
-    setCycleStatus("idle");
+    );
+    setPartName(prev => prev === nextPartName ? prev : nextPartName);
+    setShotTime(prev => prev === (nextMeta.shotTime || "") ? prev : (nextMeta.shotTime || ""));
+    setCycleStatus(prev => prev === "idle" ? prev : "idle");
   }, [historyByIp, metaByIp, readingsByIp, sparkByIp]);
 
   useEffect(() => {
@@ -291,7 +300,7 @@ function PLCDashboard() {
 
   const normalizeConfig = useCallback((config = {}) => {
     const key = config.key || config.machine_key || config.ip;
-    const localMachine = machines.find((machine) => getMachineKey(machine) === key || machine.ip === config.ip);
+    const localMachine = machinesRef.current.find((machine) => getMachineKey(machine) === key || machine.ip === config.ip);
     const machineKey = localMachine ? getMachineKey(localMachine) : key;
     return {
       key: machineKey,
@@ -299,7 +308,7 @@ function PLCDashboard() {
       port: Number(localMachine?.port || config.port || 5002),
       kind: localMachine?.kind || config.kind || "ube",
     };
-  }, [machines]);
+  }, []);
 
   useEffect(() => {
     const socket = io(SOCKET_URL, {
@@ -313,7 +322,7 @@ function PLCDashboard() {
         clearTimeout(disconnectTimerRef.current);
         disconnectTimerRef.current = null;
       }
-      setSocketConnected(true);
+      setSocketConnected(prev => prev || true);
     });
 
     socket.on("disconnect", () => {
@@ -325,7 +334,7 @@ function PLCDashboard() {
     });
 
     socket.on("plc_status", ({ connected }) => {
-      setPlcConnected(connected);
+      setPlcConnected(prev => prev === connected ? prev : connected);
     });
 
     socket.on("plc_config", (config) => {
@@ -334,13 +343,21 @@ function PLCDashboard() {
         return;
       }
 
-      setPlcConfig(nextConfig);
-      setDraftConfig({ ip: nextConfig.ip, port: String(nextConfig.port) });
+      setPlcConfig(prev =>
+        prev.key === nextConfig.key && prev.ip === nextConfig.ip && Number(prev.port || 0) === Number(nextConfig.port || 0) && prev.kind === nextConfig.kind
+          ? prev
+          : nextConfig
+      );
+      setDraftConfig(prev => prev.ip === nextConfig.ip && prev.port === String(nextConfig.port) ? prev : { ip: nextConfig.ip, port: String(nextConfig.port) });
     });
 
     socket.on("machines", (list = []) => {
       const nextMachines = list.length ? mergeMachineList(list) : DEFAULT_MACHINES;
-      setMachines(nextMachines);
+      setMachines(prev => {
+        const prevSignature = prev.map((machine) => `${getMachineKey(machine)}:${machine.ip}:${machine.name}:${machine.kind}`).join("|");
+        const nextSignature = nextMachines.map((machine) => `${getMachineKey(machine)}:${machine.ip}:${machine.name}:${machine.kind}`).join("|");
+        return prevSignature === nextSignature ? prev : nextMachines;
+      });
       if (!selectedKeyRef.current && nextMachines[0]) {
         const first = nextMachines[0];
         const nextConfig = {
@@ -350,8 +367,12 @@ function PLCDashboard() {
           kind: first.kind || "ube",
         };
         selectedKeyRef.current = nextConfig.key;
-        setPlcConfig(nextConfig);
-        setDraftConfig({ ip: nextConfig.ip, port: String(nextConfig.port) });
+        setPlcConfig(prev =>
+          prev.key === nextConfig.key && prev.ip === nextConfig.ip && Number(prev.port || 0) === Number(nextConfig.port || 0) && prev.kind === nextConfig.kind
+            ? prev
+            : nextConfig
+        );
+        setDraftConfig(prev => prev.ip === nextConfig.ip && prev.port === String(nextConfig.port) ? prev : { ip: nextConfig.ip, port: String(nextConfig.port) });
       }
     });
 
@@ -415,8 +436,12 @@ function PLCDashboard() {
 
       if (selectedKeyRef.current !== key && selectedKeyRef.current !== ip) return;
 
-      setPlcConfig({ key, ip, port, kind: config?.kind });
-      setDraftConfig({ ip, port: String(port) });
+      setPlcConfig(prev =>
+        prev.key === key && prev.ip === ip && Number(prev.port || 0) === port && prev.kind === config?.kind
+          ? prev
+          : { key, ip, port, kind: config?.kind }
+      );
+      setDraftConfig(prev => prev.ip === ip && prev.port === String(port) ? prev : { ip, port: String(port) });
       if (packetHasData) {
         setReadings(r);
         rememberSelectedSnapshot(r, { observedAt: observedTimestamp, source: "live" });
@@ -424,7 +449,7 @@ function PLCDashboard() {
       setLastTimestamp(toValidDate(eventTimestamp) || toValidDate(observedTimestamp));
       setConfigMessage("");
       setPartName(prev => eventPartName || prev);
-      setShotTime(nextShotTime || "");
+      setShotTime(nextShotTime || buildShotTimeFromRow(Object.fromEntries(Object.entries(r).map(([name, item]) => [name, item?.value ?? null]))) || "");
       if (!liveOnly) {
         Object.entries(r).forEach(([name, item]) => {
           if (item?.value !== undefined && item.value !== null) pushSpark(name, item.value);
@@ -466,8 +491,12 @@ function PLCDashboard() {
       if (selectedKeyRef.current !== key && selectedKeyRef.current !== ip) return;
 
       selectedKeyRef.current = key;
-      setPlcConfig({ key, ip, port, kind: config?.kind });
-      setDraftConfig({ ip, port: String(port) });
+      setPlcConfig(prev =>
+        prev.key === key && prev.ip === ip && Number(prev.port || 0) === port && prev.kind === config?.kind
+          ? prev
+          : { key, ip, port, kind: config?.kind }
+      );
+      setDraftConfig(prev => prev.ip === ip && prev.port === String(port) ? prev : { ip, port: String(port) });
       setCycleStatus("complete");
       if (packetHasData) {
         setReadings(r);
@@ -476,7 +505,7 @@ function PLCDashboard() {
       setLastTimestamp(toValidDate(eventTimestamp));
       setConfigMessage("");
       setPartName(prev => eventPartName || prev);
-      setShotTime(nextShotTime || "");
+      setShotTime(nextShotTime || buildShotTimeFromRow(Object.fromEntries(Object.entries(r).map(([name, item]) => [name, item?.value ?? null]))) || "");
       setCycleHistory(prev => [historyItem, ...prev].slice(0, 100));
       setCycleCount(c => c + 1);
       Object.entries(r).forEach(([k, v]) => {
@@ -732,6 +761,13 @@ function PLCDashboard() {
                 tone="slate"
               />
             )}
+            {!isLeakTestMachine && (
+              <MetricTile
+                label="Shot Time"
+                value={plcShotTime || null}
+                tone="slate"
+              />
+            )}
           </section>
 
           <section className="dashboard-content">
@@ -785,13 +821,14 @@ function PLCDashboard() {
                     <div className="cards-grid">
                       {group.keys.map(({ name, unit, label }) => {
                         const reg = readings[name];
+                        const value = name === "shot_time" ? plcShotTime : reg?.value ?? null;
                         return (
                           <ValueCard
                             key={name}
                             name={name}
                             label={label}
                             unit={unit}
-                            value={reg?.value ?? null}
+                            value={value}
                             history={sparklines[name]}
                             accentColor={group.color}
                           />
