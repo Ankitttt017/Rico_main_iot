@@ -2,7 +2,6 @@
 
 const net = require("net");
 const db = require("../../config/db");
-const { LEAK_TEST_PARAMETERS, UBE_READ_PARAMETERS } = require("../plcMonitor/config/registerConfig");
 
 let schemaReadyPromise = null;
 
@@ -149,28 +148,7 @@ function normalizeMachine(row = {}) {
 }
 
 function registersForType(type = "ube") {
-  return (type === "leaktest" ? LEAK_TEST_PARAMETERS : UBE_READ_PARAMETERS)
-    .filter((parameter) => !parameter.hidden)
-    .map((parameter, index) => ({
-      id: `${parameter.name}-${index}`,
-      name: parameter.name,
-      device: parameter.device || "",
-      stringDevice: parameter.stringDevice || "",
-      stringLength: parameter.stringLength || "",
-      type: parameter.type || "int",
-      scale: parameter.scale ?? 1,
-      computed: parameter.computed || "",
-      enabled: true,
-      min: null,
-      max: null,
-      warning_min: null,
-      warning_max: null,
-      unit: parameter.unit || "",
-      show_on_monitor: true,
-      show_to_operator: false,
-      log_history: true,
-      alarm_enabled: false,
-    }));
+  return [];
 }
 
 function normalizeRegisters(input) {
@@ -208,8 +186,6 @@ async function saveMachineRecord(input = {}) {
   const key = await uniqueMachineKey(input.machine_key || name, id);
   if (!key) throw new Error("Machine key is required");
   const type = machineType(input.machine_type);
-  const fallbackRegisters = registersForType(type);
-
   const payload = {
     machine_key: key,
     machine_id: cleanInt(input.machine_id),
@@ -221,7 +197,7 @@ async function saveMachineRecord(input = {}) {
     protocol: protocolType(input.protocol),
     sequence_no: cleanInt(input.sequence_no),
     is_active: input.is_active === undefined ? 1 : Number(Boolean(input.is_active)),
-    register_config_json: JSON.stringify(normalizeRegisters(input.register_config) || fallbackRegisters),
+    register_config_json: JSON.stringify(normalizeRegisters(input.register_config) || []),
     notes: cleanText(input.notes),
   };
 

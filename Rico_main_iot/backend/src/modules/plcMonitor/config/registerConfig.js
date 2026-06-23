@@ -109,35 +109,7 @@ const EXCEL_PARAMETERS = [
   { name: "Shot Status", device: "D1301", type: "int" },
 ];
 
-const UBE_LIMIT_STATUS_PARAMETERS = [
-  { name: "die_close_core_in_time_status", device: "D6939", type: "int", hidden: true, target: "die_close_core_in_time" },
-  { name: "pouring_time_status", device: "D6941", type: "int", hidden: true, target: "pouring_time" },
-  { name: "shot_fwd_time_status", device: "D6943", type: "int", hidden: true, target: "shot_fwd_time" },
-  { name: "curing_time_status", device: "D6945", type: "int", hidden: true, target: "curing_time" },
-  { name: "die_open_core_out_time_status", device: "D6947", type: "int", hidden: true, target: "die_open_core_out_time" },
-  { name: "ejector_time_status", device: "D6949", type: "int", hidden: true, target: "ejector_time" },
-  { name: "extract_time_status", device: "D6951", type: "int", hidden: true, target: "extract_time" },
-  { name: "spray_time_status", device: "D6953", type: "int", hidden: true, target: "spray_time" },
-  { name: "v1_speed_status", device: "D6901", type: "int", hidden: true, target: "v1_speed" },
-  { name: "v2_speed_status", device: "D6903", type: "int", hidden: true, target: "v2_speed" },
-  { name: "v3_speed_status", device: "D6905", type: "int", hidden: true, target: "v3_speed" },
-  { name: "v4_speed_status", device: "D6907", type: "int", hidden: true, target: "v4_speed" },
-  { name: "metal_pressure_status", device: "D6913", type: "int", hidden: true, target: "metal_pressure" },
-  { name: "furnace_metal_temp_status", device: "D6935", type: "int", hidden: true, target: "furnace_metal_temp" },
-  { name: "cooling_water_mov_status", device: "D6931", type: "int", hidden: true, target: "cooling_water_mov" },
-  { name: "cooling_water_sta_status", device: "D6933", type: "int", hidden: true, target: "cooling_water_sta" },
-  { name: "accel_point_status", device: "D6909", type: "int", hidden: true, target: "accel_point" },
-  { name: "deaccel_point_status", device: "D6911", type: "int", hidden: true, target: "deaccel_point" },
-  { name: "intensification_time_status", device: "D6915", type: "int", hidden: true, target: "intensification_time" },
-  { name: "biscuit_thickness_status", device: "D6917", type: "int", hidden: true, target: "biscuit_thickness" },
-  { name: "jet_cooling_pressure_status", device: "D6955", type: "int", hidden: true, target: "jet_cooling_pressure" },
-  { name: "clamp_tonnage_he_low_pct_status", device: "D6919", type: "int", hidden: true, target: "clamp_tonnage_he_low_pct" },
-  { name: "clamp_tonnage_he_low_mn_status", device: "D6921", type: "int", hidden: true, target: "clamp_tonnage_he_low_mn" },
-  { name: "clamp_tonnage_op_up_pct_status", device: "D6923", type: "int", hidden: true, target: "clamp_tonnage_op_up_pct" },
-  { name: "clamp_tonnage_op_low_pct_status", device: "D6925", type: "int", hidden: true, target: "clamp_tonnage_op_low_pct" },
-  { name: "clamp_tonnage_he_up_pct_status", device: "D6927", type: "int", hidden: true, target: "clamp_tonnage_he_up_pct" },
-  { name: "vacuum_pressure_status", device: "D6929", type: "int", hidden: true, target: "vacuum_pressure" },
-];
+const UBE_LIMIT_STATUS_PARAMETERS = [];
 
 const LEAK_TEST_PARAMETERS = [
   {

@@ -22,36 +22,6 @@ const REPORT_AUTO_REFRESH_MS = Number(import.meta.env.VITE_PLC_REPORT_REFRESH_MS
 const REPORT_HISTORY_LIMIT = Number(import.meta.env.VITE_PLC_REPORT_HISTORY_LIMIT || 15000);
 const REPORT_PAGE_SIZE = Number(import.meta.env.VITE_PLC_REPORT_PAGE_SIZE || 100);
 
-const LIMIT_STATUS_BY_COLUMN = {
-  die_close_core_in_time: "die_close_core_in_time_status",
-  pouring_time: "pouring_time_status",
-  shot_fwd_time: "shot_fwd_time_status",
-  curing_time: "curing_time_status",
-  die_open_core_out_time: "die_open_core_out_time_status",
-  ejector_time: "ejector_time_status",
-  extract_time: "extract_time_status",
-  spray_time: "spray_time_status",
-  v1_speed: "v1_speed_status",
-  v2_speed: "v2_speed_status",
-  v3_speed: "v3_speed_status",
-  v4_speed: "v4_speed_status",
-  metal_pressure: "metal_pressure_status",
-  furnace_metal_temp: "furnace_metal_temp_status",
-  cooling_water_mov: "cooling_water_mov_status",
-  cooling_water_sta: "cooling_water_sta_status",
-  accel_point: "accel_point_status",
-  deaccel_point: "deaccel_point_status",
-  intensification_time: "intensification_time_status",
-  biscuit_thickness: "biscuit_thickness_status",
-  jet_cooling_pressure: "jet_cooling_pressure_status",
-  clamp_tonnage_he_low_pct: "clamp_tonnage_he_low_pct_status",
-  clamp_tonnage_he_low_mn: "clamp_tonnage_he_low_mn_status",
-  clamp_tonnage_op_up_pct: "clamp_tonnage_op_up_pct_status",
-  clamp_tonnage_op_low_pct: "clamp_tonnage_op_low_pct_status",
-  clamp_tonnage_he_up_pct: "clamp_tonnage_he_up_pct_status",
-  vacuum_pressure: "vacuum_pressure_status",
-};
-
 const HIDDEN_COLUMNS = new Set([
   "id",
   "history_rank",
@@ -81,7 +51,6 @@ const HIDDEN_COLUMNS = new Set([
   "has_data",
   "is_online",
   "error",
-  ...Object.values(LIMIT_STATUS_BY_COLUMN),
 ]);
 
 const LEAK_TEST_HIDDEN_COLUMNS = new Set([
@@ -570,24 +539,8 @@ function formatReportCell(row, key, rowIndex = 0, rowCount = 0, rows = []) {
   return formatValue(row[key], key);
 }
 
-function isLimitAlarmStatus(value) {
-  const status = Number(value);
-  return status === 1 || status === 2;
-}
-
-function getLimitStatus(row = {}, key) {
-  const statusKey = LIMIT_STATUS_BY_COLUMN[normalizeColumnKey(key)];
-  return statusKey ? row[statusKey] : null;
-}
-
-function rowHasLimitAlarm(row = {}) {
-  return Object.values(LIMIT_STATUS_BY_COLUMN).some((statusKey) => isLimitAlarmStatus(row[statusKey]));
-}
-
 function isHighlightedReportCell(row = {}, key) {
-  const normalizedKey = normalizeColumnKey(key);
-  if (normalizedKey === "shot_number") return rowHasLimitAlarm(row);
-  return isLimitAlarmStatus(getLimitStatus(row, key));
+  return false;
 }
 
 function reportCellHtmlAttrs(row, key) {
