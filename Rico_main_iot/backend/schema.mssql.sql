@@ -620,33 +620,6 @@ BEGIN
     [minor_stoppage] DECIMAL(18,2) NULL,
     [cycle_end] INT NULL,
     [Cycle Start] INT NULL,
-    [die_close_core_in_time_status] INT NULL,
-    [pouring_time_status] INT NULL,
-    [shot_fwd_time_status] INT NULL,
-    [curing_time_status] INT NULL,
-    [die_open_core_out_time_status] INT NULL,
-    [ejector_time_status] INT NULL,
-    [extract_time_status] INT NULL,
-    [spray_time_status] INT NULL,
-    [v1_speed_status] INT NULL,
-    [v2_speed_status] INT NULL,
-    [v3_speed_status] INT NULL,
-    [v4_speed_status] INT NULL,
-    [metal_pressure_status] INT NULL,
-    [furnace_metal_temp_status] INT NULL,
-    [cooling_water_mov_status] INT NULL,
-    [cooling_water_sta_status] INT NULL,
-    [accel_point_status] INT NULL,
-    [deaccel_point_status] INT NULL,
-    [intensification_time_status] INT NULL,
-    [biscuit_thickness_status] INT NULL,
-    [jet_cooling_pressure_status] INT NULL,
-    [clamp_tonnage_he_low_pct_status] INT NULL,
-    [clamp_tonnage_he_low_mn_status] INT NULL,
-    [clamp_tonnage_op_up_pct_status] INT NULL,
-    [clamp_tonnage_op_low_pct_status] INT NULL,
-    [clamp_tonnage_he_up_pct_status] INT NULL,
-    [vacuum_pressure_status] INT NULL,
     [die_close_core_in_time] DECIMAL(18,2) NULL,
     [pouring_time] DECIMAL(18,2) NULL,
     [shot_fwd_time] DECIMAL(18,2) NULL,
@@ -740,60 +713,42 @@ IF COL_LENGTH('dbo.PlcCycleReadings', 'minor_stoppage') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [minor_stoppage] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'Cycle Start') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [Cycle Start] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'die_close_core_in_time_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [die_close_core_in_time_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'pouring_time_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [pouring_time_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_fwd_time_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [shot_fwd_time_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'curing_time_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [curing_time_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'die_open_core_out_time_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [die_open_core_out_time_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'ejector_time_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [ejector_time_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'extract_time_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [extract_time_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'spray_time_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [spray_time_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'v1_speed_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [v1_speed_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'v2_speed_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [v2_speed_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'v3_speed_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [v3_speed_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'v4_speed_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [v4_speed_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'metal_pressure_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [metal_pressure_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'furnace_metal_temp_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [furnace_metal_temp_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'cooling_water_mov_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [cooling_water_mov_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'cooling_water_sta_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [cooling_water_sta_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'accel_point_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [accel_point_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'deaccel_point_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [deaccel_point_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'intensification_time_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [intensification_time_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'biscuit_thickness_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [biscuit_thickness_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'jet_cooling_pressure_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [jet_cooling_pressure_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_he_low_pct_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_he_low_pct_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_he_low_mn_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_he_low_mn_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_op_up_pct_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_op_up_pct_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_op_low_pct_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_op_low_pct_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_he_up_pct_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_he_up_pct_status] INT NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'vacuum_pressure_status') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [vacuum_pressure_status] INT NULL;
+
+DECLARE @dropPlcLimitStatusColumns NVARCHAR(MAX) = N'';
+SELECT @dropPlcLimitStatusColumns = @dropPlcLimitStatusColumns + N'
+ALTER TABLE dbo.PlcCycleReadings DROP COLUMN ' + QUOTENAME(column_name) + N';'
+FROM (VALUES
+  (N'die_close_core_in_time_status'),
+  (N'pouring_time_status'),
+  (N'shot_fwd_time_status'),
+  (N'curing_time_status'),
+  (N'die_open_core_out_time_status'),
+  (N'ejector_time_status'),
+  (N'extract_time_status'),
+  (N'spray_time_status'),
+  (N'v1_speed_status'),
+  (N'v2_speed_status'),
+  (N'v3_speed_status'),
+  (N'v4_speed_status'),
+  (N'metal_pressure_status'),
+  (N'furnace_metal_temp_status'),
+  (N'cooling_water_mov_status'),
+  (N'cooling_water_sta_status'),
+  (N'accel_point_status'),
+  (N'deaccel_point_status'),
+  (N'intensification_time_status'),
+  (N'biscuit_thickness_status'),
+  (N'jet_cooling_pressure_status'),
+  (N'clamp_tonnage_he_low_pct_status'),
+  (N'clamp_tonnage_he_low_mn_status'),
+  (N'clamp_tonnage_op_up_pct_status'),
+  (N'clamp_tonnage_op_low_pct_status'),
+  (N'clamp_tonnage_he_up_pct_status'),
+  (N'vacuum_pressure_status')
+) AS status_columns(column_name)
+WHERE COL_LENGTH('dbo.PlcCycleReadings', column_name) IS NOT NULL;
+IF @dropPlcLimitStatusColumns <> N'' EXEC sp_executesql @dropPlcLimitStatusColumns;
+
 IF COL_LENGTH('dbo.PlcCycleReadings', 'die_close_core_in_time') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [die_close_core_in_time] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'pouring_time') IS NULL
@@ -962,6 +917,19 @@ IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
 IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
    AND COL_LENGTH('dbo.plc_machine_configs', 'plant_code') IS NULL
   ALTER TABLE dbo.plc_machine_configs ADD plant_code NVARCHAR(40) NULL;
+
+IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
+   AND COL_LENGTH('dbo.plc_machine_configs', 'register_config_json') IS NOT NULL
+BEGIN
+  UPDATE dbo.plc_machine_configs
+  SET register_config_json = N'[]'
+  WHERE ISJSON(register_config_json) = 1
+    AND (
+      JSON_VALUE(register_config_json, '$[0].id') = N'Sr. No-0'
+      OR JSON_VALUE(register_config_json, '$[0].name') = N'Sr. No'
+      OR JSON_VALUE(register_config_json, '$[0].name') = N'part_qr_code'
+    );
+END;
 
 EXEC(N'CREATE OR ALTER TRIGGER dbo.trg_PlcCycleReadings_ShotDate
 ON dbo.PlcCycleReadings
