@@ -63,7 +63,7 @@ const navSections = [
   {
     title: "External Apps",
     items: [
-      { label: "Traceability", href: "http://192.168.100.137:9090", icon: Map, permission: "traceability:view", external: true },
+      { label: "Traceability", href: "http://192.168.100.136:9090", icon: Map, permission: "traceability:view", external: true },
     ],
   },
 ];
