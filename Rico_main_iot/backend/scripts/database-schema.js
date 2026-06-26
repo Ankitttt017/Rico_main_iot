@@ -46,7 +46,7 @@ const REQUIRED_TABLES = [
 ];
 
 const REQUIRED_INDEXES = [
-  "ux_iot_departments_code_plant",
+  "ux_iot_departments_code_name_plant",
   "ux_iot_part_plants_part_plant",
   "idx_iot_operations_part",
   "idx_iot_machines_plant",

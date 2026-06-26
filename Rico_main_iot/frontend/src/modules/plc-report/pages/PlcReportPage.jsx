@@ -579,6 +579,57 @@ function getMachineLabel(machine) {
   return machine?.machine_name || machine?.name || machine?.plc_ip || machine?.ip_address || getMachineId(machine);
 }
 
+function normalizeMachineIdentity(value) {
+  const compact = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\b0+(\d+)\b/g, "$1")
+    .replace(/[^a-z0-9]+/g, "");
+  return compact || "";
+}
+
+function getMachineDedupeKeys(machine = {}) {
+  const ip = String(machine.plc_ip || machine.ip_address || machine.ip || "").trim().toLowerCase();
+  const labels = [
+    machine.machine_key,
+    machine.machine_name,
+    machine.name,
+    machine.machine_code,
+  ].map(normalizeMachineIdentity).filter(Boolean);
+  return [
+    ip ? `ip:${ip}` : "",
+    ...labels.map((label) => `name:${label}`),
+  ].filter(Boolean);
+}
+
+function dedupeMachines(source = []) {
+  const rows = [];
+  const indexByKey = new Map();
+
+  source.forEach((machine) => {
+    if (!machine) return;
+    const keys = getMachineDedupeKeys(machine);
+    const existingIndex = keys.map((key) => indexByKey.get(key)).find((index) => index !== undefined);
+    if (existingIndex !== undefined) {
+      rows[existingIndex] = {
+        ...machine,
+        ...rows[existingIndex],
+        line_id: rows[existingIndex].line_id || machine.line_id,
+        plc_ip: rows[existingIndex].plc_ip || machine.plc_ip || machine.ip_address || machine.ip,
+        plc_port: rows[existingIndex].plc_port || machine.plc_port || machine.port,
+      };
+      getMachineDedupeKeys(rows[existingIndex]).forEach((key) => indexByKey.set(key, existingIndex));
+      return;
+    }
+
+    const nextIndex = rows.length;
+    rows.push(machine);
+    keys.forEach((key) => indexByKey.set(key, nextIndex));
+  });
+
+  return rows;
+}
+
 function getLineId(line) {
   return line?.line_id ? String(line.line_id) : "";
 }
@@ -761,46 +812,45 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   }, []);
 
   const allReportMachines = useMemo(() => {
-    const byId = new Map();
-    machines.forEach((machine) => {
-      byId.set(String(getMachineId(machine)), machine);
-    });
+    const rows = [...machines];
     Object.values(machinesByLine).flat().forEach((machine) => {
       const ip = machine.ip_address || machine.plc_ip || machine.ip;
-      if (!ip) return;
-      const id = String(getMachineId({ ...machine, machine_key: machine.machine_key || ip, plc_ip: ip }));
-      if (!byId.has(id)) {
-        byId.set(id, {
-          machine_key: machine.machine_key || ip,
-          machine_name: machine.machine_name || machine.name || ip,
-          plc_ip: ip,
-          plc_port: machine.port || machine.plc_port || 5002,
-          line_id: machine.line_id,
-        });
-      }
+      rows.push({
+        machine_key: machine.machine_key || machine.machine_code || ip,
+        machine_name: machine.machine_name || machine.name || machine.machine_code || ip,
+        machine_code: machine.machine_code,
+        name: machine.name,
+        plc_ip: ip,
+        plc_port: machine.port || machine.plc_port || 5002,
+        line_id: machine.line_id,
+      });
     });
-    return Array.from(byId.values());
+    return dedupeMachines(rows);
   }, [machines, machinesByLine]);
 
   const getMachinesForLine = useCallback((lineId) => {
     if (!lineId || lineId === "all") return allReportMachines;
     const lineMachines = machinesByLine[lineId] || [];
-    const lineIps = new Set(lineMachines.map((machine) => String(machine.ip_address || machine.plc_ip || machine.ip || "").trim()).filter(Boolean));
-    const matched = allReportMachines.filter((machine) => lineIps.has(String(getMachineReportIp(machine) || "").trim()));
+    const lineKeys = new Set(lineMachines.flatMap(getMachineDedupeKeys));
+    const matched = allReportMachines.filter((machine) =>
+      getMachineDedupeKeys(machine).some((key) => lineKeys.has(key))
+    );
     if (matched.length) return matched;
-    return lineMachines
+    return dedupeMachines(lineMachines
       .map((machine) => {
         const ip = machine.ip_address || machine.plc_ip || machine.ip;
         if (!ip) return null;
         return {
-          machine_key: machine.machine_key || ip,
-          machine_name: machine.machine_name || machine.name || ip,
+          machine_key: machine.machine_key || machine.machine_code || ip,
+          machine_name: machine.machine_name || machine.name || machine.machine_code || ip,
+          machine_code: machine.machine_code,
+          name: machine.name,
           plc_ip: ip,
           plc_port: machine.port || machine.plc_port || 5002,
           line_id: machine.line_id || lineId,
         };
       })
-      .filter(Boolean);
+      .filter(Boolean));
   }, [allReportMachines, machinesByLine]);
 
   const activeMachineOptions = useMemo(

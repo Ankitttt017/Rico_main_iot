@@ -2419,8 +2419,11 @@ function startPlcMonitor(io) {
     readings.ip = machine.ip;
     readings.status = readings.result || "CYCLE COMPLETE";
     readings.cycle_end_time = liveOnly
-      ? currentState.lastCycleAt || timestamp
+      ? currentState.lastCycleAt || null
       : timestamp;
+    if (liveOnly) {
+      readings.cycle_time = currentState.cycleTime ?? null;
+    }
     readings.running_mode = Number(readings.auto_bit) === 1 ? "Auto" : "Manual";
 
     const payload = {
@@ -2433,7 +2436,7 @@ function startPlcMonitor(io) {
       }),
       readings: formatReadingsForClient(readings, machine),
       cycleTime: readings.cycle_time,
-      timestamp: liveOnly ? currentState.lastCycleAt || timestamp : timestamp,
+      timestamp: liveOnly ? currentState.lastCycleAt || null : timestamp,
       observedAt: timestamp,
       liveOnly,
       config: {
@@ -2799,8 +2802,9 @@ function startPlcMonitor(io) {
             }
 
             if (cycleEndDevice && cycleEndedNow) {
+              const cycleEndAt = new Date();
               await sleep(Number(process.env.PLC_LEAK_CYCLE_END_SETTLE_MS || 800));
-              await readStableLeakTestCycle(machine, sock, new Date(), { trigger: "cycle-end" });
+              await readStableLeakTestCycle(machine, sock, cycleEndAt, { trigger: "cycle-end" });
               cycleStarted = !cycleStartDevice;
             }
 
@@ -2851,7 +2855,9 @@ function startPlcMonitor(io) {
                     Date.now() - previousObservedMs >= fallbackSaveMs &&
                     previousCycleTime >= Number(process.env.PLC_LEAK_MIN_COMPLETE_CYCLE_TIME_SEC || 3);
 
-                  if (LEAK_CHANGE_SAVE_ENABLED && previousLive && (qrChanged || cycleTimeReset)) {
+                  const allowTransitionSave = LEAK_CHANGE_SAVE_ENABLED && !cycleEndDevice;
+
+                  if (allowTransitionSave && previousLive && (qrChanged || cycleTimeReset)) {
                     await persistLeakSnapshot(
                       machine,
                       previousLive,
@@ -2867,7 +2873,7 @@ function startPlcMonitor(io) {
                         error.message
                       );
                     });
-                  } else if (previousLive && fallbackDue) {
+                  } else if (allowTransitionSave && previousLive && fallbackDue) {
                     await persistLeakSnapshot(
                       machine,
                       previousLive,

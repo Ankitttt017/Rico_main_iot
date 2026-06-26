@@ -40,8 +40,10 @@ BEGIN
   );
 END;
 
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'ux_iot_departments_code_plant')
-  CREATE UNIQUE INDEX ux_iot_departments_code_plant ON dbo.iot_departments (code, plant_code);
+IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'ux_iot_departments_code_plant' AND object_id = OBJECT_ID(N'dbo.iot_departments'))
+  DROP INDEX ux_iot_departments_code_plant ON dbo.iot_departments;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'ux_iot_departments_code_name_plant' AND object_id = OBJECT_ID(N'dbo.iot_departments'))
+  CREATE UNIQUE INDEX ux_iot_departments_code_name_plant ON dbo.iot_departments (code, name, plant_code);
 
 IF OBJECT_ID(N'dbo.line_master', N'U') IS NULL
 BEGIN
@@ -421,7 +423,7 @@ USING (
 ) AS source
 ON target.code = source.code AND (
   target.plant_code = source.plant_code OR (target.plant_code IS NULL AND source.plant_code IS NULL)
-)
+) AND target.name = source.name
 WHEN NOT MATCHED THEN
   INSERT (code, name, plant_code, description)
   VALUES (source.code, source.name, source.plant_code, source.description);
