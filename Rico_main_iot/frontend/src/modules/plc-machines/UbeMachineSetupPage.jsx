@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
-import { Activity, CheckCircle2, FileSpreadsheet, Pencil, Plus, Power, RefreshCw, Save, Trash2, Upload } from "lucide-react";
+import { Activity, CheckCircle2, FileSpreadsheet, Pencil, Plus, Power, RefreshCw, Save, Trash2, Upload, X } from "lucide-react";
+import * as XLSX from "xlsx";
 import SearchableSelect from "../../components/common/SearchableSelect";
 import AppLayout from "../../components/common/AppLayout";
 import {
@@ -26,9 +27,8 @@ export const DEFAULT_PLC_DRAFT = {
   notes: "",
 };
 
-const inputClass = "h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-50";
+const inputClass = "h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-50";
 const cardClass = "rounded-lg border border-slate-200 bg-white shadow-sm";
-const textareaClass = "min-h-[72px] w-full rounded-lg border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-50";
 const PROTOCOL_OPTIONS = [
   { value: "GENERIC_TCP_TEXT", label: "Generic TCP Text" },
   { value: "MODBUS_TCP", label: "Modbus TCP" },
@@ -172,6 +172,46 @@ function parseRegisterImport(text) {
   });
 }
 
+async function parseExcelRegisterImport(file) {
+  const data = await file.arrayBuffer();
+  const workbook = XLSX.read(data, { type: "array" });
+  const sheetName = workbook.SheetNames[0];
+  if (!sheetName) return [];
+  return XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "" });
+}
+
+async function parsePdfRegisterImport(file) {
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/legacy/build/pdf.worker.mjs", import.meta.url).toString();
+  const data = await file.arrayBuffer();
+  const pdf = await pdfjs.getDocument({ data }).promise;
+  const lines = [];
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
+    const rows = new Map();
+    content.items.forEach((item) => {
+      const y = Math.round(item.transform?.[5] || 0);
+      const row = rows.get(y) || [];
+      row.push({ x: item.transform?.[4] || 0, text: item.str || "" });
+      rows.set(y, row);
+    });
+    Array.from(rows.entries())
+      .sort((a, b) => b[0] - a[0])
+      .forEach(([, row]) => {
+        const line = row
+          .sort((a, b) => a.x - b.x)
+          .map((item) => item.text.trim())
+          .filter(Boolean)
+          .join(",");
+        if (line) lines.push(line);
+      });
+  }
+
+  return parseRegisterImport(lines.join("\n"));
+}
+
 function normalizeImportedRegisters(rows = []) {
   return rows
     .map((row, index) => {
@@ -253,15 +293,17 @@ export function MachineForm({
     event.target.value = "";
     if (!file) return;
 
-    const fileName = file.name.toLowerCase();
-    if (fileName.endsWith(".xlsx") || fileName.endsWith(".xls") || fileName.endsWith(".pdf")) {
-      toast.error("Please save Excel/PDF as CSV or JSON, then import it here.");
-      return;
-    }
-
     try {
-      const text = await file.text();
-      const imported = normalizeImportedRegisters(parseRegisterImport(text));
+      const fileName = file.name.toLowerCase();
+      let rows = [];
+      if (fileName.endsWith(".xlsx") || fileName.endsWith(".xls")) {
+        rows = await parseExcelRegisterImport(file);
+      } else if (fileName.endsWith(".pdf")) {
+        rows = await parsePdfRegisterImport(file);
+      } else {
+        rows = parseRegisterImport(await file.text());
+      }
+      const imported = normalizeImportedRegisters(rows);
       if (!imported.length) {
         toast.error("No register rows found in import file.");
         return;
@@ -289,11 +331,16 @@ export function MachineForm({
   }, [assetTypeFilter, locationOptions, machineAssets, plantFilter]);
   return (
     <section className={cardClass}>
-      <div className="border-b border-slate-100 px-5 py-4">
-        <h2 className="text-sm font-black text-slate-900">{title}</h2>
-        <p className="mt-1 text-xs font-bold text-slate-400">{description}</p>
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+        <div>
+          <h2 className="text-sm font-black text-slate-900">{title}</h2>
+          <p className="mt-1 text-xs font-bold text-slate-400">{description}</p>
+        </div>
+        <span className="rounded-md bg-slate-100 px-2.5 py-1 text-xs font-black text-slate-600">
+          {Array.isArray(draft.register_config) ? draft.register_config.length : 0} Registers
+        </span>
       </div>
-      <div className="grid gap-4 p-5 lg:grid-cols-[1.15fr_0.85fr]">
+      <div className="grid items-start gap-4 p-5 xl:grid-cols-[1fr_320px]">
         <div className="rounded-lg border border-slate-100 bg-slate-50/70 p-4">
           <h3 className="mb-4 text-xs font-black uppercase tracking-wide text-slate-500">PLC Connection</h3>
           {showMachineSelector && (
@@ -317,9 +364,9 @@ export function MachineForm({
               </label>
             </div>
           )}
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {showMachineSelector && (
-              <label className="md:col-span-2">
+              <label className="md:col-span-2 xl:col-span-3">
                 <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-slate-400">Select Machine</span>
                 <SearchableSelect
                   value={draft.machine_id ? String(draft.machine_id) : ""}
@@ -370,25 +417,29 @@ export function MachineForm({
             </label>
           </div>
         </div>
-        <div className="flex flex-col gap-4">
-          <label className="rounded-lg border border-slate-100 bg-slate-50/70 p-4">
-            <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-slate-400">Notes</span>
-            <textarea className={textareaClass} value={draft.notes || ""} onChange={(event) => setField("notes", event.target.value)} />
-          </label>
-          <div className="rounded-lg border border-blue-100 bg-blue-50/60 p-4">
+        <div className="rounded-lg border border-blue-100 bg-blue-50/60 p-4">
+          <div className="flex flex-col gap-4">
             <div className="flex items-start gap-3">
               <div className="rounded-lg bg-white p-2 text-blue-700 shadow-sm">
                 <FileSpreadsheet className="h-5 w-5" />
               </div>
               <div className="min-w-0 flex-1">
                 <h3 className="text-sm font-black text-slate-900">Import Data Registers</h3>
-                <p className="mt-1 text-xs font-bold leading-5 text-slate-500">Upload CSV, TSV, TXT or JSON. Columns can include parameter, device, type, min, max, warning_min, warning_max, unit and visibility flags.</p>
-                <label className="mt-3 inline-flex cursor-pointer items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-black text-white hover:bg-blue-700">
-                  <Upload className="h-4 w-4" />
-                  Import File
-                  <input type="file" accept=".csv,.tsv,.txt,.json,.xls,.xlsx,.pdf" className="hidden" onChange={importRegisters} />
-                </label>
+                <p className="mt-1 text-xs font-bold leading-5 text-slate-500">CSV, TSV, TXT, JSON, Excel and table-based PDF files are supported.</p>
               </div>
+            </div>
+            <div className="rounded-lg border border-dashed border-blue-200 bg-white/70 p-3">
+              <div className="grid grid-cols-2 gap-2 text-[10px] font-black uppercase tracking-wide text-slate-400">
+                <span>Parameter</span>
+                <span>Device</span>
+                <span>Type</span>
+                <span>Limits</span>
+              </div>
+              <label className="mt-3 inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2.5 text-sm font-black text-white hover:bg-blue-700">
+                <Upload className="h-4 w-4" />
+                Import File
+                <input type="file" accept=".csv,.tsv,.txt,.json,.xls,.xlsx,.pdf" className="hidden" onChange={importRegisters} />
+              </label>
             </div>
           </div>
         </div>
@@ -464,30 +515,51 @@ export function RegisterConfigTable({ registers, setRegisters, maxHeightClass = 
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
         <div>
           <h2 className="text-sm font-black text-slate-900">Data Registers</h2>
-          <p className="mt-1 text-xs font-bold text-slate-400">Machine-wise register map. Use D/M/R addresses, string addresses and datatype here.</p>
+          <p className="mt-1 text-xs font-bold text-slate-400">{registers.length} saved rows for this machine.</p>
         </div>
-        <button type="button" onClick={addRegister} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-50">
+        <button type="button" onClick={addRegister} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-xs font-black text-white hover:bg-slate-800">
           <Plus className="h-3.5 w-3.5" />
           Add Register
         </button>
       </div>
       <div className={`${maxHeightClass} overflow-auto`}>
-        <table className="min-w-[720px] w-full text-left text-xs">
-          <thead className="sticky top-0 bg-slate-50 text-[10px] font-black uppercase tracking-wide text-slate-500">
+        <table className="min-w-[960px] w-full table-fixed text-left text-xs">
+          <colgroup>
+            <col className="w-[58px]" />
+            <col className="w-[260px]" />
+            <col className="w-[180px]" />
+            <col className="w-[150px]" />
+            <col className="w-[86px]" />
+            <col className="w-[86px]" />
+            <col className="w-[86px]" />
+            <col className="w-[70px]" />
+            <col className="w-[64px]" />
+          </colgroup>
+          <thead className="sticky top-0 z-10 bg-slate-50 text-[10px] font-black uppercase tracking-wide text-slate-500 shadow-[0_1px_0_0_rgba(226,232,240,1)]">
             <tr>
-              <th className="px-3 py-3">Use</th>
+              <th className="px-3 py-3 text-center">Use</th>
               <th className="px-3 py-3">Parameter</th>
               <th className="px-3 py-3">PLC Address</th>
               <th className="px-3 py-3">Type</th>
-              <th className="px-3 py-3">Alarm</th>
+              <th className="px-3 py-3">Unit</th>
+              <th className="px-3 py-3">Min</th>
+              <th className="px-3 py-3">Max</th>
+              <th className="px-3 py-3 text-center">Alarm</th>
               <th className="px-3 py-3"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
+            {!registers.length && (
+              <tr>
+                <td colSpan="9" className="px-4 py-8 text-center text-sm font-bold text-slate-400">
+                  No data registers added yet.
+                </td>
+              </tr>
+            )}
             {registers.map((register, index) => (
-              <tr key={register.id || `${register.name}-${index}`} className={register.enabled === false ? "bg-slate-50 opacity-70" : "hover:bg-slate-50"}>
-                <td className="px-3 py-2">
-                  <input type="checkbox" checked={register.enabled !== false} onChange={(event) => setRegisterField(index, "enabled", event.target.checked)} />
+              <tr key={register.id || `${register.name}-${index}`} className={register.enabled === false ? "bg-slate-50 opacity-70" : "bg-white hover:bg-slate-50"}>
+                <td className="px-3 py-2 text-center">
+                  <input className="h-4 w-4 rounded border-slate-300 text-blue-600" type="checkbox" checked={register.enabled !== false} onChange={(event) => setRegisterField(index, "enabled", event.target.checked)} />
                 </td>
                 <td className="px-3 py-2">
                   <input className={inputClass} value={register.name || ""} onChange={(event) => setRegisterField(index, "name", event.target.value)} />
@@ -508,11 +580,22 @@ export function RegisterConfigTable({ registers, setRegisters, maxHeightClass = 
                     <option value="text">STRING / ASCII</option>
                   </select>
                 </td>
+                <td className="px-3 py-2">
+                  <input className={inputClass} value={register.unit || ""} onChange={(event) => setRegisterField(index, "unit", event.target.value)} />
+                </td>
+                <td className="px-3 py-2">
+                  <input className={inputClass} type="number" value={register.min ?? ""} onChange={(event) => setRegisterField(index, "min", event.target.value)} />
+                </td>
+                <td className="px-3 py-2">
+                  <input className={inputClass} type="number" value={register.max ?? ""} onChange={(event) => setRegisterField(index, "max", event.target.value)} />
+                </td>
                 <td className="px-3 py-2 text-center">
-                  <input type="checkbox" checked={register.alarm_enabled === true} onChange={(event) => setRegisterField(index, "alarm_enabled", event.target.checked)} />
+                  <input className="h-4 w-4 rounded border-slate-300 text-blue-600" type="checkbox" checked={register.alarm_enabled === true} onChange={(event) => setRegisterField(index, "alarm_enabled", event.target.checked)} />
                 </td>
                 <td className="px-3 py-2 text-right">
-                  <button type="button" onClick={() => removeRegister(index)} className="rounded-lg border border-red-200 px-2.5 py-2 font-black text-red-700 hover:bg-red-50">Remove</button>
+                  <button type="button" aria-label="Remove register" title="Remove register" onClick={() => removeRegister(index)} className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-red-200 text-red-700 hover:bg-red-50">
+                    <X className="h-4 w-4" />
+                  </button>
                 </td>
               </tr>
             ))}
@@ -689,7 +772,10 @@ export default function UbeMachineSetupPage({ onLogout, currentUser }) {
   const importRegistersIntoDraft = (importedRegisters) => {
     setDraft((current) => ({
       ...current,
-      register_config: importedRegisters,
+      register_config: [
+        ...(Array.isArray(current.register_config) ? current.register_config : []),
+        ...importedRegisters,
+      ],
     }));
   };
 

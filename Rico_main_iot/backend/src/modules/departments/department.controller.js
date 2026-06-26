@@ -13,6 +13,30 @@ function cleanCode(value) {
   return String(value ?? "").trim().toUpperCase();
 }
 
+function duplicateWhereClause(alias = "") {
+  const prefix = alias ? `${alias}.` : "";
+  return `${prefix}code = ? AND ${prefix}name = ? AND (${prefix}plant_code = ? OR (${prefix}plant_code IS NULL AND ? IS NULL))`;
+}
+
+function isDuplicateDepartmentError(error) {
+  return /duplicate key|unique key|ux_iot_departments_code_name_plant|iot_departments/i.test(String(error?.message || ""));
+}
+
+async function findDuplicateDepartment({ code, name, plantCode, excludeId = null }) {
+  const params = [code, name, plantCode, plantCode];
+  let exclude = "";
+  if (excludeId) {
+    exclude = " AND id <> ?";
+    params.push(excludeId);
+  }
+  const { rows } = await db.query(`
+    SELECT TOP 1 id
+    FROM dbo.iot_departments
+    WHERE ${duplicateWhereClause()}${exclude}
+  `, params);
+  return rows[0] || null;
+}
+
 function ensureSchema() {
   if (!schemaReadyPromise) {
     schemaReadyPromise = db.run(`
@@ -29,8 +53,10 @@ function ensureSchema() {
           updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
         );
       END;
-      IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'ux_iot_departments_code_plant')
-        CREATE UNIQUE INDEX ux_iot_departments_code_plant ON dbo.iot_departments (code, plant_code);
+      IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'ux_iot_departments_code_plant' AND object_id = OBJECT_ID(N'dbo.iot_departments'))
+        DROP INDEX ux_iot_departments_code_plant ON dbo.iot_departments;
+      IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'ux_iot_departments_code_name_plant' AND object_id = OBJECT_ID(N'dbo.iot_departments'))
+        CREATE UNIQUE INDEX ux_iot_departments_code_name_plant ON dbo.iot_departments (code, name, plant_code);
     `).catch((error) => {
       schemaReadyPromise = null;
       throw error;
@@ -67,16 +93,24 @@ async function createDepartment(req, res) {
     await ensureSchema();
     const code = cleanCode(req.body.code);
     const name = cleanText(req.body.name);
+    const plantCode = cleanText(req.body.plant_code);
     if (!code || !name) {
       return res.status(400).json({ success: false, message: "Department code and name are required" });
+    }
+    const duplicate = await findDuplicateDepartment({ code, name, plantCode });
+    if (duplicate) {
+      return res.status(409).json({ success: false, message: "This department already exists for the selected location" });
     }
     const result = await db.run(`
       INSERT INTO dbo.iot_departments (code, name, plant_code, description, is_active)
       OUTPUT INSERTED.id
       VALUES (?, ?, ?, ?, ?)
-    `, [code, name, cleanText(req.body.plant_code), cleanText(req.body.description), req.body.is_active === false ? 0 : 1]);
+    `, [code, name, plantCode, cleanText(req.body.description), req.body.is_active === false ? 0 : 1]);
     res.status(201).json({ success: true, id: result.rows[0]?.id, message: "Department created" });
   } catch (error) {
+    if (isDuplicateDepartmentError(error)) {
+      return res.status(409).json({ success: false, message: "This department already exists for the selected location" });
+    }
     res.status(500).json({ success: false, message: error.message });
   }
 }
@@ -87,6 +121,23 @@ async function updateDepartment(req, res) {
     const allowed = ["code", "name", "plant_code", "description", "is_active"];
     const updates = allowed.filter((field) => Object.prototype.hasOwnProperty.call(req.body, field));
     if (!updates.length) return res.status(400).json({ success: false, message: "No department fields supplied" });
+    const { rows } = await db.query("SELECT TOP 1 code, name, plant_code FROM dbo.iot_departments WHERE id = ?", [req.params.id]);
+    if (!rows.length) return res.status(404).json({ success: false, message: "Department not found" });
+    const nextCode = updates.includes("code") ? cleanCode(req.body.code) : rows[0].code;
+    const nextName = updates.includes("name") ? cleanText(req.body.name) : rows[0].name;
+    const nextPlantCode = updates.includes("plant_code") ? cleanText(req.body.plant_code) : rows[0].plant_code;
+    if (!nextCode || !nextName) {
+      return res.status(400).json({ success: false, message: "Department code and name are required" });
+    }
+    const duplicate = await findDuplicateDepartment({
+      code: nextCode,
+      name: nextName,
+      plantCode: nextPlantCode,
+      excludeId: req.params.id,
+    });
+    if (duplicate) {
+      return res.status(409).json({ success: false, message: "This department already exists for the selected location" });
+    }
     const values = updates.map((field) => {
       if (field === "code") return cleanCode(req.body[field]);
       if (field === "is_active") return req.body[field] === false || req.body[field] === 0 ? 0 : 1;
@@ -99,6 +150,9 @@ async function updateDepartment(req, res) {
     `, [...values, req.params.id]);
     res.json({ success: true, message: "Department updated" });
   } catch (error) {
+    if (isDuplicateDepartmentError(error)) {
+      return res.status(409).json({ success: false, message: "This department already exists for the selected location" });
+    }
     res.status(500).json({ success: false, message: error.message });
   }
 }

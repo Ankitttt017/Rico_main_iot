@@ -40,7 +40,7 @@ const LEAK_TEST_CONTROL = {
 const LEAK_DUPLICATE_WINDOW_SEC = Number(process.env.PLC_LEAK_DUPLICATE_WINDOW_SEC || 3);
 const LEAK_QR_DUPLICATE_WINDOW_SEC = Number(process.env.PLC_LEAK_QR_DUPLICATE_WINDOW_SEC || 300);
 const LEAK_CHANGE_SAVE_ENABLED =
-  String(process.env.PLC_LEAK_SAVE_ON_CHANGE || "true").toLowerCase() !== "false";
+  String(process.env.PLC_LEAK_SAVE_ON_CHANGE || "false").toLowerCase() === "true";
 const LEAK_CHANGE_MIN_INTERVAL_MS = Number(process.env.PLC_LEAK_CHANGE_MIN_INTERVAL_MS || 1500);
 
 const PLC_READ_TIMEOUT_MS = Number(process.env.PLC_READ_TIMEOUT_MS || 8000);

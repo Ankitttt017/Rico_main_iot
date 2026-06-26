@@ -49,6 +49,14 @@ const normalizeLookupText = (value) => String(value || "")
   .replace(/^"+|"+$/g, "")
   .toLowerCase();
 
+const mergeRegisters = (current = [], imported = []) => [
+  ...(Array.isArray(current) ? current : []),
+  ...imported.map((register, index) => ({
+    ...register,
+    id: register.id || `import-${Date.now()}-${index}`,
+  })),
+];
+
 const MachineDashboard = ({ onLogout, currentUser }) => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [machines, setMachines]         = useState([]);
@@ -350,7 +358,20 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
   }, [getSelectedLine]);
 
   const buildPlcDraftForMachine = useCallback((machine, configs = plcConfigs, defaults = defaultRegistersByType) => {
-    const existing = configs.find((config) => String(config.machine_id || "") === String(machine?.id || ""));
+    const machineKey = normalizeLookupText(keyFromMachine(machine) || machine?.machine_key || machine?.machine_code);
+    const machineName = normalizeLookupText(machine?.name || machine?.machine_name);
+    const machineIp = normalizeLookupText(machine?.ip_address || machine?.plc_ip);
+    const existing = configs.find((config) => {
+      const configKey = normalizeLookupText(config.machine_key);
+      const configName = normalizeLookupText(config.machine_name);
+      const configIp = normalizeLookupText(config.ip_address);
+      return (
+        String(config.machine_id || "") === String(machine?.id || "") ||
+        (machineKey && configKey === machineKey) ||
+        (machineName && configName === machineName) ||
+        (machineIp && configIp === machineIp)
+      );
+    });
     if (existing) return withRegisterDefaults(existing, defaults);
 
     const type = inferAssetType(machine);
@@ -777,7 +798,7 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
                       ]}
                     />
                   </div>
-                  <div className="border-t border-slate-100 p-5">
+                  <div className="border-t border-slate-100 bg-slate-50/40 p-4">
                     <PlcMachineForm
                       draft={plcDraft}
                       setDraft={setPlcDraft}
@@ -790,9 +811,15 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
                       showActions={false}
                       title="PLC Config / Tags"
                       description="Optional: add PLC IP, protocol and registers now. This config will be linked to the machine after Machine Master save."
-                      onImportRegisters={(imported) => setPlcDraft((current) => ({ ...current, register_config: imported }))}
+                      onImportRegisters={(imported) => setPlcDraft((current) => ({
+                        ...current,
+                        register_config: mergeRegisters(
+                          current.register_config || getDefaultRegisters(defaultRegistersByType, getPlcMachineType(current)),
+                          imported
+                        ),
+                      }))}
                     />
-                    <div className="mt-4">
+                    <div className="mt-3">
                       <RegisterConfigTable
                         registers={plcDraft.register_config || getDefaultRegisters(defaultRegistersByType, getPlcMachineType(plcDraft))}
                         setRegisters={(updater) => setPlcDraft((current) => ({
