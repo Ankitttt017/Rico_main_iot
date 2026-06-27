@@ -4,7 +4,7 @@ import { io } from "socket.io-client";
 import AppLayout from "../../../components/common/AppLayout";
 import { getPlcLatestReadings } from "../../../services/api";
 import { SOCKET_URL } from "../../../services/endpoints";
-import { DEFAULT_MACHINES, MACHINE_NAMES, PLC_LATEST_POLL_MS, REGISTER_GROUPS, getMachineKey, mergeMachineList } from "../constants";
+import { DEFAULT_MACHINES, MACHINE_NAMES, PLC_LATEST_POLL_MS, REGISTER_GROUPS, getMachineKey, mergeMachineList, sortMachinesBySeries } from "../constants";
 import PlcMonitorStyles from "../components/PlcMonitorStyles";
 import PlcReportModal from "../components/PlcReportModal";
 import { MachineStatusCard, MetricTile, ParameterTable, STATUS_CFG, ValueCard, formatValue } from "../components/PlcWidgets";
@@ -646,14 +646,14 @@ function PLCDashboard() {
 
   const machineSearch = (searchParams.get("search") || "").trim().toLowerCase();
   const visibleMachines = useMemo(() => (
-    machineSearch
+    sortMachinesBySeries(machineSearch
       ? machines.filter((machine) => {
         const key = getMachineKey(machine);
         const label = machine.name || MACHINE_NAMES[machine.ip] || machine.ip;
         return [key, label, machine.ip, machine.kind]
           .some((value) => String(value || "").toLowerCase().includes(machineSearch));
       })
-      : machines
+      : machines)
   ), [machineSearch, machines]);
 
   useEffect(() => {

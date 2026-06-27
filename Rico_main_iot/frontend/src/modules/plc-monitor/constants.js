@@ -8,6 +8,42 @@ export function getMachineKey(machine = {}) {
   return machine.key || machine.machine_key || machine.ip;
 }
 
+const machineNameCollator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: "base",
+});
+
+function getMachineLabel(machine = {}) {
+  return machine.name || MACHINE_NAMES[machine.ip] || machine.machine_name || getMachineKey(machine) || machine.ip || "";
+}
+
+function getMachineSortParts(machine = {}) {
+  const label = getMachineLabel(machine);
+  const normalized = String(label || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/\s*-\s*/g, "-")
+    .replace(/([a-z])\s+(\d)/gi, "$1$2")
+    .replace(/(\d)\s+([a-z])/gi, "$1$2");
+  const match = normalized.match(/^(.*?)(?:-?\s*0*(\d+))$/);
+  return {
+    family: match ? match[1].replace(/[-\s]+$/g, "") : normalized,
+    number: match ? Number(match[2]) : Number.MAX_SAFE_INTEGER,
+    label: normalized,
+  };
+}
+
+export function sortMachinesBySeries(source = []) {
+  return [...source].sort((a, b) => {
+    const aParts = getMachineSortParts(a);
+    const bParts = getMachineSortParts(b);
+    const familyDiff = machineNameCollator.compare(aParts.family, bParts.family);
+    if (familyDiff !== 0) return familyDiff;
+    if (aParts.number !== bParts.number) return aParts.number - bParts.number;
+    return machineNameCollator.compare(aParts.label, bParts.label);
+  });
+}
+
 export function mergeMachineList(list = []) {
   const byKey = new Map(DEFAULT_MACHINES.map((machine) => [getMachineKey(machine), machine]));
   list.forEach((machine) => {
@@ -24,7 +60,7 @@ export function mergeMachineList(list = []) {
       cycleTime: machine.cycleTime,
     });
   });
-  return Array.from(byKey.values());
+  return sortMachinesBySeries(Array.from(byKey.values()));
 }
 
 export const REGISTER_GROUPS = [
