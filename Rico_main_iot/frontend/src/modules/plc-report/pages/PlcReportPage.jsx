@@ -43,6 +43,8 @@ const HIDDEN_COLUMNS = new Set([
   "cycle_start_time",
   "cycle_end",
   "cycle_end_time",
+  "ok_shot",
+  "ng_counter",
   "minor_stoppage_machine",
   "vacuum_pressure_mmhg",
   "raw_readings_json",
@@ -579,6 +581,38 @@ function getMachineLabel(machine) {
   return machine?.machine_name || machine?.name || machine?.plc_ip || machine?.ip_address || getMachineId(machine);
 }
 
+const machineNameCollator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: "base",
+});
+
+function getMachineSortParts(machine) {
+  const label = getMachineLabel(machine);
+  const normalized = String(label || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/\s*-\s*/g, "-")
+    .replace(/([a-z])\s+(\d)/gi, "$1$2")
+    .replace(/(\d)\s+([a-z])/gi, "$1$2");
+  const match = normalized.match(/^(.*?)(?:-?\s*0*(\d+))$/);
+  return {
+    family: match ? match[1].replace(/[-\s]+$/g, "") : normalized,
+    number: match ? Number(match[2]) : Number.MAX_SAFE_INTEGER,
+    label: normalized,
+  };
+}
+
+function sortMachinesBySeries(source = []) {
+  return [...source].sort((a, b) => {
+    const aParts = getMachineSortParts(a);
+    const bParts = getMachineSortParts(b);
+    const familyDiff = machineNameCollator.compare(aParts.family, bParts.family);
+    if (familyDiff !== 0) return familyDiff;
+    if (aParts.number !== bParts.number) return aParts.number - bParts.number;
+    return machineNameCollator.compare(aParts.label, bParts.label);
+  });
+}
+
 function normalizeMachineIdentity(value) {
   const compact = String(value || "")
     .trim()
@@ -825,7 +859,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
         line_id: machine.line_id,
       });
     });
-    return dedupeMachines(rows);
+    return sortMachinesBySeries(dedupeMachines(rows));
   }, [machines, machinesByLine]);
 
   const getMachinesForLine = useCallback((lineId) => {
@@ -835,8 +869,8 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     const matched = allReportMachines.filter((machine) =>
       getMachineDedupeKeys(machine).some((key) => lineKeys.has(key))
     );
-    if (matched.length) return matched;
-    return dedupeMachines(lineMachines
+    if (matched.length) return sortMachinesBySeries(matched);
+    return sortMachinesBySeries(dedupeMachines(lineMachines
       .map((machine) => {
         const ip = machine.ip_address || machine.plc_ip || machine.ip;
         if (!ip) return null;
@@ -850,7 +884,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
           line_id: machine.line_id || lineId,
         };
       })
-      .filter(Boolean));
+      .filter(Boolean)));
   }, [allReportMachines, machinesByLine]);
 
   const activeMachineOptions = useMemo(
