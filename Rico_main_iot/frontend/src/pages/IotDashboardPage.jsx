@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import AppLayout from "../components/common/AppLayout";
 import { getMachines, getPlcLatestReadings, getStats } from "../services/api";
+import { sortMachinesBySeries } from "../modules/plc-monitor/constants";
 
 const fmt = (value) => Number(value || 0).toLocaleString("en-IN");
 
@@ -62,6 +63,11 @@ const IotDashboardPage = ({ onLogout, currentUser }) => {
     { label: "Live PLCs", value: liveSummary.online, helper: `${liveSummary.total} latest signals`, tone: "border-teal-200" },
     { label: "NG Signals", value: liveSummary.ng, helper: "Latest cycle status", tone: "border-rose-200" },
   ];
+
+  const snapshotRows = useMemo(
+    () => sortMachinesBySeries(latest.length ? latest : machines).slice(0, 8),
+    [latest, machines]
+  );
 
   const quickActions = [
     { label: "Open Workstation", to: "/operator-workstation", permission: "workstation:view" },
@@ -127,7 +133,7 @@ const IotDashboardPage = ({ onLogout, currentUser }) => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {(latest.length ? latest.slice(0, 8) : machines.slice(0, 8)).map((row, index) => {
+                  {snapshotRows.map((row, index) => {
                     const online = row.is_online || row.has_data || String(row.status || "").toUpperCase() === "RUNNING";
                     const tone = online ? statusTone.online : statusTone.offline;
                     return (
@@ -141,7 +147,7 @@ const IotDashboardPage = ({ onLogout, currentUser }) => {
                       </tr>
                     );
                   })}
-                  {!latest.length && !machines.length && (
+                  {!snapshotRows.length && (
                     <tr>
                       <td colSpan={4} className="px-4 py-10 text-center text-sm font-semibold text-slate-400">No machine data available</td>
                     </tr>
