@@ -224,6 +224,8 @@ const DUPLICATE_SOURCE_COLUMNS = new Set(Object.keys(LEGACY_COLUMNS_BY_PARAMETER
 
 const DROPPED_READING_COLUMNS = new Set([
   ...DUPLICATE_SOURCE_COLUMNS,
+  "Counter",
+  "counter",
   "HIGH SHOT COUNT value",
   "NG COUNTER",
   "NG COUNTER value",
@@ -367,6 +369,7 @@ const LEAK_CLIENT_READING_NAMES = new Set([
   "status",
   "cycle_end_time",
   "part_qr_code",
+  "scan_data",
   "result",
   "body_leak_value",
   "gall_1",
