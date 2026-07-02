@@ -49,9 +49,16 @@ export function mergeMachineList(list = []) {
   list.forEach((machine) => {
     const key = getMachineKey(machine);
     const defaultMachine = byKey.get(key);
+    const registerConfig = Array.isArray(machine.registerConfig)
+      ? machine.registerConfig
+      : Array.isArray(machine.register_config)
+        ? machine.register_config
+        : defaultMachine?.registerConfig;
     byKey.set(key, {
       ...(defaultMachine || {}),
       ...machine,
+      registerConfig,
+      register_config: registerConfig,
       connected: machine.connected,
       error: machine.error,
       lastCycleAt: machine.lastCycleAt,
@@ -85,7 +92,6 @@ export const REGISTER_GROUPS = [
       { name: "shot_second", unit: "" },
       { name: "shot_number", unit: "" },
       { name: "cycle_time", unit: "sec" },
-      { name: "minor_stoppage", unit: "sec" },
     ],
   },
   {
@@ -305,7 +311,6 @@ export const HIDDEN_DB_FIELDS = new Set([
   "Cycle End",
   "machine_key",
   "scan_data",
-  "cycle_start",
   "auto_mode",
   "manual_mode",
   "ng_shot",
@@ -343,8 +348,6 @@ export const DISPLAY_LABELS = {
   ok_shot: "OK Shot",
   shot_number: "Shot Number",
   cycle_time: "Cycle Time",
-  minor_stoppage: "Minor Stoppage",
-  minor_stoppage_machine: "Minor Stoppage Machine",
   "cycletime value (sec)": "Cycle Time",
   "cycletime EndDateTime": "Shot Time",
   shot_hour: "Shot Hour",
@@ -402,5 +405,22 @@ export const DISPLAY_LABELS = {
   extractor_step: "Extractor Step",
   spray_step: "Spray Step",
   cycle_end: "Cycle End",
+  part_scan_data: "Part Scan Data",
+  cycle_time_in_sec: "Cycle Time In Sec",
+  gauge_status: "Gauge Status",
+  gauge_judgement: "Gauge Judgement",
+  cycle_mode_auto_manual: "Cycle Mode Auto/Manual",
+  cycle_start: "Cycle Start",
+  cycle_start_time: "Cycle Start Time",
+  cycle_complete: "Cycle Complete",
+  "Part Scan Data": "Part Scan Data",
+  "Cycle Time Sec": "Cycle Time In Sec",
+  "Cycle Time In Sec": "Cycle Time In Sec",
+  "Gauge  Status": "Gauge Status",
+  "Gauge Status": "Gauge Status",
+  "Gauge Judgement": "Gauge Judgement",
+  "Cycle Mode Auto/Manual": "Cycle Mode Auto/Manual",
+  "Cycle Start": "Cycle Start",
+  "Cycle Complete": "Cycle Complete",
 };
 

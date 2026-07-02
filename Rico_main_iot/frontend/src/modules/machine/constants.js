@@ -62,6 +62,9 @@ export const LINES_BY_DIVISION = {
 };
 
 export const MACHINE_TYPE_LABELS = {
+  gauge: "Gauge",
+  leaktest: "Leak Test",
+  ube: "UBE",
   hpdc: "HPDC Machine",
   cnc: "CNC",
   broach: "Broaching",

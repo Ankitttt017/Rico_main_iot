@@ -22,7 +22,9 @@ const REQUIRED_COLUMNS = {
     "id", "recorded_at", "created_at", "machine_key", "machine_name", "plc_ip", "plc_port", "part_name",
     "shot_year", "shot_month", "shot_day", "shot_date", "shot_hour", "shot_minute", "shot_second", "shot_datetime",
     "Counter", "raw_readings_json", "shot_number", "ok_shot", "ng_counter",
-    "cycle_start_time", "cycle_end_time", "minor_stoppage_machine", "cycle_time", "minor_stoppage", "cycle_end", "Cycle Start",
+    "cycle_start_time", "cycle_end_time", "minor_stoppage_machine", "machine_breakdown",
+    "minor_stoppage_start_time", "minor_stoppage_end_time", "minor_stoppage_bit", "stoppage_duration_sec", "stoppage_type",
+    "cycle_time", "minor_stoppage", "cycle_end", "Cycle Start",
     "die_close_core_in_time", "pouring_time", "shot_fwd_time", "curing_time", "die_open_core_out_time",
     "ejector_time", "extract_time", "spray_time", "v1_speed", "v2_speed", "v3_speed", "v4_speed",
     "metal_pressure", "furnace_metal_temp", "cooling_water_mov", "cooling_water_sta", "accel_point", "deaccel_point",
@@ -34,7 +36,14 @@ const REQUIRED_COLUMNS = {
     "vacuum_pressure_mmhg", "average_die_clamp_tonnage_count", "time_for_stroke", "stroke", "shot_status",
   ],
   PlcConnectionEvents: ["id", "plc_ip", "event_type", "started_at", "ended_at"],
+  plc_machine_readings: ["id", "recorded_at", "machine_key", "machine_type", "raw_readings_json"],
+  plc_machine_reading_values: ["id", "reading_id", "parameter_key", "raw_value"],
   Leaktest: ["Id", "PLC_IP", "Status", "Cycle_End_Time", "Result"],
+  Gauge: [
+    "Id", "Recorded_At", "Machine_Key", "Machine_Name", "PLC_IP", "PLC_Port",
+    "Part_Scan_Data", "Cycle_Time_In_Sec", "Gauge_Status",
+    "Gauge_Judgement", "Cycle_Mode_Auto_Manual", "Cycle_Start", "Cycle_Complete",
+  ],
   workstation_downtime_events: ["id", "machine_key", "reason", "status", "started_at"],
 };
 
@@ -54,7 +63,10 @@ const REQUIRED_INDEXES = [
   "IX_PlcCycleReadings_machine_shot_date_number",
   "IX_PlcCycleReadings_ip_shot_date_number",
   "IX_PlcConnectionEvents_started_at_desc",
+  "IX_plc_machine_readings_machine_recorded_desc",
+  "IX_plc_machine_reading_values_reading_parameter",
   "IX_Leaktest_ip_cycle_end_desc",
+  "IX_Gauge_machine_recorded_desc",
 ];
 
 async function verifySchema() {

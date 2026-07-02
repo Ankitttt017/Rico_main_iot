@@ -9,8 +9,30 @@ let cachedAt = 0;
 
 function normalizeConfiguredMachine(machine = {}, index = 0) {
   const ip = String(machine.ip || machine.ip_address || "").trim();
-  const kind = String(machine.kind || machine.machine_type || "ube").trim().toLowerCase() === "leaktest" ? "leaktest" : "ube";
-  const name = String(machine.name || machine.machine_name || ip || `${kind === "leaktest" ? "Leaktest" : "UBE 850T"}-${index + 1}`).trim();
+  const rawKind = String(machine.kind || machine.machine_type || "generic")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "generic";
+  const registerConfig = Array.isArray(machine.register_config) ? machine.register_config : null;
+  const machineText = [
+    machine.name,
+    machine.machine_name,
+    machine.machine_key,
+    machine.machine_code,
+  ].join(" ").toLowerCase();
+  const registerText = (registerConfig || [])
+    .map((item) => String(item?.name || item?.parameter || "").toLowerCase())
+    .join(" ");
+  const kind = rawKind !== "generic" && rawKind !== "ube"
+    ? rawKind
+    : machineText.includes("gauge") || registerText.includes("part scan") || registerText.includes("gauge status")
+      ? "gauge"
+      : machineText.includes("leak")
+        ? "leaktest"
+        : rawKind;
+  const defaultPrefix = kind === "generic" ? "PLC Machine" : kind.toUpperCase();
+  const name = String(machine.name || machine.machine_name || ip || `${defaultPrefix}-${index + 1}`).trim();
   const key = String(machine.key || machine.machine_key || machine.machine_code || name || ip)
     .trim()
     .toLowerCase()
@@ -25,7 +47,7 @@ function normalizeConfiguredMachine(machine = {}, index = 0) {
     port: Number(machine.port || machine.plc_port || 5002),
     name,
     kind,
-    registerConfig: Array.isArray(machine.register_config) ? machine.register_config : null,
+    registerConfig,
   };
 }
 
@@ -47,9 +69,9 @@ function getMachines() {
   return DEFAULT_MACHINES;
 }
 
-async function getConfiguredMachines() {
+async function getConfiguredMachines(forceRefresh = false) {
   if (process.env.PLC_MACHINES_JSON) return getMachines();
-  if (cachedMachines && Date.now() - cachedAt < CONFIG_CACHE_MS) return cachedMachines;
+  if (!forceRefresh && cachedMachines && Date.now() - cachedAt < CONFIG_CACHE_MS) return cachedMachines;
 
   try {
     const existsResult = await db.query(`
@@ -59,11 +81,14 @@ async function getConfiguredMachines() {
     if (!tableExists) return getMachines();
 
     const { rows } = await db.query(`
-      SELECT id, machine_id, machine_key, machine_name, machine_type, ip_address, port, register_config_json
-      FROM dbo.plc_machine_configs WITH (NOLOCK)
-      WHERE is_active = 1
-        AND NULLIF(LTRIM(RTRIM(ip_address)), '') IS NOT NULL
-      ORDER BY sequence_no, machine_name;
+      SELECT pc.id, pc.machine_id, pc.machine_key, pc.machine_name, pc.machine_type,
+             pc.ip_address, pc.port, pc.register_config_json
+      FROM dbo.plc_machine_configs pc WITH (NOLOCK)
+      LEFT JOIN dbo.iot_machines m WITH (NOLOCK) ON m.id = pc.machine_id
+      WHERE pc.is_active = 1
+        AND (pc.machine_id IS NULL OR m.is_active = 1)
+        AND NULLIF(LTRIM(RTRIM(pc.ip_address)), '') IS NOT NULL
+      ORDER BY pc.sequence_no, pc.machine_name;
     `);
 
     const machines = rows

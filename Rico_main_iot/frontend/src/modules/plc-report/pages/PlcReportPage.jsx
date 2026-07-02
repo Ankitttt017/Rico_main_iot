@@ -4,6 +4,7 @@ import { CheckCircle2, Download } from "lucide-react";
 import AppLayout from "../../../components/common/AppLayout";
 import ricoLogo from "../../../assets/rico-logo.png";
 import { DISPLAY_LABELS } from "../../plc-monitor/constants";
+import { normalizeDisplayValue } from "../../plc-monitor/utils/plcFormatters";
 import {
   getLineMachines,
   getLines,
@@ -12,21 +13,22 @@ import {
 } from "../../../services/api";
 
 const DEFAULT_MACHINE = {
-  machine_key: "ube-850t-2",
-  machine_name: "UBE 850T-2",
-  plc_ip: "192.168.117.201",
-  plc_port: 5002,
+  machine_key: "",
+  machine_name: "Machine",
+  plc_ip: "",
+  plc_port: "",
 };
 
 const REPORT_AUTO_REFRESH_MS = Number(import.meta.env.VITE_PLC_REPORT_REFRESH_MS || 5000);
-const REPORT_HISTORY_LIMIT = Number(import.meta.env.VITE_PLC_REPORT_HISTORY_LIMIT || 15000);
 const REPORT_PAGE_SIZE = Number(import.meta.env.VITE_PLC_REPORT_PAGE_SIZE || 100);
+const REPORT_EXPORT_PAGE_SIZE = Number(import.meta.env.VITE_PLC_REPORT_EXPORT_PAGE_SIZE || 20000);
 
 const HIDDEN_COLUMNS = new Set([
   "id",
   "history_rank",
   "recorded_at",
   "shot_datetime",
+  "production_date",
   "shot_day",
   "shot_fwd_time_sec",
   "shot_fwd_time_sec_value",
@@ -43,8 +45,6 @@ const HIDDEN_COLUMNS = new Set([
   "cycle_start_time",
   "cycle_end",
   "cycle_end_time",
-  "ok_shot",
-  "ng_counter",
   "minor_stoppage_machine",
   "vacuum_pressure_mmhg",
   "raw_readings_json",
@@ -86,8 +86,6 @@ const PREFERRED_COLUMNS = [
   "ok_shot",
   "ng_counter",
   "cycle_time",
-  "minor_stoppage",
-  "minor_stoppage_machine",
 ];
 
 const SHOT_STATUS = {
@@ -169,8 +167,6 @@ const REPORT_LABELS = {
 
 const REPORT_UNITS = {
   cycle_time: "sec",
-  minor_stoppage: "sec",
-  minor_stoppage_machine: "sec",
   die_close_core_in_time: "sec",
   pouring_time: "sec",
   shot_fwd_time: "sec",
@@ -478,14 +474,22 @@ function getRowCalendarDate(row = {}) {
 
 function getRowProductionDate(row = {}) {
   const calendarDate = getRowCalendarDate(row);
-  if (!calendarDate) return null;
+  const productionDate = normalizeDateInput(getRowValue(row, "production_date", "Production Date"));
+  if (!calendarDate) return productionDate;
   const timeParts = getRowTimeParts(row);
   const shift = getShiftFromTimeParts(timeParts);
   const seconds = getSecondsFromTimeParts(timeParts);
   if (shift === "C" && seconds !== null && seconds < 6 * 3600) {
     return addDaysToInputDate(calendarDate, -1);
   }
-  return calendarDate;
+  return productionDate || calendarDate;
+}
+
+function formatTimeParts12Hour(parts) {
+  if (!parts) return "-";
+  const period = parts.hour >= 12 ? "PM" : "AM";
+  const hour = parts.hour % 12 || 12;
+  return `${String(hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}:${String(parts.second).padStart(2, "0")} ${period}`;
 }
 
 function isRowInProductionFilter(row = {}, fromDate, toDate, shiftFilter, shotResultFilter = "all") {
@@ -509,22 +513,26 @@ function shotStatusLabel(value) {
 function formatValue(value, key) {
   if (NOT_AVAILABLE_COLUMNS.has(normalizeColumnKey(key))) return "N/A";
   if (value === null || value === undefined || value === "") return "-";
-  if (normalizeColumnKey(key) === "biscuit_thickness") return String(value);
+  const normalizedKey = normalizeColumnKey(key);
+  const displayValue = normalizeDisplayValue(key, value);
+  if (normalizedKey === "biscuit_thickness") return String(displayValue);
   if (key === "recorded_at" || key === "cycle_end_time") return formatDateTime(value);
   if (key === "shot_date") return formatDateOnly(value);
   if (key === "shot_time") return formatTimeOnly(value);
-  if (key === "shot_status") {
+  if (normalizedKey === "shot_status") {
     return shotStatusLabel(value);
   }
-  return String(value);
+  return String(displayValue);
 }
 
 function formatReportCell(row, key, rowIndex = 0, rowCount = 0, rows = []) {
   if (key === SERIAL_COLUMN) return Math.max(1, rowCount - rowIndex);
   if (key === SHIFT_COLUMN) return getRowShift(row);
+  // The production day runs from 06:00 to 05:59. For C-shift rows after
+  // midnight, display the previous production date.
+  if (key === "shot_date") return formatDateOnly(getRowProductionDate(row) || row[key]);
   if (key === "shot_time") {
-    const parts = getRowTimeParts(row);
-    return parts ? `${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}:${String(parts.second).padStart(2, "0")}` : "-";
+    return formatTimeParts12Hour(getRowTimeParts(row));
   }
   if (normalizeColumnKey(key) === "ng_counter" && rowIndex > 0) {
     const previousValue = rows[rowIndex - 1]?.[key];
@@ -581,38 +589,6 @@ function getMachineLabel(machine) {
   return machine?.machine_name || machine?.name || machine?.plc_ip || machine?.ip_address || getMachineId(machine);
 }
 
-const machineNameCollator = new Intl.Collator(undefined, {
-  numeric: true,
-  sensitivity: "base",
-});
-
-function getMachineSortParts(machine) {
-  const label = getMachineLabel(machine);
-  const normalized = String(label || "")
-    .trim()
-    .replace(/\s+/g, " ")
-    .replace(/\s*-\s*/g, "-")
-    .replace(/([a-z])\s+(\d)/gi, "$1$2")
-    .replace(/(\d)\s+([a-z])/gi, "$1$2");
-  const match = normalized.match(/^(.*?)(?:-?\s*0*(\d+))$/);
-  return {
-    family: match ? match[1].replace(/[-\s]+$/g, "") : normalized,
-    number: match ? Number(match[2]) : Number.MAX_SAFE_INTEGER,
-    label: normalized,
-  };
-}
-
-function sortMachinesBySeries(source = []) {
-  return [...source].sort((a, b) => {
-    const aParts = getMachineSortParts(a);
-    const bParts = getMachineSortParts(b);
-    const familyDiff = machineNameCollator.compare(aParts.family, bParts.family);
-    if (familyDiff !== 0) return familyDiff;
-    if (aParts.number !== bParts.number) return aParts.number - bParts.number;
-    return machineNameCollator.compare(aParts.label, bParts.label);
-  });
-}
-
 function normalizeMachineIdentity(value) {
   const compact = String(value || "")
     .trim()
@@ -649,6 +625,12 @@ function dedupeMachines(source = []) {
         ...machine,
         ...rows[existingIndex],
         line_id: rows[existingIndex].line_id || machine.line_id,
+        machine_type: inferMachineKind(rows[existingIndex], []) !== "ube"
+          ? inferMachineKind(rows[existingIndex], [])
+          : inferMachineKind(machine, []),
+        kind: inferMachineKind(rows[existingIndex], []) !== "ube"
+          ? inferMachineKind(rows[existingIndex], [])
+          : inferMachineKind(machine, []),
         plc_ip: rows[existingIndex].plc_ip || machine.plc_ip || machine.ip_address || machine.ip,
         plc_port: rows[existingIndex].plc_port || machine.plc_port || machine.port,
       };
@@ -712,28 +694,26 @@ function sortRowsLatestFirst(nextRows) {
 }
 
 function isLeakTestMachine(machine = {}, rows = []) {
-  const machineText = [
-    machine.machine_type,
-    machine.kind,
-    machine.machine_name,
-    machine.name,
-    machine.machine_key,
-  ].join(" ").toLowerCase();
-  if (machineText.includes("leak")) return true;
-  return rows.some((row) => String(row?.machine_type || row?.kind || "").toLowerCase() === "leaktest");
+  return inferMachineKind(machine, rows) === "leaktest";
 }
 
-function isHiddenForReport(key, hideLeakTestFields = false) {
+function isGaugeMachine(machine = {}, rows = []) {
+  return inferMachineKind(machine, rows) === "gauge";
+}
+
+function isHiddenForReport(key, hideLeakTestFields = false, isGauge = false) {
   const normalizedKey = normalizeColumnKey(key);
+  if (isGauge && ["cycle_start", "cycle_complete"].includes(normalizedKey)) return false;
   return HIDDEN_COLUMNS.has(normalizedKey) || (hideLeakTestFields && LEAK_TEST_HIDDEN_COLUMNS.has(normalizedKey));
 }
 
 function buildColumns(rows, options = {}) {
   const hideLeakTestFields = Boolean(options.hideLeakTestFields);
+  const isGauge = Boolean(options.isGauge);
   const keys = new Set();
   rows.forEach((row) => {
     Object.keys(row || {}).forEach((key) => {
-      if (!isHiddenForReport(key, hideLeakTestFields)) keys.add(key);
+      if (!isHiddenForReport(key, hideLeakTestFields, isGauge)) keys.add(key);
     });
   });
   if (rows.length) {
@@ -742,7 +722,7 @@ function buildColumns(rows, options = {}) {
     if (rows.some((row) => getRowTimeParts(row))) keys.add("shot_time");
   }
   return [
-    ...PREFERRED_COLUMNS.filter((key) => keys.has(key) && !isHiddenForReport(key, hideLeakTestFields)),
+    ...PREFERRED_COLUMNS.filter((key) => keys.has(key) && !isHiddenForReport(key, hideLeakTestFields, isGauge)),
     ...Array.from(keys)
       .filter((key) => !PREFERRED_COLUMNS.includes(key))
       .sort((a, b) => labelize(a).localeCompare(labelize(b))),
@@ -769,6 +749,7 @@ function KpiCard({ title, value, tone }) {
     rose: "border-rose-200 bg-rose-50 text-rose-700 ring-rose-100",
     blue: "border-blue-200 bg-blue-50 text-blue-700 ring-blue-100",
     indigo: "border-indigo-200 bg-indigo-50 text-indigo-700 ring-indigo-100",
+    cyan: "border-cyan-200 bg-cyan-50 text-cyan-700 ring-cyan-100",
   }[tone] || "border-slate-200 bg-white text-slate-700";
 
   return (
@@ -804,8 +785,13 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   const [draftShotNumberFilter, setDraftShotNumberFilter] = useState("");
   const [rows, setRows] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, pageSize: REPORT_PAGE_SIZE, total: 0, totalPages: 1 });
-  const [serverKpis, setServerKpis] = useState({ ok: 0, warm: 0, off: 0 });
+  const [serverKpis, setServerKpis] = useState({
+    ok: 0,
+    warm: 0,
+    off: 0,
+  });
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const tableScrollRef = useRef(null);
@@ -854,6 +840,8 @@ export default function PlcReportPage({ onLogout, currentUser }) {
         machine_name: machine.machine_name || machine.name || machine.machine_code || ip,
         machine_code: machine.machine_code,
         name: machine.name,
+        machine_type: inferMachineKind(machine),
+        kind: inferMachineKind(machine),
         plc_ip: ip,
         plc_port: machine.port || machine.plc_port || 5002,
         line_id: machine.line_id,
@@ -879,6 +867,8 @@ export default function PlcReportPage({ onLogout, currentUser }) {
           machine_name: machine.machine_name || machine.name || machine.machine_code || ip,
           machine_code: machine.machine_code,
           name: machine.name,
+          machine_type: inferMachineKind(machine),
+          kind: inferMachineKind(machine),
           plc_ip: ip,
           plc_port: machine.port || machine.plc_port || 5002,
           line_id: machine.line_id || lineId,
@@ -1048,10 +1038,14 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     () => isLeakTestMachine(selectedMachine, filteredRows),
     [filteredRows, selectedMachine]
   );
+  const showGaugeFields = useMemo(
+    () => isGaugeMachine(selectedMachine, filteredRows),
+    [filteredRows, selectedMachine]
+  );
 
   const columns = useMemo(
-    () => buildColumns(filteredRows, { hideLeakTestFields }),
-    [filteredRows, hideLeakTestFields]
+    () => buildColumns(filteredRows, { hideLeakTestFields, isGauge: showGaugeFields }),
+    [filteredRows, hideLeakTestFields, showGaugeFields]
   );
 
   const reportRows = useMemo(
@@ -1082,7 +1076,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     });
     if (!reportRows.length) counts.shift = shiftFilter === "all" ? "All" : shiftFilter;
     return counts;
-  }, [pagination.total, reportRows, serverKpis.off, serverKpis.ok, serverKpis.warm, shiftFilter]);
+  }, [pagination.total, reportRows, serverKpis, shiftFilter]);
 
   const reportRangeLabel = `${formatDisplayDate(fromDate)} to ${formatDisplayDate(toDate)}`;
   const reportFilterLabel = getQuickFilterLabel(activeQuickFilter);
@@ -1102,12 +1096,51 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     toDate,
   ].filter(Boolean).join("-");
 
-  const downloadPdf = () => {
+  const loadAllReportRows = useCallback(async () => {
+    const allRows = [];
+    let page = 1;
+    let totalPages = 1;
+
+    do {
+      const response = await getPlcReadingHistory({
+        ip: getMachineReportIp(selectedMachine),
+        from: fromDate,
+        to: toDate,
+        page,
+        pageSize: REPORT_EXPORT_PAGE_SIZE,
+        shift: shiftFilter,
+        shotResult: shotResultFilter,
+        shotNumber: shotNumberFilter,
+      });
+      const pageRows = Array.isArray(response.data?.data) ? response.data.data : [];
+      allRows.push(...pageRows);
+      totalPages = Number(response.data?.pagination?.totalPages || 1);
+      page += 1;
+    } while (page <= totalPages);
+
+    return sortRowsLatestFirst(allRows);
+  }, [fromDate, selectedMachine, shiftFilter, shotNumberFilter, shotResultFilter, toDate]);
+
+  const downloadPdf = async () => {
+    setExporting(true);
+    let exportRows;
+    try {
+      exportRows = await loadAllReportRows();
+    } catch (err) {
+      setError(err.response?.data?.error || err.response?.data?.message || "Unable to prepare the complete report.");
+      setExporting(false);
+      return;
+    }
+    setExporting(false);
+    const exportColumns = buildColumns(exportRows, {
+      hideLeakTestFields: isLeakTestMachine(selectedMachine, exportRows),
+      isGauge: isGaugeMachine(selectedMachine, exportRows),
+    });
     const title = `${machineLabel} Production Report`;
     const generatedAt = formatDateTime(new Date());
-    const header = columns.map((key) => `<th>${escapeHtml(labelize(key))}</th>`).join("");
-    const body = reportRows.map((row, index) => (
-      `<tr>${columns.map((key) => `<td${reportCellHtmlAttrs(row, key)}>${escapeHtml(formatReportCell(row, key, index, reportRows.length, reportRows))}</td>`).join("")}</tr>`
+    const header = exportColumns.map((key) => `<th>${escapeHtml(labelize(key))}</th>`).join("");
+    const body = exportRows.map((row, index) => (
+      `<tr>${exportColumns.map((key) => `<td${reportCellHtmlAttrs(row, key)}>${escapeHtml(formatReportCell(row, key, index, exportRows.length, exportRows))}</td>`).join("")}</tr>`
     )).join("");
     const popup = window.open("", "_blank", "width=1200,height=800");
     if (!popup) return;
@@ -1157,7 +1190,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       <div>
         <div class="company">Rico Auto Industries Limited</div>
         <h1>${escapeHtml(title)}</h1>
-        <div class="meta">${escapeHtml(reportFilterLabel)} | ${escapeHtml(reportShiftLabel)} | ${escapeHtml(reportShotResultLabel)} | ${escapeHtml(reportRangeLabel)} | ${reportRows.length} records</div>
+        <div class="meta">${escapeHtml(reportFilterLabel)} | ${escapeHtml(reportShiftLabel)} | ${escapeHtml(reportShotResultLabel)} | ${escapeHtml(reportRangeLabel)} | ${exportRows.length} records</div>
       </div>
       <div class="doc">
         <div><span>Report</span><strong>Production</strong></div>
@@ -1179,7 +1212,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       <div class="kpi"><span>Shift</span><strong>${kpis.shift}</strong></div>
     </div>
     <div class="table-title">Detailed Production Records</div>
-    <table><thead><tr>${header}</tr></thead><tbody>${body || `<tr><td colspan="${columns.length || 1}">No records</td></tr>`}</tbody></table>
+    <table><thead><tr>${header}</tr></thead><tbody>${body || `<tr><td colspan="${exportColumns.length || 1}">No records</td></tr>`}</tbody></table>
     <div class="footer"><span>Rico Auto Industries Limited - IoT Master Data</span><span>${escapeHtml(reportFileBaseName)}</span></div>
   </section>
   <script>window.onload=function(){window.print();};</script>
@@ -1188,12 +1221,26 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     popup.document.close();
   };
 
-  const downloadExcel = () => {
-    const colSpan = Math.max(columns.length || 1, 8);
+  const downloadExcel = async () => {
+    setExporting(true);
+    let exportRows;
+    try {
+      exportRows = await loadAllReportRows();
+    } catch (err) {
+      setError(err.response?.data?.error || err.response?.data?.message || "Unable to prepare the complete report.");
+      setExporting(false);
+      return;
+    }
+    setExporting(false);
+    const exportColumns = buildColumns(exportRows, {
+      hideLeakTestFields: isLeakTestMachine(selectedMachine, exportRows),
+      isGauge: isGaugeMachine(selectedMachine, exportRows),
+    });
+    const colSpan = Math.max(exportColumns.length || 1, 8);
     const generatedAt = formatDateTime(new Date());
-    const header = columns.map((key) => `<th>${escapeHtml(labelize(key))}</th>`).join("");
-    const body = reportRows.map((row, index) => (
-      `<tr>${columns.map((key) => `<td${reportCellHtmlAttrs(row, key)}>${escapeHtml(formatReportCell(row, key, index, reportRows.length, reportRows))}</td>`).join("")}</tr>`
+    const header = exportColumns.map((key) => `<th>${escapeHtml(labelize(key))}</th>`).join("");
+    const body = exportRows.map((row, index) => (
+      `<tr>${exportColumns.map((key) => `<td${reportCellHtmlAttrs(row, key)}>${escapeHtml(formatReportCell(row, key, index, exportRows.length, exportRows))}</td>`).join("")}</tr>`
     )).join("");
     downloadHtmlFile(`${reportFileBaseName}.xls`, `<!doctype html>
 <html>
@@ -1234,7 +1281,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     </tr>
     <tr>
       <td class="label">Shift</td><td class="value" colspan="2">${escapeHtml(reportShiftLabel)}</td>
-      <td class="label">Records</td><td class="value" colspan="3">${reportRows.length}</td>
+      <td class="label">Records</td><td class="value" colspan="3">${exportRows.length}</td>
     </tr>
     <tr>
       <td class="label">Date Range</td><td class="value" colspan="2">${escapeHtml(reportFilterLabel)}</td>
@@ -1257,7 +1304,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     </tr>
     <tr><td colspan="${colSpan}" class="section">Detailed Production Records</td></tr>
     <tr>${header}</tr>
-    ${body || `<tr><td colspan="${columns.length || 1}">No records</td></tr>`}
+    ${body || `<tr><td colspan="${exportColumns.length || 1}">No records</td></tr>`}
   </table>
 </body>
 </html>`);
@@ -1406,9 +1453,9 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                 <button type="button" onClick={clearReportFilters} className="inline-flex h-10 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50 sm:self-end">
                   Clear
                 </button>
-                <button type="button" onClick={downloadExcel} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-emerald-700 sm:self-end">
+                <button type="button" onClick={downloadExcel} disabled={exporting} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-wait disabled:opacity-60 sm:self-end">
                   <Download className="h-4 w-4" />
-                  Excel
+                  {exporting ? "Preparing..." : "Excel"}
                 </button>
               </div>
             </div>

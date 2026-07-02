@@ -331,15 +331,28 @@ const updateMachine = async (req, res) => {
       if (!nextBody.category && line.division) nextBody.category = line.division;
     }
 
+    const activeValue = Object.prototype.hasOwnProperty.call(nextBody, "is_active")
+      ? (nextBody.is_active === false || nextBody.is_active === 0 || nextBody.is_active === "0" ? 0 : 1)
+      : null;
+
     await db.run(
       `UPDATE ${TABLES.machines}
        SET ${updates.map((field) => `${field} = ?`).join(", ")}
        WHERE id = ?`,
       [...updates.map((field) => {
-        if (field === "is_active") return nextBody[field] === false || nextBody[field] === 0 || nextBody[field] === "0" ? 0 : 1;
+        if (field === "is_active") return activeValue;
         return nextBody[field] === "" ? null : nextBody[field];
       }), req.params.id]
     );
+
+    if (activeValue !== null) {
+      await db.run(`
+        IF OBJECT_ID('dbo.plc_machine_configs', 'U') IS NOT NULL
+          UPDATE dbo.plc_machine_configs
+          SET is_active = ?, updated_at = SYSUTCDATETIME()
+          WHERE machine_id = ?
+      `, [activeValue, req.params.id]);
+    }
 
     res.json({ success: true, message: "Machine updated" });
   } catch (err) {

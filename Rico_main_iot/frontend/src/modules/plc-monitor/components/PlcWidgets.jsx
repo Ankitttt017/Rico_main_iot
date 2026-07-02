@@ -1,4 +1,4 @@
-import { getDisplayLabel } from "../utils/plcFormatters";
+import { getDisplayLabel, getReadingValue } from "../utils/plcFormatters";
 
 export function Spark({ data, color = "#22d3ee" }) {
   if (!data) return null;
@@ -41,8 +41,18 @@ export const STATUS_CFG = {
 
 export function formatValue(value, fallback = "-") {
   if (value === null || value === undefined) return fallback;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? fallback : value.toLocaleString();
   if (typeof value === "number" && !Number.isInteger(value)) {
     return Number(value.toFixed(2));
+  }
+  if (typeof value === "object") {
+    if (Object.prototype.hasOwnProperty.call(value, "value")) return formatValue(value.value, fallback);
+    if (Object.prototype.hasOwnProperty.call(value, "data")) return formatValue(value.data, fallback);
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
   }
 
   return value;
@@ -55,6 +65,7 @@ export function hasReadableValue(value) {
 
 export function ValueCard({ name, label, unit, value, history, accentColor }) {
   const hasValue = value !== null && value !== undefined;
+  const displayValue = formatValue(value);
 
   return (
     <div className="vcard" style={{ "--accent": accentColor }}>
@@ -66,7 +77,7 @@ export function ValueCard({ name, label, unit, value, history, accentColor }) {
       </div>
       <div className="vcard-bottom">
         <div className="vcard-readout">
-          <span className="vcard-val">{hasValue ? value : "-"}</span>
+          <span className="vcard-val">{hasValue ? displayValue : "-"}</span>
           {hasValue && unit && <span className="vcard-unit">{unit}</span>}
         </div>
         <Spark data={history} color={accentColor} />
@@ -77,12 +88,13 @@ export function ValueCard({ name, label, unit, value, history, accentColor }) {
 
 export function MetricTile({ label, value, unit, tone = "cyan" }) {
   const isMachine = label === "Machine" || label === "Part Name";
+  const displayValue = formatValue(value);
 
   return (
     <div className={`metric metric-${tone} ${isMachine ? "metric-machine" : ""}`}>
       <div className="metric-label">{label}</div>
-      <div className="metric-value" title={value || ""}>
-        {formatValue(value)}
+      <div className="metric-value" title={displayValue || ""}>
+        {displayValue}
         {value !== null && value !== undefined && unit && (
           <span className="metric-unit">{unit}</span>
         )}
@@ -169,7 +181,7 @@ export function ParameterTable({ groups, readings }) {
         <tbody>
           {groups.flatMap(group =>
             group.keys.map(({ name, unit, label }) => {
-              const value = readings[name]?.value ?? null;
+              const value = getReadingValue(readings, name);
               return (
                 <tr key={name}>
                   <td title={name}>{label || getDisplayLabel(name)}</td>
