@@ -788,16 +788,23 @@ function getLeakQrDeviceCandidates(configuredDevice = "") {
   ])));
 }
 
+function isLikelyLeakQrCode(value, minLength) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  if (/^[A-Z]\d$/i.test(text)) return false;
+  return text.length >= minLength;
+}
+
 async function readLeakQrCode(sock, configuredDevice = "", configuredLength = 14) {
   const length = Number(process.env.PLC_LEAK_SCAN_LENGTH || configuredLength || 14);
+  const minLength = Math.max(1, Number(process.env.PLC_LEAK_SCAN_MIN_LENGTH || 4));
+  const matches = [];
   for (const device of getLeakQrDeviceCandidates(configuredDevice)) {
     if (!device) continue;
     const value = await readString(sock, device, length).catch(() => "");
-    if (String(value || "").trim()) {
-      return { value, device };
-    }
+    if (isLikelyLeakQrCode(value, minLength)) matches.push({ value, device });
   }
-  return { value: "", device: "" };
+  return matches.sort((a, b) => String(b.value).length - String(a.value).length)[0] || { value: "", device: "" };
 }
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

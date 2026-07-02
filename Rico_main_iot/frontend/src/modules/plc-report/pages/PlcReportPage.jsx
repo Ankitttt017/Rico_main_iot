@@ -43,9 +43,17 @@ const HIDDEN_COLUMNS = new Set([
   "plc_port",
   "cycle_start",
   "cycle_start_time",
+  "cycle_complete",
   "cycle_end",
   "cycle_end_time",
+  "machine_breakdown",
+  "minor_stoppage",
   "minor_stoppage_machine",
+  "minor_stoppage_start_time",
+  "minor_stoppage_end_time",
+  "minor_stoppage_bit",
+  "stoppage_duration_sec",
+  "stoppage_type",
   "vacuum_pressure_mmhg",
   "raw_readings_json",
   "created_at",
@@ -306,6 +314,10 @@ function normalizeColumnKey(key) {
     .replace(/[^a-zA-Z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "")
     .toLowerCase();
+}
+
+function isStoppageOrBreakdownColumn(key) {
+  return key.includes("stoppage") || key.includes("stopage") || key.includes("breakdown");
 }
 
 function formatDateTime(value) {
@@ -752,7 +764,11 @@ function isGaugeMachine(machine = {}, rows = []) {
 function isHiddenForReport(key, hideLeakTestFields = false, isGauge = false) {
   const normalizedKey = normalizeColumnKey(key);
   if (isGauge && ["cycle_start", "cycle_complete"].includes(normalizedKey)) return false;
-  return HIDDEN_COLUMNS.has(normalizedKey) || (hideLeakTestFields && LEAK_TEST_HIDDEN_COLUMNS.has(normalizedKey));
+  return (
+    HIDDEN_COLUMNS.has(normalizedKey) ||
+    isStoppageOrBreakdownColumn(normalizedKey) ||
+    (hideLeakTestFields && LEAK_TEST_HIDDEN_COLUMNS.has(normalizedKey))
+  );
 }
 
 function buildColumns(rows, options = {}) {
@@ -778,11 +794,12 @@ function buildColumns(rows, options = {}) {
 }
 
 function getColumnWidth(key) {
+  const normalizedKey = normalizeColumnKey(key);
   if (key === SERIAL_COLUMN) return 72;
   if (key === SHIFT_COLUMN) return 88;
   if (key === "recorded_at") return 150;
   if (key === "machine_name") return 140;
-  if (key === "part_name") return 130;
+  if (["part_name", "part_qr_code", "scan_data", "part_scan_data"].includes(normalizedKey)) return 240;
   if (key === "shot_status") return 135;
   if (key === "average_die_clamp_tonnage_count") return 230;
   if (String(key).length > 24) return 190;
@@ -1553,6 +1570,8 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                       <td
                         key={key}
                         className={`border-r px-4 py-2.5 text-center align-middle font-semibold leading-tight last:border-r-0 ${
+                          ["part_name", "part_qr_code", "scan_data", "part_scan_data"].includes(normalizeColumnKey(key)) ? "break-all" : ""
+                        } ${
                           isHighlightedReportCell(row, key)
                             ? "border-red-200 bg-red-100 text-red-800"
                             : "border-slate-100 text-slate-800"
