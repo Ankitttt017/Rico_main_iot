@@ -788,16 +788,22 @@ function getLeakQrDeviceCandidates(configuredDevice = "") {
   ])));
 }
 
+function isLikelyLeakQrCode(value, minLength = Number(process.env.PLC_LEAK_SCAN_MIN_LENGTH || 4)) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  if (/^[A-Z]\d$/i.test(text)) return false;
+  return text.length >= Math.max(1, Number(minLength || 4));
+}
+
 async function readLeakQrCode(sock, configuredDevice = "", configuredLength = 14) {
   const length = Number(process.env.PLC_LEAK_SCAN_LENGTH || configuredLength || 14);
+  const matches = [];
   for (const device of getLeakQrDeviceCandidates(configuredDevice)) {
     if (!device) continue;
     const value = await readString(sock, device, length).catch(() => "");
-    if (String(value || "").trim()) {
-      return { value, device };
-    }
+    if (isLikelyLeakQrCode(value)) matches.push({ value, device });
   }
-  return { value: "", device: "" };
+  return matches.sort((a, b) => String(b.value).length - String(a.value).length)[0] || { value: "", device: "" };
 }
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -2962,13 +2968,14 @@ function startPlcMonitor(io) {
       }
     }
 
+    const configuredQrValue = readings.part_qr_code;
     const primaryQr = await readLeakQrCode(sock, configuredQrDevice, configuredQrLength);
     if (primaryQr.value) {
       readings.part_qr_code = primaryQr.value;
       readings.scan_source_device = primaryQr.device;
     }
 
-    readings.scan_data = readings.part_qr_code || "";
+    readings.scan_data = primaryQr.value || (isLikelyLeakQrCode(configuredQrValue) ? configuredQrValue : "");
     readings.part_qr_code = readings.scan_data;
     readings.result = normalizeLeakResult(readings.result);
     const partName = readings.scan_data || "";
