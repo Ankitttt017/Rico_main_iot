@@ -39,6 +39,8 @@ const HIDDEN_COLUMNS = new Set([
   "shot_year",
   "machine_name",
   "machine_key",
+  "ok_shot",
+  "ng_counter",
   "plc_ip",
   "plc_port",
   "cycle_start",
@@ -789,6 +791,7 @@ function buildColumns(rows, options = {}) {
     ...PREFERRED_COLUMNS.filter((key) => keys.has(key) && !isHiddenForReport(key, hideLeakTestFields, isGauge)),
     ...Array.from(keys)
       .filter((key) => !PREFERRED_COLUMNS.includes(key))
+      .filter((key) => !isHiddenForReport(key, hideLeakTestFields, isGauge))
       .sort((a, b) => labelize(a).localeCompare(labelize(b))),
   ];
 }

@@ -80,6 +80,17 @@ const STOPPAGE_READING_KEYS = new Set([
   "stoppage_type",
 ]);
 
+function isStoppageOrBreakdownKey(key) {
+  const normalized = normalizeRegisterName(key);
+  return (
+    STOPPAGE_READING_KEYS.has(key) ||
+    STOPPAGE_READING_KEYS.has(normalized) ||
+    normalized.includes("stoppage") ||
+    normalized.includes("stopage") ||
+    normalized.includes("breakdown")
+  );
+}
+
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // UTILITY HELPERS
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -900,6 +911,9 @@ function formatDbRowForClient(row = {}) {
   }
 
   for (const column of DROPPED_READING_COLUMNS) delete next[column];
+  Object.keys(next).forEach((column) => {
+    if (isStoppageOrBreakdownKey(column)) delete next[column];
+  });
 
   for (const column of TWO_DIGIT_READING_COLUMNS) {
     if (Object.prototype.hasOwnProperty.call(next, column)) {
