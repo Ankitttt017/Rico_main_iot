@@ -16,7 +16,10 @@ const {
 const {
   TABLE,
   LEAK_TEST_TABLE,
+  GAUGE_TABLE,
   CONNECTION_EVENTS_TABLE,
+  MACHINE_READINGS_TABLE,
+  MACHINE_READING_VALUES_TABLE,
   DEVICE_CODE,
   CYCLE_START_DEVICE,
   CYCLE_END_DEVICE,
@@ -30,6 +33,7 @@ const {
   PLC_DB_RETRY_BATCH_SIZE,
   PLC_PENDING_SAVE_FILE,
   LEAK_TEST_CONTROL,
+  GAUGE_CONTROL,
   LEAK_DUPLICATE_WINDOW_SEC,
   LEAK_QR_DUPLICATE_WINDOW_SEC,
   LEAK_CHANGE_SAVE_ENABLED,
@@ -55,6 +59,7 @@ const {
 } = require("./config/registerConfig");
 
 let schemaReadyPromise = null;
+let schemaUsableAt = 0;
 const latestReadingsCache = {
   key: "",
   at: 0,
@@ -62,6 +67,18 @@ const latestReadingsCache = {
   promise: null,
 };
 const PLC_LATEST_DB_CACHE_MS = Math.max(500, Number(process.env.PLC_LATEST_DB_CACHE_MS || 3000));
+const PLC_LATEST_DB_TIMEOUT_MS = Math.max(500, Number(process.env.PLC_LATEST_DB_TIMEOUT_MS || 2500));
+const STOPPAGE_READING_KEYS = new Set([
+  "MINOR STOPPAGE sec.",
+  "minor_stoppage",
+  "minor_stoppage_machine",
+  "machine_breakdown",
+  "minor_stoppage_start_time",
+  "minor_stoppage_end_time",
+  "minor_stoppage_bit",
+  "stoppage_duration_sec",
+  "stoppage_type",
+]);
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // UTILITY HELPERS
@@ -119,6 +136,44 @@ function buildShotDateTimeValue(yearValue, monthValue, dayValue, hourValue, minu
   return shotDate && shotTime ? `${shotDate} ${shotTime}` : null;
 }
 
+function getProductionDate(shotDate, shotTime) {
+  if (!shotDate) return null;
+  const normalizedShotDate = normalizeReadingForDB("shot_date", shotDate);
+  if (!normalizedShotDate) return null;
+
+  const timeParts = String(shotTime || "").match(/^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/);
+  const hour = timeParts ? Number(timeParts[1]) : null;
+  const minute = timeParts ? Number(timeParts[2]) : 0;
+  const second = timeParts ? Number(timeParts[3] || 0) : 0;
+  if (
+    Number.isFinite(hour) &&
+    hour >= 0 &&
+    hour < 6 &&
+    minute >= 0 &&
+    minute <= 59 &&
+    second >= 0 &&
+    second <= 59
+  ) {
+    const date = new Date(`${normalizedShotDate}T00:00:00`);
+    if (Number.isNaN(date.getTime())) return normalizedShotDate;
+    date.setDate(date.getDate() - 1);
+    return systemDateTimeString(date).slice(0, 10);
+  }
+
+  return normalizedShotDate;
+}
+
+function getReadingProductionDate(readings = {}) {
+  const explicitProductionDate = normalizeReadingForDB("shot_date", readings.production_date);
+  if (explicitProductionDate) return explicitProductionDate;
+
+  const shotDate = readings.shot_date;
+  const shotTime =
+    readings.shot_time ||
+    (readings.shot_datetime ? String(readings.shot_datetime).replace("T", " ").slice(11, 19) : null);
+  return getProductionDate(shotDate, shotTime);
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -169,14 +224,74 @@ function closeSocket(sock) {
  * Returns true if machine is UBE die casting machine
  */
 function isUbeMachine(machine) {
-  return (machine.kind || "ube") !== "leaktest";
+  return getMachineTypeName(machine) === "ube";
+}
+
+function isGaugeMachine(machine) {
+  return getMachineTypeName(machine) === "gauge";
 }
 
 /**
  * Returns true if machine is Leak Test machine
  */
 function isLeakTestMachine(machine) {
-  return machine.kind === "leaktest";
+  return getMachineTypeName(machine) === "leaktest";
+}
+
+function getMachineTypeName(machine) {
+  const rawKind = String(machine?.kind || machine?.machine_type || machine?.machineType || "").trim().toLowerCase();
+  if (rawKind && rawKind !== "ube" && rawKind !== "generic") return rawKind;
+  const machineText = [
+    machine?.name,
+    machine?.machine_name,
+    machine?.machineKey,
+    machine?.machine_key,
+    machine?.key,
+  ].join(" ").toLowerCase();
+  const registerText = Array.isArray(machine?.registerConfig)
+    ? machine.registerConfig.map((item) => String(item?.name || item?.parameter || "").toLowerCase()).join(" ")
+    : "";
+  if (machineText.includes("gauge") || registerText.includes("part scan") || registerText.includes("gauge status")) {
+    return "gauge";
+  }
+  if (machineText.includes("leak")) return "leaktest";
+  return rawKind || "ube";
+}
+
+function normalizeUbeReadParameter(parameter = {}) {
+  const normalizedName = normalizeRegisterName(parameter.name || parameter.parameter || parameter.label);
+  if (
+    normalizedName === normalizeRegisterName("MINOR STOPPAGE sec.") ||
+    normalizedName === normalizeRegisterName("minor_stoppage") ||
+    normalizedName.includes("minor_stop")
+  ) {
+    return null;
+  }
+  return parameter;
+}
+
+function mergeUbeReadParameters(configuredParameters = []) {
+  const merged = [];
+  const seen = new Set();
+
+  const add = (parameter) => {
+    if (!parameter) return;
+    const normalized = normalizeUbeReadParameter(parameter);
+    if (!normalized) return;
+    const deviceKey = String(normalized.device || normalized.stringDevice || "").trim().toUpperCase();
+    const nameKey = normalizeRegisterName(normalized.name || normalized.parameter || normalized.label);
+    const key = deviceKey || nameKey;
+    if (key && seen.has(key)) return;
+    if (key) seen.add(key);
+    merged.push(normalized);
+  };
+
+  configuredParameters
+    .filter((parameter) => parameter && parameter.enabled !== false)
+    .forEach(add);
+  UBE_READ_PARAMETERS.forEach(add);
+
+  return merged;
 }
 
 function isReportSaveEnabledForMachine(machine) {
@@ -192,7 +307,7 @@ function isReportSaveEnabledForMachine(machine) {
  */
 function buildEmitPayload(machine, data) {
   const machineKey = machine.key || machine.ip;
-  const machineType = isLeakTestMachine(machine) ? "leaktest" : "ube";
+  const machineType = getMachineTypeName(machine);
   return {
     ...data,
     machineKey,
@@ -281,9 +396,46 @@ function sendReceive(sock, packet, expectedPayloadBytes = 1, label = "PLC read")
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function parseDevice(device) {
-  const match = device.match(/^([A-Z]+)(\d+)$/);
+  const match = String(device || "").trim().toUpperCase().match(/^([A-Z]+)([0-9A-F]+)$/);
   if (!match) throw new Error(`Invalid PLC device: ${device}`);
-  return { type: match[1], addr: Number.parseInt(match[2], 10) };
+  const radix = ["X", "Y"].includes(match[1]) ? 16 : 10;
+  return { type: match[1], addr: Number.parseInt(match[2], radix) };
+}
+
+function parseDeviceRange(deviceRange) {
+  const raw = String(deviceRange || "").trim().toUpperCase();
+  const [startRaw, endRaw] = raw.split("-").map((item) => item.trim()).filter(Boolean);
+  const start = parseDevice(startRaw || raw);
+  if (!endRaw) return { startDevice: `${start.type}${start.addr}`, length: null };
+
+  let resolvedEndRaw = endRaw;
+  if (/^[0-9A-F]+$/i.test(endRaw)) {
+    const startAddress = String(startRaw || raw).replace(/^[A-Z]+/i, "");
+    const shouldExpandSuffix =
+      endRaw.length < startAddress.length &&
+      !["X", "Y"].includes(start.type);
+    resolvedEndRaw = shouldExpandSuffix
+      ? `${startAddress.slice(0, startAddress.length - endRaw.length)}${endRaw}`
+      : endRaw;
+  }
+  const end = parseDevice(/^[0-9A-F]+$/i.test(resolvedEndRaw) ? `${start.type}${resolvedEndRaw}` : resolvedEndRaw);
+  if (start.type !== end.type || end.addr < start.addr) {
+    throw new Error(`Invalid PLC device range: ${deviceRange}`);
+  }
+
+  return {
+    startDevice: `${start.type}${start.addr}`,
+    length: (end.addr - start.addr) + 1,
+  };
+}
+
+function resolveStringReadTarget(stringDevice, stringLength) {
+  const { startDevice, length: rangeLength } = parseDeviceRange(stringDevice);
+  const configuredLength = Number.parseInt(stringLength, 10);
+  return {
+    startDevice,
+    length: rangeLength || (Number.isFinite(configuredLength) && configuredLength > 0 ? configuredLength : 1),
+  };
 }
 
 function buildPacket(device, count, isBit = false) {
@@ -408,6 +560,7 @@ function connectPLC(machine) {
 
 function scaleValue(parameter, value) {
   if (value === null || value === undefined) return null;
+  if (isStringRegisterType(parameter.type)) return String(value);
   const normalizedName = String(parameter.name || "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_");
@@ -431,6 +584,37 @@ function scaleValue(parameter, value) {
   if (!Number.isFinite(n)) return null;
   const scale = parameter.scale ?? 1;
   return Number((n * scale).toFixed(2));
+}
+
+function isStringRegisterType(type) {
+  return ["text", "string", "ascii", "stringascii", "char", "chars"].includes(
+    String(type || "").trim().toLowerCase().replace(/[\s/_-]+/g, "")
+  );
+}
+
+async function readConfiguredParameter(sock, parameter, rawCache) {
+  const { device, stringDevice, stringLength, computed } = parameter;
+  if (computed === "serial" || computed === "shotTime") return undefined;
+  const stringTargetDevice = stringDevice || (isStringRegisterType(parameter.type) ? device : "");
+  if (stringTargetDevice) {
+    const target = resolveStringReadTarget(stringTargetDevice, stringLength);
+    return readString(sock, target.startDevice, target.length);
+  }
+  if (!device) return null;
+
+  if (!rawCache.has(device)) {
+    const type = String(parameter.type || "").toLowerCase();
+    const rawValue = ["M", "X", "Y"].includes(device[0])
+      ? await readBit(sock, device)
+      : type === "dword" || type === "uint32"
+        ? await readDWord(sock, device)
+        : type === "real32"
+          ? await readReal32(sock, device)
+          : await readWord(sock, device);
+    rawCache.set(device, rawValue);
+  }
+
+  return scaleValue(parameter, rawCache.get(device));
 }
 
 function normalizeLeakResult(value) {
@@ -488,6 +672,52 @@ function normalizeReadingForDB(name, value) {
   return Number(n.toFixed(parameter?.type === "real32" ? 3 : 2));
 }
 
+function normalizeGaugeNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? Number(number.toFixed(4)) : null;
+}
+
+function findGaugeReadingValue(readings = {}, names = []) {
+  const normalizedTargets = new Set(names.map(normalizeRegisterName));
+  for (const name of names) {
+    if (readings[name] !== null && readings[name] !== undefined && readings[name] !== "") {
+      return readings[name];
+    }
+  }
+  for (const [name, value] of Object.entries(readings || {})) {
+    if (value !== null && value !== undefined && value !== "" && normalizedTargets.has(normalizeRegisterName(name))) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function findConfiguredRegisterDevice(machine, names = []) {
+  const normalizedTargets = new Set(names.map(normalizeRegisterName));
+  const register = Array.isArray(machine?.registerConfig)
+    ? machine.registerConfig.find((item) => normalizedTargets.has(normalizeRegisterName(item?.name || item?.parameter)))
+    : null;
+  return String(register?.device || register?.stringDevice || "").trim().toUpperCase();
+}
+
+function utcDateTimeString(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
+  const pad = (number, size = 2) => String(number).padStart(size, "0");
+  const datePart = [
+    safeDate.getUTCFullYear(),
+    pad(safeDate.getUTCMonth() + 1),
+    pad(safeDate.getUTCDate()),
+  ].join("-");
+  const timePart = [
+    pad(safeDate.getUTCHours()),
+    pad(safeDate.getUTCMinutes()),
+    pad(safeDate.getUTCSeconds()),
+  ].join(":");
+  return `${datePart} ${timePart}.${pad(safeDate.getUTCMilliseconds(), 3)}`;
+}
+
 function systemDateTimeString(value = new Date(), { iso = false } = {}) {
   const date = value instanceof Date ? value : new Date(value);
   const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
@@ -522,7 +752,7 @@ function hasStableLeakReadings(readings) {
   const hasResult = readings.result !== null && readings.result !== undefined;
   const hasLeakValue =
     readings.body_leak_value !== null && readings.body_leak_value !== undefined;
-  return hasScan || hasResult || hasLeakValue;
+  return hasScan && (hasResult || hasLeakValue);
 }
 
 function buildLeakSignature(readings, { includeCycleTime = false } = {}) {
@@ -698,7 +928,7 @@ function formatDbReading(row, machineFallback = {}) {
       machine_name: machineFallback.name || null,
       plc_ip: machineFallback.ip || null,
       plc_port: machineFallback.port || null,
-      machine_type: isLeakTestMachine(machineFallback) ? "leaktest" : "ube",
+      machine_type: getMachineTypeName(machineFallback),
       is_online: Boolean(machineFallback.connected),
       error: machineFallback.error || null,
       has_data: false,
@@ -710,7 +940,7 @@ function formatDbReading(row, machineFallback = {}) {
     machine_name: row.machine_name || machineFallback.name || null,
     plc_ip: row.plc_ip || machineFallback.ip || null,
     plc_port: row.plc_port || machineFallback.port || null,
-    machine_type: isLeakTestMachine(machineFallback) ? "leaktest" : "ube",
+    machine_type: getMachineTypeName(machineFallback),
     is_online: Boolean(machineFallback.connected),
     error: machineFallback.error || null,
     has_data: true,
@@ -745,6 +975,8 @@ function chooseFreshestReading(dbReading, machine = {}) {
   const liveReading = machine.latestReading;
   if (!liveReading?.has_data) return dbReading;
   if (!dbReading?.has_data) return liveReading;
+  if (isGaugeMachine(machine)) return liveReading;
+  if (isLeakTestMachine(machine) && liveReading.is_online) return liveReading;
 
   const liveShot = getComparableShotNumber(liveReading);
   const dbShot = getComparableShotNumber(dbReading);
@@ -757,14 +989,25 @@ function chooseFreshestReading(dbReading, machine = {}) {
   return dbReading;
 }
 
+function buildLiveFallbackReadings(machineSnapshots = []) {
+  return machineSnapshots.map((machine) => {
+    if (machine.latestReading?.has_data) {
+      return formatDbReading(machine.latestReading, machine);
+    }
+    return formatDbReading(null, machine);
+  });
+}
+
 function buildReadingsForDBFromLiveSnapshot(liveReading = {}) {
   return Object.fromEntries(
-    Object.entries(liveReading).filter(([name]) => !LIVE_READING_METADATA_COLUMNS.has(name))
+    Object.entries(liveReading)
+      .filter(([name]) => !LIVE_READING_METADATA_COLUMNS.has(name))
+      .filter(([name]) => !STOPPAGE_READING_KEYS.has(name))
   );
 }
 
 async function persistLiveSnapshotIfAhead(machine = {}, dbReading = {}) {
-  if (!isUbeMachine(machine) || !machine.latestReading?.has_data) return null;
+  if (!isUbeMachine(machine) || isGaugeMachine(machine) || !machine.latestReading?.has_data) return null;
 
   const liveShot = getComparableShotNumber(machine.latestReading);
   const dbShot = getComparableShotNumber(dbReading);
@@ -800,6 +1043,113 @@ function normalizeRegisterName(value) {
     .replace(/^_+|_+$/g, "");
 }
 
+const LEAK_PARAMETER_ALIASES = new Map(
+  Object.entries({
+    part_qr_code: [
+      "part_qr_code",
+      "part_qr",
+      "scan_data",
+      "scan",
+      "qr",
+      "qr_code",
+      "part_scan",
+      "part_scan_data",
+      "part_name",
+    ],
+    body_leak_value: ["body_leak_value", "body_leak", "leak_value"],
+    gall_1: ["gall_1", "gall1", "gall_01", "gall01"],
+    gall_2: ["gall_2", "gall2", "gall_02", "gall02"],
+    result: ["result", "judgement", "judgment", "status"],
+    auto_bit: ["auto", "auto_bit", "auto_mode", "running_mode", "cycle_mode_auto"],
+    manual: ["manual", "manual_mode"],
+    dry: ["dry", "dry_mode"],
+    wey: ["wey", "wet", "wet_mode"],
+    both: ["both", "both_mode"],
+    cycle_time: ["cycle_time", "cycle_time_sec", "cycle_time_in_sec"],
+  }).flatMap(([canonicalName, aliases]) =>
+    aliases.map((alias) => [normalizeRegisterName(alias), canonicalName])
+  )
+);
+
+function canonicalLeakParameterName(parameter = {}) {
+  const normalized = normalizeRegisterName(parameter.name || parameter.parameter || parameter.label);
+  return LEAK_PARAMETER_ALIASES.get(normalized) || null;
+}
+
+function normalizeDeviceStart(device = "") {
+  const raw = String(device || "").trim().toUpperCase();
+  if (!raw) return "";
+  try {
+    return parseDeviceRange(raw).startDevice;
+  } catch {
+    return raw;
+  }
+}
+
+function normalizeLeakReadParameters(registerConfig = []) {
+  if (!Array.isArray(registerConfig) || !registerConfig.length) return LEAK_TEST_PARAMETERS;
+
+  const defaultsByName = new Map(LEAK_TEST_PARAMETERS.map((parameter) => [parameter.name, parameter]));
+  const normalized = [];
+  const seen = new Set();
+
+  for (const parameter of registerConfig) {
+    if (!parameter || parameter.enabled === false) continue;
+    const canonicalName = canonicalLeakParameterName(parameter);
+    if (!canonicalName || seen.has(canonicalName)) continue;
+
+    const defaults = defaultsByName.get(canonicalName) || {};
+    const isText = isStringRegisterType(defaults.type || parameter.type);
+    const configuredDevice = String(parameter.device || "").trim();
+    const configuredStringDevice = String(parameter.stringDevice || "").trim();
+    const next = {
+      ...parameter,
+      name: canonicalName,
+      type: defaults.type || parameter.type,
+      hidden: defaults.hidden,
+      scale: parameter.scale ?? defaults.scale,
+    };
+
+    if (isText) {
+      const sourceDevice = configuredStringDevice || configuredDevice || defaults.stringDevice || defaults.device || "";
+      next.stringDevice = sourceDevice;
+      next.stringLength = parameter.stringLength || defaults.stringLength || 1;
+      next.device = "";
+    } else {
+      const sourceDevice = configuredDevice || configuredStringDevice || defaults.device || "";
+      next.device = normalizeDeviceStart(sourceDevice);
+      next.stringDevice = "";
+      next.stringLength = "";
+    }
+
+    normalized.push(next);
+    seen.add(canonicalName);
+  }
+
+  for (const parameter of LEAK_TEST_PARAMETERS) {
+    if (!seen.has(parameter.name)) normalized.push(parameter);
+  }
+
+  return normalized;
+}
+
+const LEGACY_COLUMN_BY_NORMALIZED_PARAMETER = new Map(
+  Object.entries(LEGACY_COLUMNS_BY_PARAMETER).map(([name, column]) => [normalizeRegisterName(name), column])
+);
+const LEGACY_COLUMN_BY_DEVICE = new Map(
+  EXCEL_PARAMETERS
+    .filter((parameter) => parameter.device && LEGACY_COLUMNS_BY_PARAMETER[parameter.name])
+    .map((parameter) => [String(parameter.device).trim().toUpperCase(), LEGACY_COLUMNS_BY_PARAMETER[parameter.name]])
+);
+
+function getLegacyColumnForParameter(parameter = {}) {
+  const name = parameter.name || parameter.parameter || parameter.label;
+  return LEGACY_COLUMNS_BY_PARAMETER[name] ||
+    LEGACY_COLUMN_BY_NORMALIZED_PARAMETER.get(normalizeRegisterName(name)) ||
+    LEGACY_COLUMN_BY_DEVICE.get(String(parameter.device || "").trim().toUpperCase()) ||
+    null;
+}
+
 function getConfiguredRegisterDevice(machine = {}, names = [], fallback = "") {
   const wanted = new Set(names.map(normalizeRegisterName));
   const register = Array.isArray(machine.registerConfig)
@@ -816,8 +1166,16 @@ function getConfiguredRegisterDevice(machine = {}, names = [], fallback = "") {
 function formatReadingsForClient(readings, machineOrKind = "ube") {
   const machineKind =
     typeof machineOrKind === "object"
-      ? (isLeakTestMachine(machineOrKind) ? "leaktest" : "ube")
+      ? (isLeakTestMachine(machineOrKind) ? "leaktest" : isGaugeMachine(machineOrKind) ? "gauge" : "ube")
       : machineOrKind;
+  if (machineKind === "gauge") {
+    return Object.fromEntries(
+      Object.entries(readings)
+        .filter(([name]) => !DROPPED_READING_COLUMNS.has(name))
+        .filter(([name]) => !PARAMETER_BY_NAME.get(name)?.hidden)
+        .map(([name, value]) => [name, { value, column: readingColumnName(name) }])
+    );
+  }
   const allowedNames = machineKind === "leaktest" ? LEAK_CLIENT_READING_NAMES : UBE_CLIENT_READING_NAMES;
 
   return Object.fromEntries(
@@ -902,9 +1260,12 @@ function getReportValue(row = {}, key) {
 function getReportColumns(rows = []) {
   const firstRow = rows[0] || {};
   const isLeakTest = Boolean(
+    firstRow.machine_type === "leaktest" ||
     firstRow.part_qr_code ||
     firstRow.body_leak_value !== undefined ||
-    firstRow.cycle_end_time
+    firstRow.gall_1 !== undefined ||
+    firstRow.gall_2 !== undefined ||
+    firstRow.result !== undefined
   );
   return isLeakTest ? LEAK_REPORT_COLUMNS : UBE_REPORT_COLUMNS;
 }
@@ -1111,7 +1472,10 @@ async function getLatestReadingsForMachines(machineSnapshots = getMachines()) {
     return latestReadingsCache.data;
   }
   if (latestReadingsCache.promise && latestReadingsCache.key === cacheKey) {
-    return latestReadingsCache.promise;
+    return Promise.race([
+      latestReadingsCache.promise,
+      sleep(PLC_LATEST_DB_TIMEOUT_MS).then(() => buildLiveFallbackReadings(machineSnapshots)),
+    ]);
   }
 
   latestReadingsCache.key = cacheKey;
@@ -1127,15 +1491,19 @@ async function getLatestReadingsForMachines(machineSnapshots = getMachines()) {
       throw error;
     });
 
-  return latestReadingsCache.promise;
+  return Promise.race([
+    latestReadingsCache.promise,
+    sleep(PLC_LATEST_DB_TIMEOUT_MS).then(() => buildLiveFallbackReadings(machineSnapshots)),
+  ]);
 }
 
 async function getLatestReadingsForMachinesUnlocked(machineSnapshots = getMachines()) {
   await ensureTableOnce();
 
   const machines = machineSnapshots.length ? machineSnapshots : getMachines();
-  const ubeMachines = machines.filter((m) => isUbeMachine(m));
+  const ubeMachines = machines.filter((m) => isUbeMachine(m) && !isGaugeMachine(m));
   const leakMachines = machines.filter((m) => isLeakTestMachine(m));
+  const gaugeMachines = machines.filter((m) => isGaugeMachine(m));
   const rowByKey = new Map();
 
   if (ubeMachines.length) {
@@ -1209,6 +1577,35 @@ async function getLatestReadingsForMachinesUnlocked(machineSnapshots = getMachin
     rows.forEach((row) => rowByKey.set(String(row.plc_ip), row));
   }
 
+  if (gaugeMachines.length) {
+    for (const machine of gaugeMachines) {
+      const machineKey = machine.key || machine.ip;
+      const { rows } = await db.query(
+        `SELECT TOP 1
+          [Id] AS id,
+          [Recorded_At] AS recorded_at,
+          [Machine_Key] AS machine_key,
+          [Machine_Name] AS machine_name,
+          [PLC_IP] AS plc_ip,
+          [PLC_Port] AS plc_port,
+          [Part_Scan_Data] AS part_scan_data,
+          [Cycle_Time_In_Sec] AS cycle_time_in_sec,
+          [Gauge_Status] AS gauge_status,
+          [Gauge_Judgement] AS gauge_judgement,
+          [Cycle_Mode_Auto_Manual] AS cycle_mode_auto_manual,
+          [Cycle_Start] AS cycle_start,
+          [Cycle_Complete] AS cycle_complete
+         FROM ${GAUGE_TABLE}
+         WHERE ([Machine_Key] = ? OR [PLC_IP] = ?)
+         ORDER BY [Recorded_At] DESC, [Id] DESC`,
+        [machineKey, machine.ip]
+      );
+      if (rows[0]) {
+        rowByKey.set(String(machineKey), rows[0]);
+      }
+    }
+  }
+
   const results = [];
   for (const machine of machines) {
     const dbReading = formatDbReading(
@@ -1233,6 +1630,25 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
   const targetMachine = configuredMachines.find(
     (m) => (m.key || m.ip) === targetId || m.ip === targetId
   );
+  let gaugeTarget = targetMachine?.kind === "gauge" ? targetMachine : null;
+  if (targetId && !gaugeTarget) {
+    const { rows: gaugeTargetRows } = await db.query(
+      `SELECT TOP 1 [Machine_Key] AS machine_key, [Machine_Name] AS machine_name, [PLC_IP] AS plc_ip, [PLC_Port] AS plc_port
+       FROM ${GAUGE_TABLE}
+       WHERE [Machine_Key] = ? OR [PLC_IP] = ?
+       ORDER BY [Recorded_At] DESC, [Id] DESC`,
+      [targetId, targetId]
+    );
+    if (gaugeTargetRows[0]) {
+      gaugeTarget = {
+        key: gaugeTargetRows[0].machine_key || targetId,
+        name: gaugeTargetRows[0].machine_name || "Gauge",
+        ip: gaugeTargetRows[0].plc_ip || targetId,
+        port: gaugeTargetRows[0].plc_port || 1026,
+        kind: "gauge",
+      };
+    }
+  }
 
   const appendProductionFilters = (filters, values) => {
     if (shotNumber) {
@@ -1252,18 +1668,51 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
       if (shift === "C") filters.push(`(${hourExpr} < 6 OR ${hourExpr} >= 23)`);
     }
   };
+  const productionDateExpr = `
+    CASE
+      WHEN COALESCE(TRY_CONVERT(INT, shot_hour), DATEPART(hour, recorded_at)) < 6
+        THEN DATEADD(day, -1, CAST(recorded_at AS date))
+      ELSE CAST(recorded_at AS date)
+    END
+  `;
+  const productionSelect = `*, CONVERT(VARCHAR(10), ${productionDateExpr}, 23) AS production_date`;
+  const appendProductionDateFilters = (filters, values) => {
+    if (from) {
+      filters.push(`${productionDateExpr} >= CAST(? AS date)`);
+      values.push(from);
+    }
+    if (to) {
+      filters.push(`${productionDateExpr} <= CAST(? AS date)`);
+      values.push(to);
+    }
+  };
+  const buildProductionKpisSql = (where) => `
+        WITH filtered AS (
+          SELECT *
+          FROM ${TABLE}
+          ${where}
+        )
+        SELECT
+          (SELECT SUM(CASE WHEN TRY_CONVERT(INT, shot_status) = 1 THEN 1 ELSE 0 END) FROM filtered) AS ok,
+          (SELECT SUM(CASE WHEN TRY_CONVERT(INT, shot_status) = 3 THEN 1 ELSE 0 END) FROM filtered) AS warm,
+          (SELECT SUM(CASE WHEN TRY_CONVERT(INT, shot_status) = 5 THEN 1 ELSE 0 END) FROM filtered) AS off_count
+      `;
+  const normalizeProductionKpis = (row = {}) => ({
+    ok: Number(row.ok || 0),
+    warm: Number(row.warm || 0),
+    off: Number(row.off_count || 0),
+  });
 
   if (!targetId) {
     const filters = [];
     const values = [];
-    if (from) { filters.push("recorded_at >= ?"); values.push(from); }
-    if (to) { filters.push("recorded_at < DATEADD(day, 1, CAST(? AS date))"); values.push(to); }
+    appendProductionDateFilters(filters, values);
     appendProductionFilters(filters, values);
     const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
     if (isPaged) {
       const [{ rows }, { rows: countRows }, { rows: kpiRows }] = await Promise.all([
         db.query(
-          `SELECT *
+          `SELECT ${productionSelect}
            FROM ${TABLE}
            ${where}
            ORDER BY recorded_at DESC, id DESC
@@ -1271,29 +1720,18 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
           values
         ),
         db.query(`SELECT COUNT(1) AS total FROM ${TABLE} ${where}`, values),
-        db.query(`
-          SELECT
-            SUM(CASE WHEN TRY_CONVERT(INT, shot_status) = 1 THEN 1 ELSE 0 END) AS ok,
-            SUM(CASE WHEN TRY_CONVERT(INT, shot_status) = 3 THEN 1 ELSE 0 END) AS warm,
-            SUM(CASE WHEN TRY_CONVERT(INT, shot_status) = 5 THEN 1 ELSE 0 END) AS off_count
-          FROM ${TABLE}
-          ${where}
-        `, values),
+        db.query(buildProductionKpisSql(where), values),
       ]);
       return {
         rows: sortHistoryRows(rows.map(formatDbRowForClient)),
         total: Number(countRows[0]?.total || 0),
         page: safePage,
         pageSize: safeLimit,
-        kpis: {
-          ok: Number(kpiRows[0]?.ok || 0),
-          warm: Number(kpiRows[0]?.warm || 0),
-          off: Number(kpiRows[0]?.off_count || 0),
-        },
+        kpis: normalizeProductionKpis(kpiRows[0]),
       };
     }
     const { rows } = await db.query(
-      `SELECT TOP (${safeLimit}) *
+      `SELECT TOP (${safeLimit}) ${productionSelect}
        FROM ${TABLE}
        ${where}
        ORDER BY recorded_at DESC, id DESC`,
@@ -1345,20 +1783,110 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
     return sortHistoryRows(rows.map(formatDbRowForClient));
   }
 
+  if (gaugeTarget) {
+    const values = [];
+
+    const selectSql = `
+      SELECT
+        [Id] AS id,
+        [Recorded_At] AS recorded_at,
+        [Machine_Key] AS machine_key,
+        [Machine_Name] AS machine_name,
+        [PLC_IP] AS plc_ip,
+        [PLC_Port] AS plc_port,
+        [Part_Scan_Data] AS part_scan_data,
+        [Cycle_Time_In_Sec] AS cycle_time_in_sec,
+        [Gauge_Status] AS gauge_status,
+        [Gauge_Judgement] AS gauge_judgement,
+        [Cycle_Mode_Auto_Manual] AS cycle_mode_auto_manual,
+        [Cycle_Start] AS cycle_start,
+        [Cycle_Complete] AS cycle_complete
+      FROM ${GAUGE_TABLE}
+      WHERE ([Machine_Key] = ? OR [PLC_IP] = ?)`;
+    values.push(gaugeTarget.key || gaugeTarget.ip, gaugeTarget.ip || targetId);
+
+    if (from) { values.push(from); }
+    if (to) { values.push(to); }
+    const filteredSelectSql = `${selectSql}
+      ${from ? " AND [Recorded_At] >= ?" : ""}
+      ${to ? " AND [Recorded_At] < DATEADD(day, 1, CAST(? AS date))" : ""}`;
+
+    if (isPaged) {
+      const [{ rows }, { rows: countRows }] = await Promise.all([
+        db.query(
+          `SELECT
+             id, recorded_at, machine_key, machine_name, plc_ip, plc_port,
+             part_scan_data, cycle_time_in_sec, gauge_status, gauge_judgement,
+             cycle_mode_auto_manual, cycle_start, cycle_complete
+           FROM (
+             SELECT gauge_rows.*,
+               ROW_NUMBER() OVER (
+                 PARTITION BY COALESCE(NULLIF([part_scan_data], ''), CONCAT('row-', [id]))
+                 ORDER BY [recorded_at] DESC, [id] DESC
+               ) AS duplicate_rank
+             FROM (${filteredSelectSql}) gauge_rows
+           ) deduped_gauge_rows
+           WHERE duplicate_rank = 1
+           ORDER BY recorded_at DESC, id DESC
+           OFFSET ${offset} ROWS FETCH NEXT ${safeLimit} ROWS ONLY`,
+          values
+        ),
+        db.query(
+          `SELECT COUNT(1) AS total
+           FROM (
+             SELECT gauge_count.*,
+               ROW_NUMBER() OVER (
+                 PARTITION BY COALESCE(NULLIF([part_scan_data], ''), CONCAT('row-', [id]))
+                 ORDER BY [recorded_at] DESC, [id] DESC
+               ) AS duplicate_rank
+             FROM (${filteredSelectSql}) gauge_count
+           ) deduped_gauge_count
+           WHERE duplicate_rank = 1`,
+          values
+        ),
+      ]);
+      return {
+        rows: sortHistoryRows(rows.map(formatDbRowForClient)),
+        total: Number(countRows[0]?.total || 0),
+        page: safePage,
+        pageSize: safeLimit,
+        kpis: { ok: 0, warm: 0, off: 0 },
+      };
+    }
+
+    const { rows } = await db.query(
+      `SELECT TOP (${safeLimit})
+         id, recorded_at, machine_key, machine_name, plc_ip, plc_port,
+         part_scan_data, cycle_time_in_sec, gauge_status, gauge_judgement,
+         cycle_mode_auto_manual, cycle_start, cycle_complete
+       FROM (
+         SELECT gauge_rows.*,
+           ROW_NUMBER() OVER (
+             PARTITION BY COALESCE(NULLIF([part_scan_data], ''), CONCAT('row-', [id]))
+             ORDER BY [recorded_at] DESC, [id] DESC
+           ) AS duplicate_rank
+         FROM (${filteredSelectSql}) gauge_rows
+       ) deduped_gauge_rows
+       WHERE duplicate_rank = 1
+       ORDER BY recorded_at DESC, id DESC`,
+      values
+    );
+    return sortHistoryRows(rows.map(formatDbRowForClient));
+  }
+
   const machineKey = targetMachine?.key || targetMachine?.machine_key || targetId;
   const machineIp = targetMachine?.ip || targetMachine?.plc_ip || targetId;
   const legacyKey = targetId;
   const filters = ["(machine_key = ? OR plc_ip = ? OR plc_ip = ?)"];
   const values = [machineKey, machineIp, legacyKey];
-  if (from) { filters.push("recorded_at >= ?"); values.push(from); }
-  if (to) { filters.push("recorded_at < DATEADD(day, 1, CAST(? AS date))"); values.push(to); }
+  appendProductionDateFilters(filters, values);
   appendProductionFilters(filters, values);
 
   if (isPaged) {
     const where = `WHERE ${filters.join(" AND ")}`;
     const [{ rows }, { rows: countRows }, { rows: kpiRows }] = await Promise.all([
       db.query(
-        `SELECT *
+        `SELECT ${productionSelect}
          FROM ${TABLE}
          ${where}
          ORDER BY recorded_at DESC, id DESC
@@ -1366,30 +1894,19 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
         values
       ),
       db.query(`SELECT COUNT(1) AS total FROM ${TABLE} ${where}`, values),
-      db.query(`
-        SELECT
-          SUM(CASE WHEN TRY_CONVERT(INT, shot_status) = 1 THEN 1 ELSE 0 END) AS ok,
-          SUM(CASE WHEN TRY_CONVERT(INT, shot_status) = 3 THEN 1 ELSE 0 END) AS warm,
-          SUM(CASE WHEN TRY_CONVERT(INT, shot_status) = 5 THEN 1 ELSE 0 END) AS off_count
-        FROM ${TABLE}
-        ${where}
-      `, values),
+      db.query(buildProductionKpisSql(where), values),
     ]);
     return {
       rows: sortHistoryRows(rows.map(formatDbRowForClient)),
       total: Number(countRows[0]?.total || 0),
       page: safePage,
       pageSize: safeLimit,
-      kpis: {
-        ok: Number(kpiRows[0]?.ok || 0),
-        warm: Number(kpiRows[0]?.warm || 0),
-        off: Number(kpiRows[0]?.off_count || 0),
-      },
+      kpis: normalizeProductionKpis(kpiRows[0]),
     };
   }
 
   const { rows } = await db.query(
-    `SELECT TOP (${safeLimit}) *
+    `SELECT TOP (${safeLimit}) ${productionSelect}
      FROM ${TABLE}
      WHERE ${filters.join(" AND ")}
      ORDER BY recorded_at DESC, id DESC`,
@@ -1424,68 +1941,14 @@ async function getConnectionEvents({ ip, limit = 200, from, to } = {}) {
 
 const inFlightUbeSaveKeys = new Set();
 
-async function calculateCompletedMinorStoppageMachine(machine, readings = {}) {
-  if (String(process.env.PLC_MINOR_STOPPAGE_MACHINE_ENABLED || "false").toLowerCase() !== "true") {
-    return null;
-  }
-  const currentShotAt = normalizeReadingForDB("shot_datetime", readings.shot_datetime);
-  if (!currentShotAt) return null;
-
-  const { rows } = await db.query(
-    `SELECT TOP 1
-       id,
-       COALESCE(shot_datetime, recorded_at) AS previous_shot_at,
-       TRY_CONVERT(DECIMAL(18,2), cycle_time) AS previous_cycle_time
-     FROM ${TABLE}
-     WHERE (machine_key = ? OR plc_ip = ?)
-       AND COALESCE(shot_datetime, recorded_at) < ?
-     ORDER BY COALESCE(shot_datetime, recorded_at) DESC, id DESC`,
-    [machine.key || machine.ip, machine.ip, currentShotAt]
-  );
-
-  const previousRow = rows[0] || null;
-  const previousShotAt = previousRow?.previous_shot_at ? new Date(previousRow.previous_shot_at) : null;
-  const previousCycleTime = Number(previousRow?.previous_cycle_time);
-  const currentShotDate = new Date(currentShotAt);
-  if (
-    !previousRow ||
-    !previousShotAt ||
-    Number.isNaN(previousShotAt.getTime()) ||
-    Number.isNaN(currentShotDate.getTime()) ||
-    !Number.isFinite(previousCycleTime)
-  ) {
-    return null;
-  }
-
-  const shotGapSeconds = (currentShotDate.getTime() - previousShotAt.getTime()) / 1000;
-  const stoppageSeconds = shotGapSeconds - previousCycleTime;
-  if (!Number.isFinite(stoppageSeconds)) return null;
-  return {
-    previousId: previousRow.id,
-    value: Number(Math.max(0, stoppageSeconds).toFixed(2)),
-  };
-}
-
-async function updatePreviousMinorStoppageMachine(machine, readings = {}) {
-  if (String(process.env.PLC_MINOR_STOPPAGE_MACHINE_ENABLED || "false").toLowerCase() !== "true") {
-    return null;
-  }
-  const completed = await calculateCompletedMinorStoppageMachine(machine, readings);
-  if (!completed) return null;
-
-  await db.run(
-    `UPDATE ${TABLE}
-     SET [minor_stoppage_machine] = ?
-     WHERE [id] = ?`,
-    [completed.value, completed.previousId]
-  );
-  return completed.value;
+async function updatePreviousMinorStoppageMachine() {
+  return null;
 }
 
 function buildUbeTimestampSaveKey(machine, readings = {}) {
   const machineKey = machine.key || machine.ip;
   const shotNumber = normalizeReadingForDB("shot_number", readings.shot_number ?? readings["SHOT NO."]);
-  const shotDate = normalizeReadingForDB("shot_date", readings.shot_date);
+  const shotDate = getReadingProductionDate(readings) || normalizeReadingForDB("shot_date", readings.shot_date);
   if (shotNumber !== null && shotNumber !== undefined && shotDate) {
     return `${machineKey}:shot:${shotDate}:${shotNumber}`;
   }
@@ -1500,39 +1963,14 @@ function buildUbeTimestampSaveKey(machine, readings = {}) {
   return shotDateTime ? `${machineKey}:${shotDateTime}` : null;
 }
 
-async function applyCycleMinorStoppage(machine, readings = {}) {
-  readings.minor_stoppage = 0;
-  readings["MINOR STOPPAGE sec."] = 0;
+async function applyCycleMinorStoppage() {}
 
-  const currentCycleStart = normalizeReadingForDB("cycle_start_time", readings.cycle_start_time);
-  if (!currentCycleStart) return;
-
-  const { rows } = await db.query(
-    `SELECT TOP 1 cycle_end_time
-     FROM ${TABLE}
-     WHERE (machine_key = ? OR plc_ip = ?)
-       AND cycle_end_time IS NOT NULL
-       AND cycle_end_time <= ?
-     ORDER BY cycle_end_time DESC, id DESC`,
-    [machine.key || machine.ip, machine.ip, currentCycleStart]
-  );
-
-  const previousCycleEnd = rows[0]?.cycle_end_time ? new Date(rows[0].cycle_end_time) : null;
-  const currentStartDate = new Date(currentCycleStart);
-  if (
-    !previousCycleEnd ||
-    Number.isNaN(previousCycleEnd.getTime()) ||
-    Number.isNaN(currentStartDate.getTime())
-  ) {
-    return;
-  }
-
-  const stoppageSeconds = (currentStartDate.getTime() - previousCycleEnd.getTime()) / 1000;
-  if (!Number.isFinite(stoppageSeconds)) return;
-
-  const value = Number(Math.max(0, stoppageSeconds).toFixed(2));
-  readings.minor_stoppage = value;
-  readings["MINOR STOPPAGE sec."] = value;
+function withoutStoppageEventFields(readings = {}) {
+  const copy = { ...readings };
+  STOPPAGE_READING_KEYS.forEach((key) => {
+    delete copy[key];
+  });
+  return copy;
 }
 
 async function saveToDB(machine, partName, readings) {
@@ -1551,9 +1989,88 @@ async function saveToDB(machine, partName, readings) {
   }
 }
 
+function getRegisterMetadata(machine, name) {
+  const normalizedName = String(name || "").trim().toLowerCase();
+  const register = Array.isArray(machine.registerConfig)
+    ? machine.registerConfig.find((item) => String(item?.name || "").trim().toLowerCase() === normalizedName)
+    : null;
+  return {
+    key: readingColumnName(name),
+    label: register?.label || register?.display_name || register?.name || name,
+    type: register?.type || null,
+    unit: register?.unit || "",
+  };
+}
+
+async function persistGenericMachineReading(machine, partName, readings = {}, eventTime = null) {
+  const machineKey = machine.key || machine.ip;
+  if (!machineKey) return { skipped: true, reason: "missing-machine-key" };
+  const cleanReadings = withoutStoppageEventFields(readings);
+
+  const recordedAt = utcDateTimeString(new Date());
+  const normalizedEventTime =
+    normalizeReadingForDB("cycle_end_time", eventTime || cleanReadings.cycle_end_time) ||
+    normalizeReadingForDB("shot_datetime", cleanReadings.shot_datetime) ||
+    recordedAt;
+  const result = await db.run(
+    `INSERT INTO ${MACHINE_READINGS_TABLE} (
+      recorded_at, machine_config_id, machine_key, machine_name, machine_type,
+      plc_ip, plc_port, part_name, event_time, raw_readings_json
+    )
+    OUTPUT INSERTED.id
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      recordedAt,
+      machine.id || null,
+      machineKey,
+      machine.name || null,
+      getMachineTypeName(machine),
+      machine.ip || null,
+      machine.port || null,
+      partName || cleanReadings.part_name || cleanReadings.part_qr_code || cleanReadings.scan_data || null,
+      normalizedEventTime,
+      JSON.stringify(cleanReadings),
+    ]
+  );
+  const readingId = result.rows[0]?.id;
+  if (!readingId) return { skipped: true, reason: "missing-reading-id" };
+
+  for (const [name, value] of Object.entries(cleanReadings)) {
+    if (value === undefined || typeof value === "function") continue;
+    const metadata = getRegisterMetadata(machine, name);
+    const normalizedNumber = Number(value);
+    const numericValue = value !== "" && Number.isFinite(normalizedNumber) ? normalizedNumber : null;
+    const boolValue = value === true ? 1 : value === false ? 0 : null;
+    const textValue = value === null || value === undefined ? null : String(value);
+
+    await db.run(
+      `INSERT INTO ${MACHINE_READING_VALUES_TABLE} (
+        reading_id, parameter_key, parameter_label, parameter_type, parameter_unit,
+        numeric_value, text_value, bool_value, raw_value
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        readingId,
+        metadata.key,
+        metadata.label,
+        metadata.type,
+        metadata.unit,
+        numericValue,
+        textValue,
+        boolValue,
+        textValue,
+      ]
+    );
+  }
+
+  return { skipped: false, id: readingId };
+}
+
 async function saveToDBUnlocked(machine, partName, readings) {
+  readings = withoutStoppageEventFields(readings);
+  const productionDate = getReadingProductionDate(readings);
+  if (productionDate) readings = { ...readings, shot_date: productionDate };
   const columns = ["recorded_at", "machine_key", "machine_name", "plc_ip", "plc_port", "part_name"];
-  await applyCycleMinorStoppage(machine, readings);
 
   const plcRecordedAt =
     normalizeReadingForDB("cycle_end_time", readings.cycle_end_time) ||
@@ -1565,8 +2082,6 @@ async function saveToDBUnlocked(machine, partName, readings) {
   if (!hasPlcRecordedAt) {
     return { skipped: true, reason: "missing-plc-shot-datetime" };
   }
-
-  readings.minor_stoppage_machine = null;
 
   if (shotNumber !== null && shotNumber !== undefined && shotDate) {
     const { rows: duplicateShotRows } = await db.query(
@@ -1610,7 +2125,9 @@ async function saveToDBUnlocked(machine, partName, readings) {
   addInsertValue(columns, values, "Counter", shotNumber);
 
   for (const [name, value] of Object.entries(readings)) {
+    if (name.startsWith("__")) continue;
     if (DROPPED_READING_COLUMNS.has(name)) continue;
+    if (STOPPAGE_READING_KEYS.has(name)) continue;
     const normalizedValue = normalizeReadingForDB(name, value);
     addInsertValue(columns, values, readingColumnName(name), normalizedValue);
     const legacyColumn = LEGACY_COLUMNS_BY_PARAMETER[name];
@@ -1618,7 +2135,9 @@ async function saveToDBUnlocked(machine, partName, readings) {
   }
 
   const savedReadings = Object.fromEntries(
-    Object.entries(readings).filter(([name]) => !DROPPED_READING_COLUMNS.has(name))
+    Object.entries(readings).filter(([name]) =>
+      !name.startsWith("__") && !DROPPED_READING_COLUMNS.has(name) && !STOPPAGE_READING_KEYS.has(name)
+    )
   );
   addInsertValue(columns, values, "raw_readings_json", JSON.stringify(savedReadings));
 
@@ -1633,7 +2152,7 @@ async function saveToDBUnlocked(machine, partName, readings) {
     .join(", ");
 
   await db.run(`INSERT INTO ${TABLE} (${columnSql}) VALUES (${placeholders})`, values);
-  await updatePreviousMinorStoppageMachine(machine, readings);
+  await persistGenericMachineReading(machine, partName, savedReadings, plcRecordedAt);
   return { skipped: false };
 }
 
@@ -1701,6 +2220,13 @@ async function saveLeakTestToDB(machine, partName, readings) {
       Number(readings.both) === 1 ? 1 : 0,
     ]
   );
+  await persistGenericMachineReading(machine, partName, {
+    ...readings,
+    result,
+    running_mode: runningMode,
+    part_qr_code: partQrCode,
+    cycle_end_time: recordedAt,
+  }, recordedAt);
   return { skipped: false };
 }
 
@@ -1708,93 +2234,98 @@ async function saveLeakTestToDB(machine, partName, readings) {
 // SCHEMA ENSURE
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+async function saveGaugeToDB(machine, partName, readings, options = {}) {
+  const rawPartScanData = findGaugeReadingValue(readings, [
+    "Part Scan Data",
+    "part_scan_data",
+    "part_qr_code",
+    "scan_data",
+    "qr_code",
+  ]) || partName || null;
+  const partScanData = rawPartScanData === null || rawPartScanData === undefined
+    ? null
+    : String(rawPartScanData).trim();
+  const cycleTimeInSec = normalizeGaugeNumber(findGaugeReadingValue(readings, [
+    "Cycle Time In Sec",
+    "Cycle Time Sec",
+    "cycle_time_in_sec",
+    "cycle_time_sec",
+    "cycle_time",
+  ]));
+  const gaugeStatus = findGaugeReadingValue(readings, ["Gauge Status", "gauge_status", "status", "Status"]);
+  const gaugeJudgement = findGaugeReadingValue(readings, ["Gauge Judgement", "gauge_judgement", "judgement", "judgment", "result", "Result"]);
+  const cycleMode = findGaugeReadingValue(readings, [
+    "Cycle Mode Auto/Manual",
+    "Cycle Mode Auto Manual",
+    "cycle_mode_auto_manual",
+    "cycle_mode",
+    "mode",
+  ]);
+  const cycleStart = Number.parseInt(findGaugeReadingValue(readings, ["Cycle Start", "cycle_start"]), 10);
+  const cycleComplete = Number.parseInt(findGaugeReadingValue(readings, ["Cycle Complete", "cycle_complete"]), 10);
+
+  if (partScanData && !options.skipDuplicateCheck) {
+    const duplicateWindowSec = Math.max(1, Number(process.env.PLC_GAUGE_DUPLICATE_SCAN_WINDOW_SEC || 300));
+    const { rows } = await db.query(
+      `SELECT TOP 1 [Id]
+       FROM ${GAUGE_TABLE}
+       WHERE ([Machine_Key] = ? OR [PLC_IP] = ?)
+         AND [Part_Scan_Data] = ?
+         AND [Recorded_At] >= DATEADD(second, -?, SYSUTCDATETIME())
+       ORDER BY [Recorded_At] DESC, [Id] DESC`,
+      [machine.key || machine.ip, machine.ip, partScanData, duplicateWindowSec]
+    );
+    if (rows.length) {
+      return { skipped: true, reason: "duplicate-gauge-scan", partScanData };
+    }
+  }
+
+  await db.run(
+    `INSERT INTO ${GAUGE_TABLE} (
+      [Recorded_At],[Machine_Key],[Machine_Name],[PLC_IP],[PLC_Port],
+      [Part_Scan_Data],[Cycle_Time_In_Sec],[Gauge_Status],[Gauge_Judgement],
+      [Cycle_Mode_Auto_Manual],[Cycle_Start],[Cycle_Complete]
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [
+      utcDateTimeString(options.recordedAt || readings.cycle_end_time || new Date()),
+      machine.key || machine.ip,
+      machine.name,
+      machine.ip,
+      machine.port,
+      partScanData,
+      cycleTimeInSec,
+      gaugeStatus === null || gaugeStatus === undefined || gaugeStatus === "" ? null : String(gaugeStatus),
+      gaugeJudgement === null || gaugeJudgement === undefined || gaugeJudgement === "" ? null : String(gaugeJudgement),
+      cycleMode === null || cycleMode === undefined || cycleMode === "" ? null : String(cycleMode),
+      Number.isFinite(cycleStart) ? cycleStart : null,
+      Number.isFinite(cycleComplete) ? cycleComplete : null,
+    ]
+  );
+  await persistGenericMachineReading(machine, partName, {
+    ...readings,
+    part_scan_data: partScanData,
+    cycle_time_in_sec: cycleTimeInSec,
+    gauge_status: gaugeStatus,
+    gauge_judgement: gaugeJudgement,
+    cycle_mode_auto_manual: cycleMode,
+    cycle_start: Number.isFinite(cycleStart) ? cycleStart : null,
+    cycle_complete: Number.isFinite(cycleComplete) ? cycleComplete : null,
+  }, options.recordedAt || readings.cycle_end_time || null);
+
+  return { skipped: false };
+}
+
 async function ensureTable() {
   // Schema creation is centralized in backend/schema.mssql.sql.
   // Runtime monitor must not create ad-hoc PLC columns.
   return db.initializeSchema();
 }
 async function backfillRecentMinorStoppageMachine() {
-  if (String(process.env.PLC_MINOR_STOPPAGE_MACHINE_ENABLED || "false").toLowerCase() !== "true") {
-    return;
-  }
-  await db.run(`
-IF OBJECT_ID(N'${TABLE}', N'U') IS NOT NULL
-   AND COL_LENGTH('${TABLE}', 'minor_stoppage_machine') IS NOT NULL
-BEGIN
-  ;WITH recent_rows AS (
-    SELECT TOP (5000)
-      [id],
-      COALESCE([shot_datetime], [recorded_at]) AS shot_at,
-      [machine_key],
-      [plc_ip],
-      [cycle_time]
-    FROM ${TABLE}
-    ORDER BY [id] DESC
-  ),
-  ordered AS (
-    SELECT
-      [id],
-      [shot_at],
-      TRY_CONVERT(DECIMAL(18,2), [cycle_time]) AS cycle_time_value,
-      LEAD([shot_at]) OVER (
-        PARTITION BY COALESCE([machine_key], [plc_ip])
-        ORDER BY [shot_at] ASC, [id] ASC
-      ) AS next_shot_at
-    FROM recent_rows
-    WHERE [shot_at] IS NOT NULL
-  )
-  UPDATE target
-  SET [minor_stoppage_machine] = CAST(
-    CASE
-      WHEN ordered.next_shot_at IS NULL OR ordered.cycle_time_value IS NULL THEN NULL
-      WHEN DATEDIFF(second, ordered.shot_at, ordered.next_shot_at) - ordered.cycle_time_value < 0 THEN 0
-      ELSE DATEDIFF(second, ordered.shot_at, ordered.next_shot_at) - ordered.cycle_time_value
-    END AS DECIMAL(18,2)
-  )
-  FROM ${TABLE} target
-  INNER JOIN ordered ON target.[id] = ordered.[id]
-END`);
+  return;
 }
 
 async function backfillRecentMinorStoppage() {
-  await db.run(`
-IF OBJECT_ID(N'${TABLE}', N'U') IS NOT NULL
-   AND COL_LENGTH('${TABLE}', 'minor_stoppage') IS NOT NULL
-   AND COL_LENGTH('${TABLE}', 'cycle_start_time') IS NOT NULL
-   AND COL_LENGTH('${TABLE}', 'cycle_end_time') IS NOT NULL
-BEGIN
-  ;WITH recent_rows AS (
-    SELECT TOP (5000)
-      [id],
-      [machine_key],
-      [plc_ip],
-      [cycle_start_time],
-      [cycle_end_time]
-    FROM ${TABLE}
-    WHERE [cycle_start_time] IS NOT NULL
-    ORDER BY [id] DESC
-  ),
-  ordered AS (
-    SELECT
-      [id],
-      [cycle_start_time],
-      LAG([cycle_end_time]) OVER (
-        PARTITION BY COALESCE([machine_key], [plc_ip])
-        ORDER BY [cycle_start_time] ASC, [id] ASC
-      ) AS previous_cycle_end_time
-    FROM recent_rows
-  )
-  UPDATE target
-  SET [minor_stoppage] = CAST(
-    CASE
-      WHEN ordered.previous_cycle_end_time IS NULL THEN 0
-      WHEN DATEDIFF(second, ordered.previous_cycle_end_time, ordered.cycle_start_time) < 0 THEN 0
-      ELSE DATEDIFF(second, ordered.previous_cycle_end_time, ordered.cycle_start_time)
-    END AS DECIMAL(18,2)
-  )
-  FROM ${TABLE} target
-  INNER JOIN ordered ON target.[id] = ordered.[id]
-END`);
+  return;
 }
 
 async function hasUsablePlcSchema() {
@@ -1812,11 +2343,25 @@ async function hasUsablePlcSchema() {
 function ensureTableOnce() {
   if (!schemaReadyPromise) {
     schemaReadyPromise = (async () => {
-      if (!(await hasUsablePlcSchema())) {
-        await ensureTable();
+      if (schemaUsableAt && Date.now() - schemaUsableAt < Number(process.env.PLC_SCHEMA_USABLE_CACHE_MS || 300000)) {
+        return;
       }
-      await backfillRecentMinorStoppage();
-      await backfillRecentMinorStoppageMachine();
+
+      if (await hasUsablePlcSchema()) {
+        schemaUsableAt = Date.now();
+        if (String(process.env.PLC_RUN_STARTUP_BACKFILLS || "false").toLowerCase() === "true") {
+          await backfillRecentMinorStoppage();
+          await backfillRecentMinorStoppageMachine();
+        }
+        return;
+      }
+
+      await ensureTable();
+      schemaUsableAt = Date.now();
+      if (String(process.env.PLC_RUN_STARTUP_BACKFILLS || "false").toLowerCase() === "true") {
+        await backfillRecentMinorStoppage();
+        await backfillRecentMinorStoppageMachine();
+      }
     })().catch((err) => {
       schemaReadyPromise = null;
       throw err;
@@ -1843,7 +2388,7 @@ function createInitialMachineState(machines) {
         cycleTime: null,
         shotStatus: "",
         // â”€â”€ NEW: machine type clearly stored in state â”€â”€
-        machineType: isLeakTestMachine(machine) ? "leaktest" : "ube",
+        machineType: getMachineTypeName(machine),
       },
     ])
   );
@@ -1932,7 +2477,7 @@ function startPlcMonitor(io) {
       ...current,
       ...machine,
       machine_key: key,
-      machineType: isLeakTestMachine(machine) ? "leaktest" : "ube",
+      machineType: getMachineTypeName(machine),
       ...patch,
     });
     emitMachineState();
@@ -2099,8 +2644,8 @@ function startPlcMonitor(io) {
         key: machine.key || machine.ip,
         ip: machine.ip,
         port: Number(config.port || machine.port),
-        kind: machine.kind || "ube",
-        machineType: isLeakTestMachine(machine) ? "leaktest" : "ube",
+        kind: getMachineTypeName(machine),
+        machineType: getMachineTypeName(machine),
       };
       io.emit("plc_config", nextConfig);
       callback?.({ ok: true, unchanged: true, config: nextConfig });
@@ -2109,19 +2654,29 @@ function startPlcMonitor(io) {
 
   // â”€â”€ UBE: Read All Registers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-  const readAll = async (machine, sock, { persist = true, emit = true, liveOnly = false, cycleTiming = null } = {}) => {
+  const readAll = async (
+    machine,
+    sock,
+    { persist = true, emit = true, liveOnly = false, cycleTiming = null, persistStoppage = persist } = {}
+  ) => {
     const readings = {};
     const rawCache = new Map();
     const now = new Date();
-    const readParameters = UBE_READ_PARAMETERS;
+    const isGauge = isGaugeMachine(machine);
+    const configuredParameters = Array.isArray(machine.registerConfig) ? machine.registerConfig : [];
+    const readParameters = configuredParameters.length
+      ? (isGauge ? configuredParameters : mergeUbeReadParameters(configuredParameters))
+      : isGauge
+        ? []
+        : UBE_READ_PARAMETERS;
 
-    const partName = await readString(sock, UBE_PART_NAME_DEVICE, UBE_PART_NAME_LENGTH).catch(() => "");
-    const shotYearRaw = await readWord(sock, SHOT_DATE_TIME_DEVICES.year).catch(() => null);
-    const shotMonthRaw = await readWord(sock, SHOT_DATE_TIME_DEVICES.month).catch(() => null);
-    const shotDayRaw = await readWord(sock, SHOT_DATE_TIME_DEVICES.day).catch(() => null);
-    const shotHour = await readWord(sock, SHOT_DATE_TIME_DEVICES.hour).catch(() => null);
-    const shotMinute = await readWord(sock, SHOT_DATE_TIME_DEVICES.minute).catch(() => null);
-    const shotSecond = await readWord(sock, SHOT_DATE_TIME_DEVICES.second).catch(() => null);
+    const partName = isGauge ? "" : await readString(sock, UBE_PART_NAME_DEVICE, UBE_PART_NAME_LENGTH).catch(() => "");
+    const shotYearRaw = isGauge ? null : await readWord(sock, SHOT_DATE_TIME_DEVICES.year).catch(() => null);
+    const shotMonthRaw = isGauge ? null : await readWord(sock, SHOT_DATE_TIME_DEVICES.month).catch(() => null);
+    const shotDayRaw = isGauge ? null : await readWord(sock, SHOT_DATE_TIME_DEVICES.day).catch(() => null);
+    const shotHour = isGauge ? null : await readWord(sock, SHOT_DATE_TIME_DEVICES.hour).catch(() => null);
+    const shotMinute = isGauge ? null : await readWord(sock, SHOT_DATE_TIME_DEVICES.minute).catch(() => null);
+    const shotSecond = isGauge ? null : await readWord(sock, SHOT_DATE_TIME_DEVICES.second).catch(() => null);
     const shotTime = buildShotTimeValue(shotHour, shotMinute, shotSecond);
     const shotDateTime = buildShotDateTimeValue(
       shotYearRaw,
@@ -2135,7 +2690,9 @@ function startPlcMonitor(io) {
 
     reportSerial += 1;
     readings.part_name = partName;
-    readings.shot_date = buildShotDateValue(shotYearRaw, shotMonthRaw, shotDayRaw);
+    const shotDate = buildShotDateValue(shotYearRaw, shotMonthRaw, shotDayRaw);
+    readings.shot_date = getProductionDate(shotDate, shotTime);
+    readings.production_date = readings.shot_date;
     readings.shot_time = shotTime;
     readings.shot_datetime = shotDateTime;
     readings.shot_year = pad2(shotYearRaw);
@@ -2146,23 +2703,20 @@ function startPlcMonitor(io) {
     readings.shot_second = pad2(shotSecond);
 
     for (const parameter of readParameters) {
-      const { name, device, computed } = parameter;
+      const { name, device, stringDevice, computed } = parameter;
       try {
         if (computed === "serial") { readings[name] = reportSerial; continue; }
         if (computed === "shotTime") { readings[name] = shotTime; continue; }
-        if (!device) { readings[name] = null; continue; }
+        if (!device && !stringDevice) { readings[name] = null; continue; }
 
-        if (!rawCache.has(device)) {
-          const rawValue = device.startsWith("M")
-            ? await readBit(sock, device)
-            : parameter.type === "dword"
-              ? await readDWord(sock, device)
-              : await readWord(sock, device);
-          rawCache.set(device, rawValue);
+        readings[name] = await readConfiguredParameter(sock, parameter, rawCache);
+        const legacyColumn = getLegacyColumnForParameter(parameter);
+        if (legacyColumn && readings[legacyColumn] === undefined) {
+          readings[legacyColumn] = readings[name];
         }
-
-        readings[name] = scaleValue(parameter, rawCache.get(device));
-        if (device.startsWith("M")) {
+        const normalizedDevice = String(device || "").trim().toUpperCase();
+        const isBitDevice = ["M", "X", "Y"].includes(normalizedDevice[0]);
+        if (isBitDevice) {
           readings[`${readingColumnName(name)} duration (sec)`] = updateBitDuration(
             machine, name, readings[name], now
           );
@@ -2203,13 +2757,11 @@ function startPlcMonitor(io) {
       }
     }
 
-    await applyCycleMinorStoppage(machine, readings);
-
-    readings.minor_stoppage_machine = null;
+    STOPPAGE_READING_KEYS.forEach((key) => delete readings[key]);
 
     // â”€â”€ machineKey + machineType always in payload â”€â”€
     const machineKey = machine.key || machine.ip;
-    const machineType = "ube";
+    const machineType = getMachineTypeName(machine);
 
     const payload = {
       machine: machine.name,
@@ -2225,7 +2777,7 @@ function startPlcMonitor(io) {
         key: machineKey,
         ip: machine.ip,
         port: machine.port,
-        kind: machine.kind || "ube",
+        kind: getMachineTypeName(machine),
         machineType,
       },
     };
@@ -2268,7 +2820,11 @@ function startPlcMonitor(io) {
     }
 
     if (persist) {
-      await persistUbeReading(machine, partName, readings);
+      if (isGauge) {
+        await saveGaugeToDB(machine, partName, readings);
+      } else {
+        await persistUbeReading(machine, partName, withoutStoppageEventFields(readings));
+      }
     }
 
     return payload;
@@ -2340,7 +2896,7 @@ function startPlcMonitor(io) {
     });
 
     try {
-    await persistUbeReading(machine, lastPayload.partName, finalReadings);
+    await persistUbeReading(machine, lastPayload.partName, withoutStoppageEventFields(finalReadings));
     } catch (error) {
       updateMachineState(machine, { connected: true, error: `DB save failed: ${error.message}` });
       console.error(`PLC DB save failed for ${machine.ip}:`, error.message);
@@ -2363,7 +2919,7 @@ function startPlcMonitor(io) {
     const machineKey = machine.key || machine.ip;
     const machineType = "leaktest";
     const currentState = machineState.get(machineKey) || {};
-    const readParameters = LEAK_TEST_PARAMETERS;
+    const readParameters = normalizeLeakReadParameters(machine.registerConfig);
     let configuredQrDevice = "";
     let configuredQrLength = 14;
 
@@ -2375,9 +2931,10 @@ function startPlcMonitor(io) {
       }
       try {
         if (stringDevice) {
-          readings[name] = await readString(sock, stringDevice, stringLength || 11);
+          const target = resolveStringReadTarget(stringDevice, stringLength || 1);
+          readings[name] = await readString(sock, target.startDevice, target.length);
           if (name === "result" && !readings[name]) {
-            readings[name] = await readWord(sock, stringDevice).catch(() => null);
+            readings[name] = await readWord(sock, target.startDevice).catch(() => null);
           }
           continue;
         }
@@ -2443,7 +3000,7 @@ function startPlcMonitor(io) {
         key: machineKey,
         ip: machine.ip,
         port: machine.port,
-        kind: machine.kind || "leaktest",
+        kind: getMachineTypeName(machine),
         machineType,
       },
     };
@@ -2655,7 +3212,7 @@ function startPlcMonitor(io) {
         key: machineKey,
         ip: machine.ip,
         port: machine.port,
-        kind: machine.kind || "leaktest",
+        kind: getMachineTypeName(machine),
         machineType,
       },
     };
@@ -2702,7 +3259,7 @@ function startPlcMonitor(io) {
   const monitorTokens = new Map();
   const monitorMachine = async (machine, token) => {
     const machineKey = machine.key || machine.ip;
-    const machineLabel = `[${isLeakTestMachine(machine) ? "LEAKTEST" : "UBE"}] ${machine.name} (${machine.ip})`;
+    const machineLabel = `[${getMachineTypeName(machine).toUpperCase()}] ${machine.name} (${machine.ip})`;
     let reconnectAttempt = 0;
     const isMonitorCurrent = () => monitorTokens.get(machineKey) === token;
 
@@ -2917,6 +3474,199 @@ function startPlcMonitor(io) {
 
         // â”€ UBE LOOP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+        if (isGaugeMachine(machine)) {
+          let consecutiveReadFailures = 0;
+          const cycleStartDevice = findConfiguredRegisterDevice(machine, [
+            "Cycle Start",
+            "cycle_start",
+            "start",
+          ]) || GAUGE_CONTROL.cycleStartDevice;
+          const cycleEndDevice = findConfiguredRegisterDevice(machine, [
+            "Cycle Complete",
+            "Cycle End",
+            "cycle_complete",
+            "cycle_end",
+            "complete",
+          ]) || GAUGE_CONTROL.cycleEndDevice;
+          const gaugePollMs = Number(process.env.PLC_GAUGE_POLL_MS || process.env.PLC_POLL_MS || 200);
+          const gaugeLiveReadMs = Math.max(
+            gaugePollMs,
+            Number(process.env.PLC_GAUGE_LIVE_READ_MS || 1000)
+          );
+          let lastCycleStartBit = cycleStartDevice ? await readBit(sock, cycleStartDevice).catch(() => 0) : 0;
+          let lastCycleEndBit = cycleEndDevice ? await readBit(sock, cycleEndDevice).catch(() => 0) : 0;
+          let cycleStartAt = lastCycleStartBit === 1 ? new Date() : null;
+          let cycleEndHandled = lastCycleEndBit === 1;
+          let lastGaugeLiveReadAt = 0;
+
+          while (isMonitorCurrent()) {
+            if (!monitoringRunning) { await sleep(gaugePollMs); continue; }
+
+            const loopStartedAt = Date.now();
+            let cycleStart = lastCycleStartBit;
+            let cycleEnd = lastCycleEndBit;
+            try {
+              cycleStart = cycleStartDevice ? await readBit(sock, cycleStartDevice) : 0;
+              cycleEnd = cycleEndDevice ? await readBit(sock, cycleEndDevice) : 0;
+              consecutiveReadFailures = 0;
+            } catch (error) {
+              if (isPlcReadTimeoutError(error)) {
+                await refreshSocketAfterTimeout(`gauge cycle bits ${cycleStartDevice}/${cycleEndDevice}`);
+                consecutiveReadFailures = 0;
+                await sleep(gaugePollMs);
+                continue;
+              }
+              consecutiveReadFailures += 1;
+              updateMachineState(machine, {
+                connected: true,
+                error: `Gauge cycle bit read failed (${consecutiveReadFailures}/${PLC_MAX_CONSECUTIVE_READ_FAILURES}): ${error.message}`,
+              });
+              if (consecutiveReadFailures >= PLC_MAX_CONSECUTIVE_READ_FAILURES) {
+                throw new Error(`Gauge cycle bit reads failed ${consecutiveReadFailures} times; reconnecting.`);
+              }
+              await sleep(gaugePollMs);
+              continue;
+            }
+
+            const cycleStartedNow = cycleStartDevice
+              ? cycleStart === 1 && lastCycleStartBit !== 1
+              : !cycleStartAt;
+            const cycleEndedNow = cycleEndDevice
+              ? cycleEnd === 1 && lastCycleEndBit !== 1
+              : false;
+
+            if (cycleStartedNow) {
+              cycleStartAt = new Date(loopStartedAt);
+              cycleEndHandled = false;
+              const payload = await readAll(machine, sock, {
+                persist: false,
+                emit: true,
+                liveOnly: true,
+                cycleTiming: { startedAt: cycleStartAt, endedAt: cycleStartAt, durationSec: 0 },
+              });
+              lastGaugeLiveReadAt = Date.now();
+              updateMachineState(machine, {
+                connected: true,
+                error: null,
+                shotStatus: `Gauge cycle started on ${cycleStartDevice}; waiting for ${cycleEndDevice}.`,
+                latestReading: payload?.readings
+                  ? formatLiveReadingSnapshot(machine, payload.partName, Object.fromEntries(
+                      Object.entries(payload.readings).map(([name, reading]) => [name, reading?.value ?? reading])
+                    ), payload.observedAt)
+                  : machineState.get(machine.key || machine.ip)?.latestReading,
+              });
+            }
+
+            const cycleActive = Boolean(cycleStartAt && !cycleEndHandled && cycleEnd !== 1);
+            if (cycleActive && Date.now() - lastGaugeLiveReadAt >= gaugeLiveReadMs) {
+              const now = new Date();
+              const durationSec = Number(((now - cycleStartAt) / 1000).toFixed(2));
+              const payload = await readAll(machine, sock, {
+                persist: false,
+                emit: true,
+                liveOnly: true,
+                cycleTiming: { startedAt: cycleStartAt, endedAt: now, durationSec },
+              }).catch((error) => {
+                if (isPlcReadTimeoutError(error)) return { timeout: true, error };
+                consecutiveReadFailures += 1;
+                updateMachineState(machine, {
+                  connected: true,
+                  error: `Gauge live register read failed (${consecutiveReadFailures}/${PLC_MAX_CONSECUTIVE_READ_FAILURES}): ${error.message}`,
+                });
+                return null;
+              });
+
+              if (payload?.timeout) {
+                await refreshSocketAfterTimeout("gauge live registers");
+                consecutiveReadFailures = 0;
+              } else if (payload) {
+                consecutiveReadFailures = 0;
+                lastGaugeLiveReadAt = Date.now();
+                const liveReadings = Object.fromEntries(
+                  Object.entries(payload.readings || {}).map(([name, reading]) => [name, reading?.value ?? reading])
+                );
+                updateMachineState(machine, {
+                  connected: true,
+                  error: null,
+                  cycleTime: durationSec,
+                  latestReading: formatLiveReadingSnapshot(machine, payload.partName, liveReadings, payload.observedAt),
+                  shotStatus: `Gauge cycle running; live data updated.`,
+                });
+              }
+
+              if (consecutiveReadFailures >= PLC_MAX_CONSECUTIVE_READ_FAILURES) {
+                throw new Error(`Gauge live register reads failed ${consecutiveReadFailures} times; reconnecting.`);
+              }
+            }
+
+            if ((cycleEndedNow || (cycleEnd === 1 && !cycleEndHandled)) && cycleStartAt) {
+              cycleEndHandled = true;
+              const cycleEndAt = new Date();
+              const durationSec = Number(((cycleEndAt - cycleStartAt) / 1000).toFixed(2));
+              updateMachineState(machine, {
+                connected: true,
+                error: null,
+                shotStatus: `Gauge cycle ended on ${cycleEndDevice}; saving data.`,
+                cycleTime: durationSec,
+              });
+
+              if (GAUGE_CONTROL.cycleEndDelayMs > 0) {
+                await sleep(GAUGE_CONTROL.cycleEndDelayMs);
+              }
+
+              const payload = await readAll(machine, sock, {
+                persist: false,
+                emit: true,
+                liveOnly: true,
+                cycleTiming: { startedAt: cycleStartAt, endedAt: cycleEndAt, durationSec },
+              });
+              const gaugeReadings = Object.fromEntries(
+                Object.entries(payload.readings || {}).map(([name, reading]) => [name, reading?.value ?? reading])
+              );
+              gaugeReadings.cycle_start = 1;
+              gaugeReadings.cycle_complete = 1;
+              gaugeReadings.cycle_start_time = cycleStartAt.toISOString();
+              gaugeReadings.cycle_end_time = cycleEndAt.toISOString();
+              gaugeReadings.cycle_time = durationSec;
+
+              const saveResult = await saveGaugeToDB(machine, payload.partName, gaugeReadings, {
+                trigger: "cycle-end",
+                skipDuplicateCheck: true,
+                recordedAt: cycleEndAt,
+              });
+              if (!saveResult?.skipped) {
+                const completedPayload = {
+                  ...payload,
+                  liveOnly: false,
+                  readings: formatReadingsForClient(gaugeReadings, machine),
+                  cycleTime: durationSec,
+                  timestamp: cycleEndAt.toISOString(),
+                  observedAt: cycleEndAt.toISOString(),
+                };
+                io.emit(`plc_data:${machine.key || machine.ip}`, completedPayload);
+                io.emit("plc_data", completedPayload);
+                io.emit("cycle_complete", completedPayload);
+                updateMachineState(machine, {
+                  connected: true,
+                  error: null,
+                  lastCycleAt: cycleEndAt.toISOString(),
+                  latestReading: formatLiveReadingSnapshot(machine, payload.partName, gaugeReadings, cycleEndAt.toISOString()),
+                  cycleTime: durationSec,
+                  shotStatus: "Gauge cycle complete; reading saved.",
+                });
+              }
+              cycleStartAt = null;
+            }
+
+            if (cycleEnd === 0) cycleEndHandled = false;
+            lastCycleStartBit = cycleStart;
+            lastCycleEndBit = cycleEnd;
+            await sleep(gaugePollMs);
+          }
+          closeSocket(sock);
+          continue;
+        }
+
         const cycleStartDevice = CYCLE_START_DEVICE;
         const cycleEndDevice = CYCLE_END_DEVICE;
         let lastCycleStartBit = cycleStartDevice
@@ -3008,6 +3758,7 @@ function startPlcMonitor(io) {
             let liveReadError = null;
             const livePayload = await readAll(machine, sock, {
               persist: false,
+              persistStoppage: true,
               emit: true,
               liveOnly: true,
             }).catch((error) => {
@@ -3045,7 +3796,11 @@ function startPlcMonitor(io) {
                 hasStableCycleReadings(liveFlatReadings)
               ) {
                 try {
-                  const saveResult = await persistUbeReading(machine, livePayload.partName, liveFlatReadings);
+                  const saveResult = await persistUbeReading(
+                    machine,
+                    livePayload.partName,
+                    withoutStoppageEventFields(liveFlatReadings)
+                  );
                   lastLiveSavedShotNumber = currentShotNumber;
                   if (saveResult?.skipped && saveResult.reason !== "duplicate-shot-number") {
                     updateMachineState(machine, {
@@ -3111,7 +3866,7 @@ function startPlcMonitor(io) {
       if (monitorTokens.has(machineKey)) continue;
       const token = Symbol(machineKey);
       monitorTokens.set(machineKey, token);
-      const label = isLeakTestMachine(machine) ? "LEAKTEST" : "UBE";
+      const label = getMachineTypeName(machine).toUpperCase();
       console.log(`Starting [${label}]: ${machine.name} (${machine.ip})`);
       monitorMachine(machine, token); // intentionally not awaited
       if (i < machines.length - 1) await sleep(500);
@@ -3119,7 +3874,7 @@ function startPlcMonitor(io) {
   };
 
   const refreshConfiguredMachines = async () => {
-    const configuredMachines = await getConfiguredMachines();
+    const configuredMachines = await getConfiguredMachines(true);
     const configuredByKey = new Map(configuredMachines.map((machine) => [machine.key || machine.ip, machine]));
     let changed = false;
 
@@ -3165,7 +3920,7 @@ function startPlcMonitor(io) {
         partName: "",
         cycleTime: null,
         shotStatus: "Machine added from setup; starting monitor.",
-        machineType: isLeakTestMachine(machine) ? "leaktest" : "ube",
+        machineType: getMachineTypeName(machine),
       });
       changed = true;
     });
@@ -3213,6 +3968,16 @@ function startPlcMonitor(io) {
   machineConfigRefreshTimer.unref?.();
 
   const isLiveReadingInHistoryRange = (liveReading = {}, { from, to } = {}) => {
+    const productionDate = liveReading.production_date || liveReading.shot_date;
+    if (productionDate) {
+      const normalizedProductionDate = normalizeReadingForDB("shot_date", productionDate);
+      if (normalizedProductionDate) {
+        if (from && normalizedProductionDate < String(from).slice(0, 10)) return false;
+        if (to && normalizedProductionDate > String(to).slice(0, 10)) return false;
+        return true;
+      }
+    }
+
     const timestamp = liveReading.recorded_at || liveReading.shot_datetime || liveReading.created_at;
     const liveTime = timestamp ? new Date(timestamp).getTime() : Date.now();
     if (!Number.isFinite(liveTime)) return true;

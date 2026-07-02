@@ -4,21 +4,22 @@ import { io } from "socket.io-client";
 import AppLayout from "../../../components/common/AppLayout";
 import { getPlcLatestReadings } from "../../../services/api";
 import { SOCKET_URL } from "../../../services/endpoints";
-import { DEFAULT_MACHINES, MACHINE_NAMES, PLC_LATEST_POLL_MS, REGISTER_GROUPS, getMachineKey, mergeMachineList } from "../constants";
+import { DEFAULT_MACHINES, MACHINE_NAMES, PLC_LATEST_POLL_MS, REGISTER_GROUPS, getMachineKey, mergeMachineList, sortMachinesBySeries } from "../constants";
 import PlcMonitorStyles from "../components/PlcMonitorStyles";
 import PlcReportModal from "../components/PlcReportModal";
-import { MachineStatusCard, MetricTile, ParameterTable, STATUS_CFG, ValueCard, formatValue } from "../components/PlcWidgets";
+import { MetricTile, STATUS_CFG, ValueCard } from "../components/PlcWidgets";
 import {
   buildShotDateFromRow,
   buildShotDateTimeFromRow,
   buildShotTimeFromRow,
   formatDateOnly,
-  formatDateTime,
-  formatTimeOnly,
+  getDisplayLabel,
   getMachineKindFromRow,
   getNumericShotNumber,
+  getReadingValue,
   getReadingShotNumber,
   getRowTimestamp,
+  isHiddenDbField,
   rowToReadings,
 } from "../utils/plcFormatters";
 
@@ -42,6 +43,123 @@ function toValidDate(value) {
 
 function hasReadingData(readings = {}) {
   return Object.values(readings).some((item) => hasReadableValue(item?.value));
+}
+
+function normalizeRegisterName(item = {}) {
+  if (typeof item === "string") return item.trim();
+  return String(item.name || item.parameter || item.parameter_name || item.register || item.label || "").trim();
+}
+
+function normalizeRegisterLabel(item = {}) {
+  const name = normalizeRegisterName(item);
+  if (!item || typeof item !== "object") return getDisplayLabel(name);
+  return item.label || item.display_name || item.displayName || item.title || getDisplayLabel(name);
+}
+
+function normalizeRegisterUnit(item = {}) {
+  if (!item || typeof item !== "object") return "";
+  return String(item.unit || item.units || "").trim();
+}
+
+function normalizeRegisterGroup(item = {}) {
+  if (!item || typeof item !== "object") return "";
+  return String(item.group || item.category || item.section || item.tab || "").trim();
+}
+
+function getMachineRegisterConfig(machine = {}) {
+  if (Array.isArray(machine.registerConfig)) return machine.registerConfig;
+  if (Array.isArray(machine.register_config)) return machine.register_config;
+  return [];
+}
+
+function mergeMachineContext(machine = {}, config = {}) {
+  const registerConfig = getMachineRegisterConfig(machine).length
+    ? getMachineRegisterConfig(machine)
+    : getMachineRegisterConfig(config);
+  return {
+    ...config,
+    ...machine,
+    registerConfig,
+    register_config: registerConfig,
+  };
+}
+
+function inferMachineKind(machine = {}, readings = {}) {
+  const explicitKind = machine.kind || machine.machine_type || machine.machineType;
+  if (explicitKind) return explicitKind;
+  const machineText = [
+    machine.name,
+    machine.machine_name,
+    machine.machine_key,
+    machine.key,
+    machine.ip,
+  ].join(" ").toLowerCase();
+  const registerText = Array.isArray(machine.registerConfig)
+    ? machine.registerConfig.map((item) => String(item?.name || item?.parameter || "").toLowerCase()).join(" ")
+    : "";
+  if (
+    machineText.includes("gauge") ||
+    machineText.includes("guage") ||
+    registerText.includes("part scan") ||
+    registerText.includes("gauge status") ||
+    readings.part_scan_data ||
+    readings["Part Scan Data"] ||
+    readings.gauge_status ||
+    readings["Gauge Status"] ||
+    readings["Gauge  Status"]
+  ) {
+    return "gauge";
+  }
+  if (machineText.includes("leak") || readings.part_qr_code || readings.body_leak_value) return "leaktest";
+  return explicitKind || "ube";
+}
+
+function machineAccentColor(machineKind = "machine", index = 0) {
+  if (machineKind === "gauge") return "#10b981";
+  if (machineKind === "leaktest") return "#14b8a6";
+  return ["#22d3ee", "#f97316", "#a78bfa", "#34d399", "#f472b6", "#60a5fa"][index % 6];
+}
+
+function buildConfiguredGroups(machineKind, machine = {}, readings = {}) {
+  const configured = getMachineRegisterConfig(machine)
+    .filter((item) => !item || typeof item !== "object" || (item.enabled !== false && item.show_on_monitor !== false))
+    .map((item) => ({
+      name: normalizeRegisterName(item),
+      label: normalizeRegisterLabel(item),
+      unit: normalizeRegisterUnit(item),
+      group: normalizeRegisterGroup(item),
+    }))
+    .filter((item) => item.name && !isHiddenDbField(item.name));
+
+  const source = configured.length
+    ? configured
+    : Object.keys(readings)
+      .filter((name) => name && !isHiddenDbField(name))
+      .filter((name) => hasReadableValue(getReadingValue(readings, name)))
+      .map((name) => ({
+        name,
+        label: getDisplayLabel(name),
+        unit: readings[name]?.unit || "",
+        group: "",
+      }));
+
+  if (!source.length) return [];
+
+  const byGroup = new Map();
+  source.forEach((item) => {
+    const label = item.group || "Configured Parameters";
+    if (!byGroup.has(label)) byGroup.set(label, []);
+    byGroup.get(label).push(item);
+  });
+
+  return Array.from(byGroup.entries()).map(([label, keys], index) => ({
+    id: `${machineKind || "machine"}_${label.toLowerCase().replace(/[^a-z0-9]+/g, "_") || "configured"}`,
+    label,
+    kind: machineKind || "machine",
+    icon: machineKind === "gauge" ? "GA" : machineKind === "leaktest" ? "LT" : `P${index + 1}`,
+    color: machineAccentColor(machineKind, index),
+    keys,
+  }));
 }
 
 function PLCDashboard() {
@@ -301,12 +419,14 @@ function PLCDashboard() {
   const normalizeConfig = useCallback((config = {}) => {
     const key = config.key || config.machine_key || config.ip;
     const localMachine = machinesRef.current.find((machine) => getMachineKey(machine) === key || machine.ip === config.ip);
+    const context = mergeMachineContext(localMachine || {}, config);
     const machineKey = localMachine ? getMachineKey(localMachine) : key;
     return {
       key: machineKey,
-      ip: localMachine?.ip || config.ip,
-      port: Number(localMachine?.port || config.port || 5002),
-      kind: localMachine?.kind || config.kind || "ube",
+      ip: context.ip || config.ip,
+      port: Number(context.port || config.port || 5002),
+      kind: inferMachineKind(context),
+      registerConfig: getMachineRegisterConfig(context),
     };
   }, []);
 
@@ -364,7 +484,8 @@ function PLCDashboard() {
           key: getMachineKey(first),
           ip: first.ip,
           port: Number(first.port || 5002),
-          kind: first.kind || "ube",
+          kind: inferMachineKind(first),
+          registerConfig: getMachineRegisterConfig(first),
         };
         selectedKeyRef.current = nextConfig.key;
         setPlcConfig(prev =>
@@ -392,7 +513,7 @@ function PLCDashboard() {
       });
     });
 
-    socket.on("plc_data", ({ timestamp, observedAt, liveOnly = false, cycleTime, readings: r = {}, config, partName: nextPartName, shotTime: nextShotTime }) => {
+    socket.on("plc_data", ({ timestamp, observedAt, liveOnly = false, cycleTime, readings: r = {}, config, machineType, partName: nextPartName, shotTime: nextShotTime }) => {
       lastSocketDataAtRef.current = Date.now();
       const key = config?.key || config?.ip || selectedKeyRef.current;
       const ip = config?.ip || key;
@@ -436,11 +557,26 @@ function PLCDashboard() {
 
       if (selectedKeyRef.current !== key && selectedKeyRef.current !== ip) return;
 
-      setPlcConfig(prev =>
-        prev.key === key && prev.ip === ip && Number(prev.port || 0) === port && prev.kind === config?.kind
+      setPlcConfig(prev => {
+        const context = mergeMachineContext(
+          machinesRef.current.find((machine) => getMachineKey(machine) === key || machine.ip === ip) || {},
+          { ...prev, ...config, key, ip, port, kind: config?.kind || machineType }
+        );
+        const nextConfig = {
+          key,
+          ip,
+          port,
+          kind: inferMachineKind(context, r),
+          registerConfig: getMachineRegisterConfig(context),
+        };
+        return prev.key === nextConfig.key &&
+          prev.ip === nextConfig.ip &&
+          Number(prev.port || 0) === Number(nextConfig.port || 0) &&
+          prev.kind === nextConfig.kind &&
+          getMachineRegisterConfig(prev).length === nextConfig.registerConfig.length
           ? prev
-          : { key, ip, port, kind: config?.kind }
-      );
+          : nextConfig;
+      });
       setDraftConfig(prev => prev.ip === ip && prev.port === String(port) ? prev : { ip, port: String(port) });
       if (packetHasData) {
         setReadings(r);
@@ -457,7 +593,7 @@ function PLCDashboard() {
       }
     });
 
-    socket.on("cycle_complete", ({ timestamp, cycleTime, readings: r, config, partName: nextPartName, shotTime: nextShotTime }) => {
+    socket.on("cycle_complete", ({ timestamp, cycleTime, readings: r, config, machineType, partName: nextPartName, shotTime: nextShotTime }) => {
       lastSocketDataAtRef.current = Date.now();
       const key = config?.key || config?.ip || selectedKeyRef.current;
       const ip = config?.ip || key;
@@ -491,11 +627,26 @@ function PLCDashboard() {
       if (selectedKeyRef.current !== key && selectedKeyRef.current !== ip) return;
 
       selectedKeyRef.current = key;
-      setPlcConfig(prev =>
-        prev.key === key && prev.ip === ip && Number(prev.port || 0) === port && prev.kind === config?.kind
+      setPlcConfig(prev => {
+        const context = mergeMachineContext(
+          machinesRef.current.find((machine) => getMachineKey(machine) === key || machine.ip === ip) || {},
+          { ...prev, ...config, key, ip, port, kind: config?.kind || machineType }
+        );
+        const nextConfig = {
+          key,
+          ip,
+          port,
+          kind: inferMachineKind(context, r),
+          registerConfig: getMachineRegisterConfig(context),
+        };
+        return prev.key === nextConfig.key &&
+          prev.ip === nextConfig.ip &&
+          Number(prev.port || 0) === Number(nextConfig.port || 0) &&
+          prev.kind === nextConfig.kind &&
+          getMachineRegisterConfig(prev).length === nextConfig.registerConfig.length
           ? prev
-          : { key, ip, port, kind: config?.kind }
-      );
+          : nextConfig;
+      });
       setDraftConfig(prev => prev.ip === ip && prev.port === String(port) ? prev : { ip, port: String(port) });
       setCycleStatus("complete");
       if (packetHasData) {
@@ -525,10 +676,6 @@ function PLCDashboard() {
   }, [normalizeConfig, pushSpark, rememberSelectedSnapshot]);
 
   const st = STATUS_CFG[cycleStatus] || STATUS_CFG.idle;
-  const shotNumber = readings.shot_number?.value ?? null;
-  const cycleTime = readings.cycle_time?.value ?? null;
-  const minorStoppage = readings.minor_stoppage?.value ?? null;
-  const shotForwardTime = readings.shot_fwd_time?.value ?? null;
   const shotDate = readings.shot_date?.value || buildShotDateFromRow(
     Object.fromEntries(Object.entries(readings).map(([name, item]) => [name, item?.value ?? null]))
   );
@@ -537,13 +684,17 @@ function PLCDashboard() {
   );
   const selectedMachineKey = plcConfig.key || plcConfig.ip;
   const selectedMachine = machines.find((machine) => getMachineKey(machine) === selectedMachineKey || machine.ip === plcConfig.ip);
-  const machineName = selectedMachine?.name || MACHINE_NAMES[plcConfig.ip] || "Unknown Machine";
-  const selectedMachineKind = selectedMachine?.kind || plcConfig.kind || "ube";
+  const selectedMachineContext = mergeMachineContext(selectedMachine || {}, plcConfig);
+  const machineName = selectedMachineContext.name || MACHINE_NAMES[plcConfig.ip] || "Unknown Machine";
+  const selectedMachineKind = inferMachineKind(selectedMachineContext, readings);
   const isLeakTestMachine = selectedMachineKind === "leaktest";
+  const isUbeMachine = selectedMachineKind === "ube";
   const selectedMachineStatus = machineStatuses[selectedMachineKey] || machineStatuses[plcConfig.ip] || {};
   const selectedMachineOnline = Boolean(selectedMachineStatus.connected);
   const selectedPlcConnected = Boolean(selectedMachineStatus.connected || selectedMachineStatus.hasRecentData || readings.plc_ip?.value);
   const displayPartName = firstReadableValue(
+    getReadingValue(readings, "part_scan_data"),
+    getReadingValue(readings, "Part Scan Data"),
     readings.part_name?.value,
     readings.part_qr_code?.value,
     readings.scan_data?.value,
@@ -562,18 +713,24 @@ function PLCDashboard() {
     "shot_hour",
     "shot_minute",
     "shot_second",
+    "cycle_start",
+    "cycle_complete",
+    "Cycle Start",
+    "Cycle Complete",
   ]);
-  const availableGroups = REGISTER_GROUPS
-    .filter((group) => group.kind === selectedMachineKind)
+  const configuredGroups = buildConfiguredGroups(selectedMachineKind, selectedMachineContext, readings);
+  const legacyUbeGroups = REGISTER_GROUPS
+    .filter((group) => group.kind === "ube")
     .filter((group) => {
       if (group.id !== "machine_bits") return true;
       return group.keys.some(({ name }) => {
-        const value = readings[name]?.value;
+        const value = getReadingValue(readings, name);
         if (!hasReadableValue(value)) return false;
         if (name === "cycle_end" && Number(value) === 0) return false;
         return true;
       });
     });
+  const availableGroups = isUbeMachine ? legacyUbeGroups : configuredGroups;
   const validActiveGroup = availableGroups.some((group) => group.id === activeGroup) ? activeGroup : null;
   const baseDisplayGroups = validActiveGroup
     ? availableGroups.filter(g => g.id === validActiveGroup)
@@ -584,7 +741,7 @@ function PLCDashboard() {
         ? {
             ...group,
             keys: group.keys.filter(({ name }) => {
-              const value = readings[name]?.value;
+              const value = getReadingValue(readings, name);
               if (!hasReadableValue(value)) return false;
               if (name === "cycle_end" && Number(value) === 0) return false;
               return true;
@@ -599,6 +756,24 @@ function PLCDashboard() {
       keys: group.keys.filter(({ name }) => !compactCardHiddenFields.has(name)),
     }))
     .filter((group) => group.keys.length > 0);
+  const configuredOverviewItems = (availableGroups[0]?.keys || [])
+    .filter(({ name }) => !compactCardHiddenFields.has(name))
+    .slice(0, 5)
+    .map(({ name, label, unit }) => ({
+      name,
+      label,
+      unit,
+      value: name === "shot_time" ? plcShotTime : getReadingValue(readings, name),
+    }));
+  const ubeOverviewItems = [
+    { name: "part_name", label: "Part Name", value: displayPartName || "-", tone: "cyan" },
+    { name: "shot_number", label: "Shot Number", value: getReadingValue(readings, "shot_number"), tone: "cyan" },
+    { name: "cycle_time", label: "Cycle Time", value: getReadingValue(readings, "cycle_time"), unit: "sec", tone: "green" },
+    { name: "shot_fwd_time", label: "Shot Forward Time", value: getReadingValue(readings, "shot_fwd_time"), unit: "sec", tone: "slate" },
+    { name: "shot_date", label: "Shot Date", value: shotDate ? formatDateOnly(shotDate) : null, tone: "slate" },
+    { name: "shot_time", label: "Shot Time", value: plcShotTime || null, tone: "slate" },
+  ];
+  const overviewItems = isUbeMachine ? ubeOverviewItems : configuredOverviewItems;
   const reportReading = {
     ...Object.fromEntries(Object.entries(readings).map(([name, item]) => [name, item?.value ?? null])),
     machine_name: readings.machine_name?.value || machineName,
@@ -634,7 +809,13 @@ function PLCDashboard() {
   const selectMachine = (key) => {
     const machine = machines.find(item => getMachineKey(item) === key)
       || { key, ip: key, port: 5002 };
-    const config = { key: getMachineKey(machine), ip: machine.ip, port: Number(machine.port || draftConfig.port || 5002), kind: machine.kind };
+    const config = {
+      key: getMachineKey(machine),
+      ip: machine.ip,
+      port: Number(machine.port || draftConfig.port || 5002),
+      kind: inferMachineKind(machine),
+      registerConfig: getMachineRegisterConfig(machine),
+    };
     selectedKeyRef.current = config.key;
     setPlcConfig(config);
     setDraftConfig({ ip: config.ip, port: String(config.port) });
@@ -646,14 +827,14 @@ function PLCDashboard() {
 
   const machineSearch = (searchParams.get("search") || "").trim().toLowerCase();
   const visibleMachines = useMemo(() => (
-    machineSearch
+    sortMachinesBySeries(machineSearch
       ? machines.filter((machine) => {
         const key = getMachineKey(machine);
         const label = machine.name || MACHINE_NAMES[machine.ip] || machine.ip;
         return [key, label, machine.ip, machine.kind]
           .some((value) => String(value || "").toLowerCase().includes(machineSearch));
       })
-      : machines
+      : machines)
   ), [machineSearch, machines]);
 
   useEffect(() => {
@@ -722,52 +903,15 @@ function PLCDashboard() {
               </div>
             </div>
 
-            <MetricTile label={isLeakTestMachine ? "Part QR Code" : "Part Name"} value={displayPartName || "-"} tone="cyan" />
-            <MetricTile
-              label={isLeakTestMachine ? "Result" : "Shot Number"}
-              value={isLeakTestMachine ? readings.result?.value ?? null : shotNumber}
-              tone="cyan"
-            />
-            {isLeakTestMachine && (
+            {overviewItems.map(({ name, label, unit, value, tone }, index) => (
               <MetricTile
-                label="Body Leak"
-                value={readings.body_leak_value?.value ?? null}
-                tone="green"
+                key={name}
+                label={label || getDisplayLabel(name)}
+                value={value}
+                unit={unit}
+                tone={tone || (index === 0 ? "cyan" : index === 1 ? "green" : "slate")}
               />
-            )}
-            {isLeakTestMachine && (
-              <MetricTile
-                label="GALL-1 / GALL-2"
-                value={[readings.gall_1?.value, readings.gall_2?.value].filter(value => value !== null && value !== undefined).join(" / ") || null}
-                tone="amber"
-              />
-            )}
-            <MetricTile label="Cycle Time" value={cycleTime} unit="sec" tone="green" />
-            {!isLeakTestMachine && (
-              <MetricTile label="Minor Stoppage" value={minorStoppage} unit="sec" tone="amber" />
-            )}
-            <MetricTile
-              label={isLeakTestMachine ? "Cycle End Time" : "Shot Forward Time"}
-              value={isLeakTestMachine
-                ? (lastTimestamp ? lastTimestamp.toLocaleTimeString() : null)
-                : shotForwardTime}
-              unit={isLeakTestMachine ? "" : "sec"}
-              tone="slate"
-            />
-            {!isLeakTestMachine && (
-              <MetricTile
-                label="Shot Date"
-                value={shotDate ? formatDateOnly(shotDate) : null}
-                tone="slate"
-              />
-            )}
-            {!isLeakTestMachine && (
-              <MetricTile
-                label="Shot Time"
-                value={plcShotTime || null}
-                tone="slate"
-              />
-            )}
+            ))}
           </section>
 
           <section className="dashboard-content">
@@ -820,8 +964,7 @@ function PLCDashboard() {
 
                     <div className="cards-grid">
                       {group.keys.map(({ name, unit, label }) => {
-                        const reg = readings[name];
-                        const value = name === "shot_time" ? plcShotTime : reg?.value ?? null;
+                        const value = name === "shot_time" ? plcShotTime : getReadingValue(readings, name);
                         return (
                           <ValueCard
                             key={name}

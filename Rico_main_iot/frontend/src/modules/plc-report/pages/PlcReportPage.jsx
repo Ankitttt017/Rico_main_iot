@@ -4,6 +4,7 @@ import { CheckCircle2, Download } from "lucide-react";
 import AppLayout from "../../../components/common/AppLayout";
 import ricoLogo from "../../../assets/rico-logo.png";
 import { DISPLAY_LABELS } from "../../plc-monitor/constants";
+import { normalizeDisplayValue } from "../../plc-monitor/utils/plcFormatters";
 import {
   getLineMachines,
   getLines,
@@ -12,10 +13,10 @@ import {
 } from "../../../services/api";
 
 const DEFAULT_MACHINE = {
-  machine_key: "ube-850t-2",
-  machine_name: "UBE 850T-2",
-  plc_ip: "192.168.117.201",
-  plc_port: 5002,
+  machine_key: "",
+  machine_name: "Machine",
+  plc_ip: "",
+  plc_port: "",
 };
 
 const REPORT_AUTO_REFRESH_MS = Number(import.meta.env.VITE_PLC_REPORT_REFRESH_MS || 5000);
@@ -27,6 +28,7 @@ const HIDDEN_COLUMNS = new Set([
   "history_rank",
   "recorded_at",
   "shot_datetime",
+  "production_date",
   "shot_day",
   "shot_fwd_time_sec",
   "shot_fwd_time_sec_value",
@@ -43,7 +45,6 @@ const HIDDEN_COLUMNS = new Set([
   "cycle_start_time",
   "cycle_end",
   "cycle_end_time",
-  "minor_stoppage_machine",
   "vacuum_pressure_mmhg",
   "raw_readings_json",
   "created_at",
@@ -84,8 +85,6 @@ const PREFERRED_COLUMNS = [
   "ok_shot",
   "ng_counter",
   "cycle_time",
-  "minor_stoppage",
-  "minor_stoppage_machine",
 ];
 
 const SHOT_STATUS = {
@@ -167,8 +166,6 @@ const REPORT_LABELS = {
 
 const REPORT_UNITS = {
   cycle_time: "sec",
-  minor_stoppage: "sec",
-  minor_stoppage_machine: "sec",
   die_close_core_in_time: "sec",
   pouring_time: "sec",
   shot_fwd_time: "sec",
@@ -475,6 +472,9 @@ function getRowCalendarDate(row = {}) {
 }
 
 function getRowProductionDate(row = {}) {
+  const productionDate = normalizeDateInput(getRowValue(row, "production_date", "Production Date"));
+  if (productionDate) return productionDate;
+
   const calendarDate = getRowCalendarDate(row);
   if (!calendarDate) return null;
   const timeParts = getRowTimeParts(row);
@@ -507,14 +507,16 @@ function shotStatusLabel(value) {
 function formatValue(value, key) {
   if (NOT_AVAILABLE_COLUMNS.has(normalizeColumnKey(key))) return "N/A";
   if (value === null || value === undefined || value === "") return "-";
-  if (normalizeColumnKey(key) === "biscuit_thickness") return String(value);
+  const normalizedKey = normalizeColumnKey(key);
+  const displayValue = normalizeDisplayValue(key, value);
+  if (normalizedKey === "biscuit_thickness") return String(displayValue);
   if (key === "recorded_at" || key === "cycle_end_time") return formatDateTime(value);
   if (key === "shot_date") return formatDateOnly(value);
   if (key === "shot_time") return formatTimeOnly(value);
-  if (key === "shot_status") {
+  if (normalizedKey === "shot_status") {
     return shotStatusLabel(value);
   }
-  return String(value);
+  return String(displayValue);
 }
 
 function formatReportCell(row, key, rowIndex = 0, rowCount = 0, rows = []) {
@@ -579,6 +581,24 @@ function getMachineLabel(machine) {
   return machine?.machine_name || machine?.name || machine?.plc_ip || machine?.ip_address || getMachineId(machine);
 }
 
+function inferMachineKind(machine = {}, rows = []) {
+  const explicitKind = machine.machine_type || machine.kind || machine.machineType;
+  if (explicitKind) return explicitKind;
+  const machineText = [
+    machine.machine_type,
+    machine.kind,
+    machine.machine_name,
+    machine.name,
+    machine.machine_key,
+  ].join(" ").toLowerCase();
+  if (machineText.includes("gauge")) return "gauge";
+  if (machineText.includes("leak")) return "leaktest";
+  if (rows.some((row) => row?.part_scan_data !== undefined || row?.gauge_status !== undefined || row?.gauge_judgement !== undefined)) return "gauge";
+  if (rows.some((row) => String(row?.machine_type || row?.kind || "").toLowerCase() === "gauge")) return "gauge";
+  if (rows.some((row) => String(row?.machine_type || row?.kind || "").toLowerCase() === "leaktest")) return "leaktest";
+  return explicitKind || "generic";
+}
+
 function normalizeMachineIdentity(value) {
   const compact = String(value || "")
     .trim()
@@ -615,6 +635,12 @@ function dedupeMachines(source = []) {
         ...machine,
         ...rows[existingIndex],
         line_id: rows[existingIndex].line_id || machine.line_id,
+        machine_type: inferMachineKind(rows[existingIndex], []) !== "ube"
+          ? inferMachineKind(rows[existingIndex], [])
+          : inferMachineKind(machine, []),
+        kind: inferMachineKind(rows[existingIndex], []) !== "ube"
+          ? inferMachineKind(rows[existingIndex], [])
+          : inferMachineKind(machine, []),
         plc_ip: rows[existingIndex].plc_ip || machine.plc_ip || machine.ip_address || machine.ip,
         plc_port: rows[existingIndex].plc_port || machine.plc_port || machine.port,
       };
@@ -678,28 +704,26 @@ function sortRowsLatestFirst(nextRows) {
 }
 
 function isLeakTestMachine(machine = {}, rows = []) {
-  const machineText = [
-    machine.machine_type,
-    machine.kind,
-    machine.machine_name,
-    machine.name,
-    machine.machine_key,
-  ].join(" ").toLowerCase();
-  if (machineText.includes("leak")) return true;
-  return rows.some((row) => String(row?.machine_type || row?.kind || "").toLowerCase() === "leaktest");
+  return inferMachineKind(machine, rows) === "leaktest";
 }
 
-function isHiddenForReport(key, hideLeakTestFields = false) {
+function isGaugeMachine(machine = {}, rows = []) {
+  return inferMachineKind(machine, rows) === "gauge";
+}
+
+function isHiddenForReport(key, hideLeakTestFields = false, isGauge = false) {
   const normalizedKey = normalizeColumnKey(key);
+  if (isGauge && ["cycle_start", "cycle_complete"].includes(normalizedKey)) return false;
   return HIDDEN_COLUMNS.has(normalizedKey) || (hideLeakTestFields && LEAK_TEST_HIDDEN_COLUMNS.has(normalizedKey));
 }
 
 function buildColumns(rows, options = {}) {
   const hideLeakTestFields = Boolean(options.hideLeakTestFields);
+  const isGauge = Boolean(options.isGauge);
   const keys = new Set();
   rows.forEach((row) => {
     Object.keys(row || {}).forEach((key) => {
-      if (!isHiddenForReport(key, hideLeakTestFields)) keys.add(key);
+      if (!isHiddenForReport(key, hideLeakTestFields, isGauge)) keys.add(key);
     });
   });
   if (rows.length) {
@@ -708,7 +732,7 @@ function buildColumns(rows, options = {}) {
     if (rows.some((row) => getRowTimeParts(row))) keys.add("shot_time");
   }
   return [
-    ...PREFERRED_COLUMNS.filter((key) => keys.has(key) && !isHiddenForReport(key, hideLeakTestFields)),
+    ...PREFERRED_COLUMNS.filter((key) => keys.has(key) && !isHiddenForReport(key, hideLeakTestFields, isGauge)),
     ...Array.from(keys)
       .filter((key) => !PREFERRED_COLUMNS.includes(key))
       .sort((a, b) => labelize(a).localeCompare(labelize(b))),
@@ -735,6 +759,7 @@ function KpiCard({ title, value, tone }) {
     rose: "border-rose-200 bg-rose-50 text-rose-700 ring-rose-100",
     blue: "border-blue-200 bg-blue-50 text-blue-700 ring-blue-100",
     indigo: "border-indigo-200 bg-indigo-50 text-indigo-700 ring-indigo-100",
+    cyan: "border-cyan-200 bg-cyan-50 text-cyan-700 ring-cyan-100",
   }[tone] || "border-slate-200 bg-white text-slate-700";
 
   return (
@@ -770,7 +795,11 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   const [draftShotNumberFilter, setDraftShotNumberFilter] = useState("");
   const [rows, setRows] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, pageSize: REPORT_PAGE_SIZE, total: 0, totalPages: 1 });
-  const [serverKpis, setServerKpis] = useState({ ok: 0, warm: 0, off: 0 });
+  const [serverKpis, setServerKpis] = useState({
+    ok: 0,
+    warm: 0,
+    off: 0,
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -820,6 +849,8 @@ export default function PlcReportPage({ onLogout, currentUser }) {
         machine_name: machine.machine_name || machine.name || machine.machine_code || ip,
         machine_code: machine.machine_code,
         name: machine.name,
+        machine_type: inferMachineKind(machine),
+        kind: inferMachineKind(machine),
         plc_ip: ip,
         plc_port: machine.port || machine.plc_port || 5002,
         line_id: machine.line_id,
@@ -845,6 +876,8 @@ export default function PlcReportPage({ onLogout, currentUser }) {
           machine_name: machine.machine_name || machine.name || machine.machine_code || ip,
           machine_code: machine.machine_code,
           name: machine.name,
+          machine_type: inferMachineKind(machine),
+          kind: inferMachineKind(machine),
           plc_ip: ip,
           plc_port: machine.port || machine.plc_port || 5002,
           line_id: machine.line_id || lineId,
@@ -1014,10 +1047,14 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     () => isLeakTestMachine(selectedMachine, filteredRows),
     [filteredRows, selectedMachine]
   );
+  const showGaugeFields = useMemo(
+    () => isGaugeMachine(selectedMachine, filteredRows),
+    [filteredRows, selectedMachine]
+  );
 
   const columns = useMemo(
-    () => buildColumns(filteredRows, { hideLeakTestFields }),
-    [filteredRows, hideLeakTestFields]
+    () => buildColumns(filteredRows, { hideLeakTestFields, isGauge: showGaugeFields }),
+    [filteredRows, hideLeakTestFields, showGaugeFields]
   );
 
   const reportRows = useMemo(
@@ -1048,7 +1085,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     });
     if (!reportRows.length) counts.shift = shiftFilter === "all" ? "All" : shiftFilter;
     return counts;
-  }, [pagination.total, reportRows, serverKpis.off, serverKpis.ok, serverKpis.warm, shiftFilter]);
+  }, [pagination.total, reportRows, serverKpis, shiftFilter]);
 
   const reportRangeLabel = `${formatDisplayDate(fromDate)} to ${formatDisplayDate(toDate)}`;
   const reportFilterLabel = getQuickFilterLabel(activeQuickFilter);

@@ -1,16 +1,24 @@
 # Rico IoT Platform
 
-This project now runs only the Rico IoT/master-data app. The old combined backend has been removed.
+Rico IoT is a single full-stack application with an Express/Socket.IO backend,
+SQL Server persistence, and a React + Vite frontend.
+
+For the full folder guide, see [`../docs/PROJECT_STRUCTURE.md`](../docs/PROJECT_STRUCTURE.md).
 
 ## Project Structure
 
 ```text
 Rico_main_iot/
-  backend/               Express API and SQL Server data access
-    src/                 API routes, controllers, DB, PLC monitor modules
+  backend/               Express API, SQL Server access, PLC monitor services
+    scripts/             Database and diagnostic helper scripts
+    src/config/          Backend configuration
+    src/modules/         Feature-based API modules
     schema.mssql.sql     SQL Server schema
   frontend/              React + Vite frontend
-    src/                 UI source code
+    src/components/      Shared UI components
+    src/modules/         Feature-based UI modules
+    src/pages/           Top-level routed pages
+    src/services/        API client and endpoint definitions
   ecosystem.config.js    PM2 process config
   package.json           Project-level helper scripts
 ```

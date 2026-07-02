@@ -52,7 +52,10 @@ function nextDraft(_machines = [], type = "ube", defaultRegistersByType = {}) {
 }
 
 export function getMachineType(machine = {}) {
-  return machine.machine_type === "leaktest" ? "leaktest" : "ube";
+  const explicit = String(machine.machine_type || "").trim().toLowerCase();
+  const inferred = inferAssetType(machine);
+  if (inferred === "gauge" || inferred === "leaktest") return inferred;
+  return ["leaktest", "gauge", "ube"].includes(explicit) ? explicit : "ube";
 }
 
 export function getDefaultRegisters(defaultRegistersByType, type) {
@@ -68,11 +71,18 @@ export function keyFromMachine(machine = {}) {
 }
 
 function machineTypeLabel(type) {
+  if (type === "gauge") return "Gauge";
   return type === "leaktest" ? "Leak Test" : "Die Casting / PLC";
 }
 
 export function inferAssetType(machine = {}) {
-  const haystack = `${machine.asset || ""} ${machine.category || ""} ${machine.name || ""} ${machine.machine_code || ""}`.toLowerCase();
+  const registerText = Array.isArray(machine.register_config)
+    ? machine.register_config.map((register) => `${register.name || ""} ${register.parameter || ""}`).join(" ")
+    : "";
+  const haystack = `${machine.asset || ""} ${machine.category || ""} ${machine.name || ""} ${machine.machine_name || ""} ${machine.machine_code || ""} ${machine.machine_key || ""} ${registerText}`.toLowerCase();
+  if (haystack.includes("gauge")) return "gauge";
+  if (haystack.includes("guage")) return "gauge";
+  if (haystack.includes("part scan")) return "gauge";
   return haystack.includes("leak") ? "leaktest" : "ube";
 }
 
@@ -83,6 +93,16 @@ function displayMachineLabel(machine = {}) {
 
 function getRegisterAddress(register = {}) {
   return register.device || register.stringDevice || "";
+}
+
+function normalizeRegisterType(value) {
+  const normalized = String(value || "int").trim().toLowerCase().replace(/[\s/_-]+/g, "");
+  if (["text", "string", "ascii", "stringascii", "char", "chars"].includes(normalized)) return "text";
+  if (["decimal", "dec", "scaled", "scaledd", "decscaled", "decscaledd"].includes(normalized)) return "decimal";
+  if (["int16", "word"].includes(normalized)) return "int";
+  if (["boolean", "bool"].includes(normalized)) return "bool";
+  if (["uint16", "uint32", "dword", "real32", "bit"].includes(normalized)) return normalized;
+  return "int";
 }
 
 function setRegisterAddressValue(register = {}, value = "") {
@@ -217,7 +237,7 @@ function normalizeImportedRegisters(rows = []) {
     .map((row, index) => {
       const name = row.name || row.parameter || row.parameter_name || row.register || row.label || "";
       const device = row.device || row.plc_device || row.address || "";
-      const type = String(row.type || row.data_type || "int").trim().toLowerCase();
+      const type = normalizeRegisterType(row.type || row.data_type || "int");
       const enabledValue = row.enabled ?? row.use ?? row.active ?? true;
       const enabled = typeof enabledValue === "boolean"
         ? enabledValue
@@ -227,10 +247,12 @@ function normalizeImportedRegisters(rows = []) {
       return {
         id: row.id || `import-${Date.now()}-${index}`,
         name,
-        device: String(device || "").trim().toUpperCase(),
-        stringDevice: row.stringDevice || row.string_device || "",
+        device: type === "text" ? "" : String(device || "").trim().toUpperCase(),
+        stringDevice: type === "text"
+          ? String(row.stringDevice || row.string_device || device || "").trim().toUpperCase()
+          : String(row.stringDevice || row.string_device || "").trim().toUpperCase(),
         stringLength: row.stringLength || row.string_length || row.length || "",
-        type: ["int", "decimal", "dword", "text", "real32", "uint16", "uint32", "bool", "bit"].includes(type) ? type : "int",
+        type,
         scale: row.scale || 1,
         computed: row.computed || "",
         enabled,
@@ -358,6 +380,7 @@ export function MachineForm({
                 <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-blue-700">Filter Machine Type</span>
                 <select className={inputClass} value={assetTypeFilter} onChange={(event) => setAssetTypeFilter(event.target.value)}>
                   <option value="">All Machine Types</option>
+                  <option value="gauge">Gauge</option>
                   <option value="leaktest">Leak Test</option>
                   <option value="ube">Die Casting / PLC</option>
                 </select>
@@ -385,6 +408,7 @@ export function MachineForm({
               <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-slate-400">Machine Type</span>
               <select className={inputClass} value={getMachineType(draft)} onChange={(event) => setMachineType(event.target.value)}>
                 <option value="ube">Die Casting / PLC</option>
+                <option value="gauge">Gauge</option>
                 <option value="leaktest">Leak Test</option>
               </select>
             </label>
@@ -610,7 +634,7 @@ export default function UbeMachineSetupPage({ onLogout, currentUser }) {
   const [machines, setMachines] = useState([]);
   const [machineAssets, setMachineAssets] = useState([]);
   const [locations, setLocations] = useState([]);
-  const [defaultRegistersByType, setDefaultRegistersByType] = useState({ ube: [], leaktest: [] });
+  const [defaultRegistersByType, setDefaultRegistersByType] = useState({ ube: [], leaktest: [], gauge: [] });
   const [draft, setDraft] = useState(DEFAULT_PLC_DRAFT);
   const [plantFilter, setPlantFilter] = useState("");
   const [loading, setLoading] = useState(true);
@@ -629,7 +653,7 @@ export default function UbeMachineSetupPage({ onLogout, currentUser }) {
     const rows = response.data?.data || [];
     const assetRows = Array.isArray(machineResponse.data) ? machineResponse.data : machineResponse.data?.data || [];
     const locationRows = Array.isArray(locationResponse.data?.data) ? locationResponse.data.data : [];
-    const defaults = response.data?.default_registers_by_type || { ube: response.data?.default_registers || [], leaktest: [] };
+    const defaults = response.data?.default_registers_by_type || { ube: response.data?.default_registers || [], leaktest: [], gauge: [] };
     setDefaultRegistersByType(defaults);
     setMachines(rows);
     const activeLocationCodes = new Set(locationRows.filter(isActiveLocation).map((location) => String(location.code || "").trim()).filter(Boolean));

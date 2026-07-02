@@ -69,7 +69,7 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
   const [machineDraft, setMachineDraft] = useState(null);
   const [plcConfigs, setPlcConfigs]     = useState([]);
   const [plcDraft, setPlcDraft]         = useState(DEFAULT_PLC_DRAFT);
-  const [defaultRegistersByType, setDefaultRegistersByType] = useState({ ube: [], leaktest: [] });
+  const [defaultRegistersByType, setDefaultRegistersByType] = useState({ ube: [], leaktest: [], gauge: [] });
   const [plcTesting, setPlcTesting]     = useState(false);
   const [plcTestResult, setPlcTestResult] = useState(null);
   const [loading, setLoading]           = useState(true);
@@ -128,7 +128,7 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
 
   const loadPlcSetup = useCallback(async () => {
     const response = await getPlcMachineConfigs();
-    const defaults = response.data?.default_registers_by_type || { ube: response.data?.default_registers || [], leaktest: [] };
+    const defaults = response.data?.default_registers_by_type || { ube: response.data?.default_registers || [], leaktest: [], gauge: [] };
     setPlcConfigs(Array.isArray(response.data?.data) ? response.data.data : []);
     setDefaultRegistersByType(defaults);
     return { defaults, configs: Array.isArray(response.data?.data) ? response.data.data : [] };
@@ -149,7 +149,7 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
   useEffect(() => {
     loadPlcSetup().catch(() => {
       setPlcConfigs([]);
-      setDefaultRegistersByType({ ube: [], leaktest: [] });
+      setDefaultRegistersByType({ ube: [], leaktest: [], gauge: [] });
     });
   }, [loadPlcSetup]);
 
@@ -200,12 +200,13 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
       );
       if (plcConfig?.id) linkedConfigIds.add(String(plcConfig.id));
       if (plcConfig?.machine_key) linkedKeys.add(String(plcConfig.machine_key));
+      const plcType = plcConfig ? getPlcMachineType({ ...plcConfig, ...m }) : getMachineType(m);
       return {
         ...m,
         _division: getDivision(m),
         _lineCode: lineCode,
         _lineName: getLineName(m, lineCode),
-        _machineType: getMachineType(m),
+        _machineType: plcType,
         _plcConfig: plcConfig || null,
         _plcOnly: false,
       };
@@ -213,34 +214,38 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
 
     const plcOnlyMachines = plcConfigs
       .filter((config) =>
-        String(config.plant_code || "") === String(plant || "") &&
+        (!plant || String(config.plant_code || "") === String(plant || "")) &&
         !linkedConfigIds.has(String(config.id || "")) &&
         !linkedKeys.has(String(config.machine_key || ""))
       )
-      .map((config) => ({
-        id: config.machine_id ? String(config.machine_id) : `plc-${config.id}`,
-        machine_code: config.machine_key || "",
-        name: config.machine_name || config.machine_key || "PLC Machine",
-        category: config.machine_type === "leaktest" ? "Leak Test" : "PLC Config",
-        plant_code: config.plant_code || "",
-        line_id: "",
-        line_code: "",
-        line_name: "",
-        line_division: "",
-        asset: config.machine_type === "leaktest" ? "Leak Test" : "Die Casting / PLC",
-        cost_center: "",
-        is_active: config.is_active !== false,
-        status: config.is_active === false ? "IDLE" : "RUNNING",
-        part: "PLC config pending machine link",
-        assigned_operation_count: 0,
-        _division: "Needs line link",
-        _lineCode: "",
-        _lineName: "Assign department and line",
-        _machineType: config.machine_type || "general",
-        _plcConfig: config,
-        _plcOnly: true,
-        _linkedOutsideCurrentPlant: Boolean(config.machine_id),
-      }));
+      .map((config) => {
+        const type = getPlcMachineType(config);
+        const asset = type === "leaktest" ? "Leak Test" : type === "gauge" ? "Gauge" : "Die Casting / PLC";
+        return {
+          id: config.machine_id ? String(config.machine_id) : `plc-${config.id}`,
+          machine_code: config.machine_key || "",
+          name: config.machine_name || config.machine_key || "PLC Machine",
+          category: asset,
+          plant_code: config.plant_code || "",
+          line_id: config.line_id ? String(config.line_id) : "",
+          line_code: config.line_code || "",
+          line_name: config.line_name || "",
+          line_division: config.line_division || "",
+          asset,
+          cost_center: "",
+          is_active: config.is_active !== false,
+          status: config.is_active === false ? "IDLE" : "RUNNING",
+          part: "PLC config pending machine link",
+          assigned_operation_count: 0,
+          _division: config.line_division || (config.line_id ? getDivision(config) : "Needs line link"),
+          _lineCode: config.line_code || "",
+          _lineName: config.line_name || (config.line_id ? `Line ${config.line_id}` : "Assign department and line"),
+          _machineType: type,
+          _plcConfig: { ...config, machine_type: type },
+          _plcOnly: true,
+          _linkedOutsideCurrentPlant: Boolean(config.machine_id),
+        };
+      });
 
     return [...masterMachines, ...plcOnlyMachines];
   }, [machines, plcConfigs, plant]);
@@ -495,7 +500,7 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
         line_id: "",
         line_name: "",
         line_code: "",
-        asset: type === "leaktest" ? "Leak Test" : "Die Casting / PLC",
+        asset: type === "leaktest" ? "Leak Test" : type === "gauge" ? "Gauge" : "Die Casting / PLC",
         cost_center: "",
         is_active: config?.is_active !== false,
       });
@@ -680,10 +685,24 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
     const q = search.trim().toLowerCase();
     const matches = enriched.filter(m => {
       const machinePlant = m._plcConfig?.plant_code || m.plant_code || "";
+      const haystack = [
+        m.name,
+        m.machine_code,
+        m.category,
+        m.asset,
+        m._division,
+        m._lineName,
+        m._machineType,
+        MACHINE_TYPE_LABELS[m._machineType],
+        m._plcConfig?.machine_name,
+        m._plcConfig?.machine_key,
+      ].join(" ").toLowerCase();
+      const searchMatches = !q || haystack.includes(q);
+      const allowUnlinkedSearchMatch = Boolean(q && searchMatches && m._plcOnly && !m.line_id);
       if (plant && String(machinePlant || "") !== String(plant)) return false;
-      if (division && m._division !== division) return false;
-      if (line && String(m.line_id || "") !== String(line)) return false;
-      if (q && !`${m.name || ""} ${m.machine_code || ""} ${m.category || ""}`.toLowerCase().includes(q)) return false;
+      if (division && m._division !== division && !allowUnlinkedSearchMatch) return false;
+      if (line && String(m.line_id || "") !== String(line) && !allowUnlinkedSearchMatch) return false;
+      if (!searchMatches) return false;
       if (machineType && m._machineType !== machineType) return false;
       return true;
     });

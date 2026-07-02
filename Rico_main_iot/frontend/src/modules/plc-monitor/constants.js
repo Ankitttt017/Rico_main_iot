@@ -8,14 +8,57 @@ export function getMachineKey(machine = {}) {
   return machine.key || machine.machine_key || machine.ip;
 }
 
+const machineNameCollator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: "base",
+});
+
+function getMachineLabel(machine = {}) {
+  return machine.name || MACHINE_NAMES[machine.ip] || machine.machine_name || getMachineKey(machine) || machine.ip || "";
+}
+
+function getMachineSortParts(machine = {}) {
+  const label = getMachineLabel(machine);
+  const normalized = String(label || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/\s*-\s*/g, "-")
+    .replace(/([a-z])\s+(\d)/gi, "$1$2")
+    .replace(/(\d)\s+([a-z])/gi, "$1$2");
+  const match = normalized.match(/^(.*?)(?:-?\s*0*(\d+))$/);
+  return {
+    family: match ? match[1].replace(/[-\s]+$/g, "") : normalized,
+    number: match ? Number(match[2]) : Number.MAX_SAFE_INTEGER,
+    label: normalized,
+  };
+}
+
+export function sortMachinesBySeries(source = []) {
+  return [...source].sort((a, b) => {
+    const aParts = getMachineSortParts(a);
+    const bParts = getMachineSortParts(b);
+    const familyDiff = machineNameCollator.compare(aParts.family, bParts.family);
+    if (familyDiff !== 0) return familyDiff;
+    if (aParts.number !== bParts.number) return aParts.number - bParts.number;
+    return machineNameCollator.compare(aParts.label, bParts.label);
+  });
+}
+
 export function mergeMachineList(list = []) {
   const byKey = new Map(DEFAULT_MACHINES.map((machine) => [getMachineKey(machine), machine]));
   list.forEach((machine) => {
     const key = getMachineKey(machine);
     const defaultMachine = byKey.get(key);
+    const registerConfig = Array.isArray(machine.registerConfig)
+      ? machine.registerConfig
+      : Array.isArray(machine.register_config)
+        ? machine.register_config
+        : defaultMachine?.registerConfig;
     byKey.set(key, {
       ...(defaultMachine || {}),
       ...machine,
+      registerConfig,
+      register_config: registerConfig,
       connected: machine.connected,
       error: machine.error,
       lastCycleAt: machine.lastCycleAt,
@@ -24,7 +67,7 @@ export function mergeMachineList(list = []) {
       cycleTime: machine.cycleTime,
     });
   });
-  return Array.from(byKey.values());
+  return sortMachinesBySeries(Array.from(byKey.values()));
 }
 
 export const REGISTER_GROUPS = [
@@ -49,7 +92,6 @@ export const REGISTER_GROUPS = [
       { name: "shot_second", unit: "" },
       { name: "shot_number", unit: "" },
       { name: "cycle_time", unit: "sec" },
-      { name: "minor_stoppage", unit: "sec" },
     ],
   },
   {
@@ -269,7 +311,6 @@ export const HIDDEN_DB_FIELDS = new Set([
   "Cycle End",
   "machine_key",
   "scan_data",
-  "cycle_start",
   "auto_mode",
   "manual_mode",
   "ng_shot",
@@ -307,8 +348,6 @@ export const DISPLAY_LABELS = {
   ok_shot: "OK Shot",
   shot_number: "Shot Number",
   cycle_time: "Cycle Time",
-  minor_stoppage: "Minor Stoppage",
-  minor_stoppage_machine: "Minor Stoppage Machine",
   "cycletime value (sec)": "Cycle Time",
   "cycletime EndDateTime": "Shot Time",
   shot_hour: "Shot Hour",
@@ -366,5 +405,22 @@ export const DISPLAY_LABELS = {
   extractor_step: "Extractor Step",
   spray_step: "Spray Step",
   cycle_end: "Cycle End",
+  part_scan_data: "Part Scan Data",
+  cycle_time_in_sec: "Cycle Time In Sec",
+  gauge_status: "Gauge Status",
+  gauge_judgement: "Gauge Judgement",
+  cycle_mode_auto_manual: "Cycle Mode Auto/Manual",
+  cycle_start: "Cycle Start",
+  cycle_start_time: "Cycle Start Time",
+  cycle_complete: "Cycle Complete",
+  "Part Scan Data": "Part Scan Data",
+  "Cycle Time Sec": "Cycle Time In Sec",
+  "Cycle Time In Sec": "Cycle Time In Sec",
+  "Gauge  Status": "Gauge Status",
+  "Gauge Status": "Gauge Status",
+  "Gauge Judgement": "Gauge Judgement",
+  "Cycle Mode Auto/Manual": "Cycle Mode Auto/Manual",
+  "Cycle Start": "Cycle Start",
+  "Cycle Complete": "Cycle Complete",
 };
 

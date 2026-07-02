@@ -70,7 +70,14 @@ app.use((err, _req, res, _next) => {
 
 async function start() {
   if (process.env.DB_AUTO_MIGRATE === "true") {
-    await db.initializeSchema();
+    try {
+      await db.initializeSchema();
+    } catch (error) {
+      if (String(process.env.DB_AUTO_MIGRATE_STRICT || "false").toLowerCase() === "true") {
+        throw error;
+      }
+      console.error("DB auto-migrate failed; starting server and monitor will retry schema:", error.message);
+    }
   }
 
   server.listen(PORT, () => {

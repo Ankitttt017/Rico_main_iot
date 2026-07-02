@@ -9,11 +9,38 @@ export function getDisplayLabel(name) {
 }
 
 export function getMachineKindFromRow(row = {}) {
-  return row.kind || row.machine_type || row.machineType || "ube";
+  const explicitKind = row.kind || row.machine_type || row.machineType;
+  if (explicitKind) return explicitKind;
+  const machineText = [
+    row.machine_name,
+    row.machine,
+    row.machine_key,
+    row.name,
+  ].join(" ").toLowerCase();
+  if (
+    machineText.includes("gauge") ||
+    machineText.includes("guage") ||
+    row.part_scan_data !== undefined ||
+    row.gauge_status !== undefined ||
+    row.gauge_judgement !== undefined ||
+    row["Part Scan Data"] !== undefined ||
+    row["Gauge Status"] !== undefined ||
+    row["Gauge  Status"] !== undefined ||
+    row["Gauge Judgement"] !== undefined
+  ) {
+    return "gauge";
+  }
+  if (machineText.includes("leak") || row.part_qr_code !== undefined || row.body_leak_value !== undefined) {
+    return "leaktest";
+  }
+  return "ube";
 }
 
 export function getAllowedParameterNames(machineKind = "ube") {
-  return PARAMETER_NAMES_BY_KIND[machineKind] || PARAMETER_NAMES_BY_KIND.ube;
+  if (Object.prototype.hasOwnProperty.call(PARAMETER_NAMES_BY_KIND, machineKind)) {
+    return PARAMETER_NAMES_BY_KIND[machineKind];
+  }
+  return new Set();
 }
 
 const TWO_DIGIT_FIELDS = new Set([
@@ -122,6 +149,28 @@ export function buildShotDateTimeFromRow(row = {}) {
 
 export function normalizeDisplayValue(name, value) {
   if (value === null || value === undefined) return value;
+  const normalizedName = String(name || "")
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toLowerCase();
+  const raw = String(value).trim();
+
+  if (normalizedName === "gauge_status") {
+    if (raw === "0") return "OK";
+    if (raw === "1") return "NG";
+  }
+  if (normalizedName === "gauge_judgement") {
+    if (raw === "0") return "NG";
+    if (raw === "1") return "OK";
+  }
+  if (normalizedName === "cycle_mode_auto_manual") {
+    if (raw === "1") return "Manual";
+    if (raw === "2") return "Auto";
+    if (raw.toLowerCase() === "manual") return "Manual";
+    if (raw.toLowerCase() === "auto") return "Auto";
+  }
   if (TWO_DIGIT_FIELDS.has(name)) return pad2(value);
   if (name === "shot_date") return formatDateOnly(value);
   if (name === "shot_time") return formatTimeOnly(value);
@@ -137,6 +186,103 @@ export function normalizeDisplayValue(name, value) {
     if (normalized === "manual") return "Manual";
   }
   return value;
+}
+
+const READING_VALUE_ALIASES = {
+  "SCAN DATA": ["part_qr_code", "scan_data", "part_name"],
+  "Scan Data": ["part_qr_code", "scan_data", "part_name"],
+  scan_data: ["part_qr_code", "SCAN DATA", "Scan Data", "part_name"],
+  "BODY LEAK VALUE": ["body_leak_value"],
+  "Body Leak Value": ["body_leak_value"],
+  body_leak_value: ["BODY LEAK VALUE", "Body Leak Value"],
+  "GALL-1": ["gall_1"],
+  "GALL 1": ["gall_1"],
+  "Gall-1": ["gall_1"],
+  gall_1: ["GALL-1", "GALL 1", "Gall-1"],
+  "GALL-2": ["gall_2"],
+  "GALL 2": ["gall_2"],
+  "Gall-2": ["gall_2"],
+  gall_2: ["GALL-2", "GALL 2", "Gall-2"],
+  RESULT: ["result", "status"],
+  Result: ["result", "status"],
+  result: ["RESULT", "Result", "status"],
+  AUTO: ["auto_bit", "running_mode"],
+  Auto: ["auto_bit", "running_mode"],
+  auto_bit: ["AUTO", "Auto"],
+  MANUAL: ["manual"],
+  Manual: ["manual"],
+  manual: ["MANUAL", "Manual"],
+  DRY: ["dry"],
+  Dry: ["dry"],
+  dry: ["DRY", "Dry"],
+  WEY: ["wey"],
+  Wey: ["wey"],
+  wey: ["WEY", "Wey"],
+  BOTH: ["both"],
+  Both: ["both"],
+  both: ["BOTH", "Both"],
+  "CYCLE TIME": ["cycle_time"],
+  "Cycle Time": ["cycle_time"],
+  cycle_time: ["CYCLE TIME", "Cycle Time", "Cycle Time Sec", "Cycle Time In Sec", "cycle_time_in_sec"],
+  "CYCLE START": ["cycle_start"],
+  "Cycle Start": ["cycle_start"],
+  cycle_start: ["CYCLE START", "Cycle Start"],
+  "CYCLE END": ["cycle_complete", "cycle_end"],
+  "Cycle End": ["cycle_complete", "cycle_end"],
+  cycle_end: ["CYCLE END", "Cycle End", "cycle_complete"],
+  "Part Scan Data": ["part_scan_data", "scan_data", "part_qr_code", "part_name"],
+  "Cycle Time Sec": ["cycle_time_in_sec", "cycle_time"],
+  "Cycle Time In Sec": ["cycle_time_in_sec", "cycle_time"],
+  "Gauge  Status": ["gauge_status", "Gauge Status", "status"],
+  "Gauge Status": ["gauge_status", "Gauge  Status", "status"],
+  "Gauge Judgement": ["gauge_judgement", "result"],
+  "Cycle Mode Auto/Manual": ["cycle_mode_auto_manual", "running_mode"],
+  "Cycle Start": ["cycle_start"],
+  "Cycle Complete": ["cycle_complete"],
+  part_scan_data: ["Part Scan Data", "scan_data", "part_qr_code", "part_name"],
+  cycle_time_in_sec: ["Cycle Time Sec", "Cycle Time In Sec", "cycle_time"],
+  gauge_status: ["Gauge Status", "Gauge  Status", "status"],
+  gauge_judgement: ["Gauge Judgement", "result"],
+  cycle_mode_auto_manual: ["Cycle Mode Auto/Manual", "running_mode"],
+  cycle_start: ["Cycle Start"],
+  cycle_complete: ["Cycle Complete"],
+};
+
+function getAliasedValue(source = {}, name) {
+  if (source[name] !== undefined) return source[name];
+  const aliases = READING_VALUE_ALIASES[name] || [];
+  for (const alias of aliases) {
+    if (source[alias] !== undefined) return source[alias];
+  }
+  return null;
+}
+
+function unwrapReadingValue(item) {
+  if (item && typeof item === "object" && Object.prototype.hasOwnProperty.call(item, "value")) {
+    return unwrapReadingValue(item.value);
+  }
+  return item;
+}
+
+function hasPresentValue(value) {
+  return value !== null && value !== undefined && String(value).trim() !== "";
+}
+
+export function getReadingValue(readings = {}, name) {
+  const direct = readings[name];
+  if (direct !== undefined) {
+    const directValue = unwrapReadingValue(direct);
+    if (hasPresentValue(directValue)) return directValue;
+  }
+  const aliases = READING_VALUE_ALIASES[name] || [];
+  for (const alias of aliases) {
+    const value = readings[alias];
+    if (value !== undefined) {
+      const aliasValue = unwrapReadingValue(value);
+      if (hasPresentValue(aliasValue)) return aliasValue;
+    }
+  }
+  return direct !== undefined ? unwrapReadingValue(direct) : null;
 }
 
 export function normalizeLeakResult(value) {
@@ -181,9 +327,10 @@ export function rowToReadings(row = {}, machineKind = getMachineKindFromRow(row)
 
   return Object.fromEntries(
     names.map((name) => {
-      let value = expandedRow[name] ?? null;
+      let value = getAliasedValue(expandedRow, name);
       if (name === "part_name") value = expandedRow.part_name ?? expandedRow.part_qr_code ?? expandedRow.scan_data ?? null;
       if (name === "part_qr_code") value = expandedRow.part_qr_code ?? expandedRow.scan_data ?? expandedRow.part_name ?? null;
+      if (name === "part_scan_data") value = getAliasedValue(expandedRow, name);
       if (name === "machine") value = expandedRow.machine ?? expandedRow.machine_name ?? null;
       if (name === "ip") value = expandedRow.ip ?? expandedRow.plc_ip ?? null;
       if (name === "status") value = normalizeLeakStatus(expandedRow.status, expandedRow.result);

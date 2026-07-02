@@ -618,6 +618,12 @@ BEGIN
     [cycle_start_time] DATETIME2(3) NULL,
     [cycle_end_time] DATETIME2(3) NULL,
     [minor_stoppage_machine] DECIMAL(18,2) NULL,
+    [machine_breakdown] DECIMAL(18,2) NULL,
+    [minor_stoppage_start_time] DATETIME2(3) NULL,
+    [minor_stoppage_end_time] DATETIME2(3) NULL,
+    [minor_stoppage_bit] INT NULL,
+    [stoppage_duration_sec] DECIMAL(18,2) NULL,
+    [stoppage_type] NVARCHAR(40) NULL,
     [cycle_time] DECIMAL(18,2) NULL,
     [minor_stoppage] DECIMAL(18,2) NULL,
     [cycle_end] INT NULL,
@@ -709,6 +715,18 @@ IF COL_LENGTH('dbo.PlcCycleReadings', 'cycle_end') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [cycle_end] INT NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'minor_stoppage_machine') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [minor_stoppage_machine] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'machine_breakdown') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [machine_breakdown] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'minor_stoppage_start_time') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [minor_stoppage_start_time] DATETIME2(3) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'minor_stoppage_end_time') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [minor_stoppage_end_time] DATETIME2(3) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'minor_stoppage_bit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [minor_stoppage_bit] INT NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'stoppage_duration_sec') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [stoppage_duration_sec] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'stoppage_type') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [stoppage_type] NVARCHAR(40) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'cycle_time') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [cycle_time] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'minor_stoppage') IS NULL
@@ -891,13 +909,66 @@ BEGIN
   );
 END;
 
+IF OBJECT_ID(N'dbo.Gauge', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.Gauge (
+    [Id] BIGINT IDENTITY(1,1) NOT NULL CONSTRAINT [PK_Gauge] PRIMARY KEY,
+    [Recorded_At] DATETIME2(3) NOT NULL CONSTRAINT [DF_Gauge_Recorded_At] DEFAULT SYSUTCDATETIME(),
+    [Machine_Key] NVARCHAR(80) NULL,
+    [Machine_Name] NVARCHAR(160) NULL,
+    [PLC_IP] NVARCHAR(45) NULL,
+    [PLC_Port] INT NULL,
+    [Part_Scan_Data] NVARCHAR(120) NULL,
+    [Cycle_Time_In_Sec] DECIMAL(18,2) NULL,
+    [Gauge_Status] NVARCHAR(50) NULL,
+    [Gauge_Judgement] NVARCHAR(50) NULL,
+    [Cycle_Mode_Auto_Manual] NVARCHAR(30) NULL,
+    [Cycle_Start] INT NULL,
+    [Cycle_Complete] INT NULL
+  );
+END;
+
+IF COL_LENGTH('dbo.Gauge', 'Recorded_At') IS NULL
+  ALTER TABLE dbo.Gauge ADD [Recorded_At] DATETIME2(3) NOT NULL CONSTRAINT [DF_Gauge_Recorded_At] DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH('dbo.Gauge', 'Machine_Key') IS NULL
+  ALTER TABLE dbo.Gauge ADD [Machine_Key] NVARCHAR(80) NULL;
+IF COL_LENGTH('dbo.Gauge', 'Machine_Name') IS NULL
+  ALTER TABLE dbo.Gauge ADD [Machine_Name] NVARCHAR(160) NULL;
+IF COL_LENGTH('dbo.Gauge', 'PLC_IP') IS NULL
+  ALTER TABLE dbo.Gauge ADD [PLC_IP] NVARCHAR(45) NULL;
+IF COL_LENGTH('dbo.Gauge', 'PLC_Port') IS NULL
+  ALTER TABLE dbo.Gauge ADD [PLC_Port] INT NULL;
+IF COL_LENGTH('dbo.Gauge', 'Part_Scan_Data') IS NULL
+  ALTER TABLE dbo.Gauge ADD [Part_Scan_Data] NVARCHAR(120) NULL;
+IF COL_LENGTH('dbo.Gauge', 'Cycle_Time_In_Sec') IS NULL
+  ALTER TABLE dbo.Gauge ADD [Cycle_Time_In_Sec] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.Gauge', 'Gauge_Status') IS NULL
+  ALTER TABLE dbo.Gauge ADD [Gauge_Status] NVARCHAR(50) NULL;
+IF COL_LENGTH('dbo.Gauge', 'Gauge_Judgement') IS NULL
+  ALTER TABLE dbo.Gauge ADD [Gauge_Judgement] NVARCHAR(50) NULL;
+IF COL_LENGTH('dbo.Gauge', 'Cycle_Mode_Auto_Manual') IS NULL
+  ALTER TABLE dbo.Gauge ADD [Cycle_Mode_Auto_Manual] NVARCHAR(30) NULL;
+IF COL_LENGTH('dbo.Gauge', 'Cycle_Start') IS NULL
+  ALTER TABLE dbo.Gauge ADD [Cycle_Start] INT NULL;
+IF COL_LENGTH('dbo.Gauge', 'Cycle_Complete') IS NULL
+  ALTER TABLE dbo.Gauge ADD [Cycle_Complete] INT NULL;
+
+IF OBJECT_ID(N'dbo.Gauge', N'U') IS NOT NULL
+   AND NOT EXISTS (
+     SELECT 1 FROM sys.indexes
+     WHERE [name] = N'IX_Gauge_machine_recorded_desc'
+       AND object_id = OBJECT_ID(N'dbo.Gauge')
+   )
+  CREATE INDEX [IX_Gauge_machine_recorded_desc]
+    ON dbo.Gauge ([PLC_IP], [Machine_Key], [Recorded_At] DESC, [Id] DESC);
+
 IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NULL
 BEGIN
   CREATE TABLE dbo.plc_machine_configs (
     id INT IDENTITY(1,1) PRIMARY KEY,
     machine_key NVARCHAR(80) NOT NULL UNIQUE,
     machine_name NVARCHAR(160) NOT NULL,
-    machine_type NVARCHAR(40) NOT NULL DEFAULT 'ube',
+    machine_type NVARCHAR(40) NOT NULL DEFAULT 'generic',
     machine_id BIGINT NULL,
     plant_code NVARCHAR(40) NULL,
     ip_address VARCHAR(50) NOT NULL,
@@ -910,6 +981,13 @@ BEGIN
     created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
     updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
   );
+END;
+
+IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
+   AND COL_LENGTH('dbo.plc_machine_configs', 'machine_type') IS NULL
+BEGIN
+  ALTER TABLE dbo.plc_machine_configs ADD machine_type NVARCHAR(40) NULL;
+  UPDATE dbo.plc_machine_configs SET machine_type = N'generic' WHERE machine_type IS NULL;
 END;
 
 IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
@@ -1061,6 +1139,59 @@ BEGIN
   CREATE INDEX [IX_Leaktest_ip_cycle_end_desc]
     ON dbo.Leaktest ([PLC_IP], [Cycle_End_Time] DESC, [Id] DESC);
 END;
+
+IF OBJECT_ID(N'dbo.plc_machine_readings', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.plc_machine_readings (
+    id BIGINT IDENTITY(1,1) NOT NULL CONSTRAINT PK_plc_machine_readings PRIMARY KEY,
+    recorded_at DATETIME2(3) NOT NULL CONSTRAINT DF_plc_machine_readings_recorded_at DEFAULT SYSUTCDATETIME(),
+    machine_config_id INT NULL,
+    machine_key NVARCHAR(80) NOT NULL,
+    machine_name NVARCHAR(160) NULL,
+    machine_type NVARCHAR(40) NULL,
+    plc_ip NVARCHAR(45) NULL,
+    plc_port INT NULL,
+    part_name NVARCHAR(160) NULL,
+    event_time DATETIME2(3) NULL,
+    raw_readings_json NVARCHAR(MAX) NULL,
+    created_at DATETIME2(3) NOT NULL CONSTRAINT DF_plc_machine_readings_created_at DEFAULT SYSUTCDATETIME()
+  );
+END;
+
+IF OBJECT_ID(N'dbo.plc_machine_reading_values', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.plc_machine_reading_values (
+    id BIGINT IDENTITY(1,1) NOT NULL CONSTRAINT PK_plc_machine_reading_values PRIMARY KEY,
+    reading_id BIGINT NOT NULL,
+    parameter_key NVARCHAR(160) NOT NULL,
+    parameter_label NVARCHAR(200) NULL,
+    parameter_type NVARCHAR(40) NULL,
+    parameter_unit NVARCHAR(40) NULL,
+    numeric_value DECIMAL(18,4) NULL,
+    text_value NVARCHAR(MAX) NULL,
+    bool_value BIT NULL,
+    raw_value NVARCHAR(MAX) NULL,
+    created_at DATETIME2(3) NOT NULL CONSTRAINT DF_plc_machine_reading_values_created_at DEFAULT SYSUTCDATETIME()
+  );
+END;
+
+IF OBJECT_ID(N'dbo.plc_machine_readings', N'U') IS NOT NULL
+   AND NOT EXISTS (
+     SELECT 1 FROM sys.indexes
+     WHERE [name] = N'IX_plc_machine_readings_machine_recorded_desc'
+       AND object_id = OBJECT_ID(N'dbo.plc_machine_readings')
+   )
+  CREATE INDEX IX_plc_machine_readings_machine_recorded_desc
+    ON dbo.plc_machine_readings (machine_key, recorded_at DESC, id DESC);
+
+IF OBJECT_ID(N'dbo.plc_machine_reading_values', N'U') IS NOT NULL
+   AND NOT EXISTS (
+     SELECT 1 FROM sys.indexes
+     WHERE [name] = N'IX_plc_machine_reading_values_reading_parameter'
+       AND object_id = OBJECT_ID(N'dbo.plc_machine_reading_values')
+   )
+  CREATE INDEX IX_plc_machine_reading_values_reading_parameter
+    ON dbo.plc_machine_reading_values (reading_id, parameter_key);
 
   COMMIT TRANSACTION;
 END TRY

@@ -28,6 +28,20 @@ function cleanBool(value, fallback = false) {
   return !["0", "false", "no", "n", "off"].includes(String(value).trim().toLowerCase());
 }
 
+function normalizeRegisterType(value) {
+  const normalized = String(value || "int").trim().toLowerCase().replace(/[\s/_-]+/g, "");
+  if (["text", "string", "ascii", "stringascii", "char", "chars"].includes(normalized)) return "text";
+  if (["decimal", "dec", "scaled", "scaledd", "decscaled", "decscaledd"].includes(normalized)) return "decimal";
+  if (["boolean", "bool", "bit", "mbit"].includes(normalized)) return normalized === "boolean" ? "bool" : normalized;
+  if (["uint16", "uint32", "dword", "real32", "int"].includes(normalized)) return normalized;
+  if (["int16", "word"].includes(normalized)) return "int";
+  return "int";
+}
+
+function normalizeRegisterAddress(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
 function isValidIpv4(value) {
   const parts = String(value || "").trim().split(".");
   if (parts.length !== 4) return false;
@@ -42,9 +56,48 @@ function machineKey(value) {
     .replace(/^-+|-+$/g, "");
 }
 
-function machineType(value) {
-  const type = String(value || "ube").trim().toLowerCase();
-  return type === "leaktest" ? "leaktest" : "ube";
+function normalizeMachineType(value) {
+  return String(value || "generic")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40) || "generic";
+}
+
+function inferMachineType(input = {}) {
+  const explicit = normalizeMachineType(input.machine_type);
+  const registerConfig = Array.isArray(input.register_config)
+    ? input.register_config
+    : (() => {
+        try {
+          const parsed = input.register_config_json ? JSON.parse(input.register_config_json) : null;
+          return Array.isArray(parsed) ? parsed : [];
+        } catch {
+          return [];
+        }
+      })();
+
+  const registerText = registerConfig
+    .map((item) => `${item.name || ""} ${item.parameter || ""} ${item.device || ""} ${item.stringDevice || ""}`)
+    .join(" ");
+  const haystack = [
+    input.machine_name,
+    input.name,
+    input.machine_key,
+    input.machine_code,
+    input.asset_machine_name,
+    input.asset,
+    input.category,
+    registerText,
+  ].join(" ").toLowerCase();
+
+  if (haystack.includes("gauge") || haystack.includes("guage") || haystack.includes("part scan")) {
+    return "gauge";
+  }
+  if (haystack.includes("leak")) return "leaktest";
+  if (["gauge", "leaktest", "ube"].includes(explicit)) return explicit;
+  return explicit || "generic";
 }
 
 function protocolType(value) {
@@ -82,7 +135,7 @@ async function ensureSchema() {
             id INT IDENTITY(1,1) PRIMARY KEY,
             machine_key NVARCHAR(80) NOT NULL UNIQUE,
             machine_name NVARCHAR(160) NOT NULL,
-          machine_type NVARCHAR(40) NOT NULL DEFAULT 'ube',
+          machine_type NVARCHAR(40) NOT NULL DEFAULT 'generic',
             plant_code NVARCHAR(40) NULL,
             ip_address VARCHAR(50) NOT NULL,
             port INT NOT NULL DEFAULT 5002,
@@ -101,6 +154,11 @@ async function ensureSchema() {
         BEGIN
           ALTER TABLE dbo.plc_machine_configs ADD register_config_json NVARCHAR(MAX) NULL;
         END;
+        IF COL_LENGTH('dbo.plc_machine_configs', 'machine_type') IS NULL
+        BEGIN
+          ALTER TABLE dbo.plc_machine_configs ADD machine_type NVARCHAR(40) NULL;
+          UPDATE dbo.plc_machine_configs SET machine_type = 'generic' WHERE machine_type IS NULL;
+        END;
         IF COL_LENGTH('dbo.plc_machine_configs', 'machine_id') IS NULL
         BEGIN
           ALTER TABLE dbo.plc_machine_configs ADD machine_id BIGINT NULL;
@@ -109,6 +167,61 @@ async function ensureSchema() {
         BEGIN
           ALTER TABLE dbo.plc_machine_configs ADD plant_code NVARCHAR(40) NULL;
         END;
+      `);
+      await db.run(`
+        IF OBJECT_ID(N'dbo.plc_machine_readings', N'U') IS NULL
+        BEGIN
+          CREATE TABLE dbo.plc_machine_readings (
+            id BIGINT IDENTITY(1,1) NOT NULL CONSTRAINT PK_plc_machine_readings PRIMARY KEY,
+            recorded_at DATETIME2(3) NOT NULL CONSTRAINT DF_plc_machine_readings_recorded_at DEFAULT SYSUTCDATETIME(),
+            machine_config_id INT NULL,
+            machine_key NVARCHAR(80) NOT NULL,
+            machine_name NVARCHAR(160) NULL,
+            machine_type NVARCHAR(40) NULL,
+            plc_ip NVARCHAR(45) NULL,
+            plc_port INT NULL,
+            part_name NVARCHAR(160) NULL,
+            event_time DATETIME2(3) NULL,
+            raw_readings_json NVARCHAR(MAX) NULL,
+            created_at DATETIME2(3) NOT NULL CONSTRAINT DF_plc_machine_readings_created_at DEFAULT SYSUTCDATETIME()
+          );
+        END;
+
+        IF OBJECT_ID(N'dbo.plc_machine_reading_values', N'U') IS NULL
+        BEGIN
+          CREATE TABLE dbo.plc_machine_reading_values (
+            id BIGINT IDENTITY(1,1) NOT NULL CONSTRAINT PK_plc_machine_reading_values PRIMARY KEY,
+            reading_id BIGINT NOT NULL,
+            parameter_key NVARCHAR(160) NOT NULL,
+            parameter_label NVARCHAR(200) NULL,
+            parameter_type NVARCHAR(40) NULL,
+            parameter_unit NVARCHAR(40) NULL,
+            numeric_value DECIMAL(18,4) NULL,
+            text_value NVARCHAR(MAX) NULL,
+            bool_value BIT NULL,
+            raw_value NVARCHAR(MAX) NULL,
+            created_at DATETIME2(3) NOT NULL CONSTRAINT DF_plc_machine_reading_values_created_at DEFAULT SYSUTCDATETIME()
+          );
+        END;
+      `);
+      await db.run(`
+        IF OBJECT_ID(N'dbo.plc_machine_readings', N'U') IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM sys.indexes
+             WHERE [name] = N'IX_plc_machine_readings_machine_recorded_desc'
+               AND object_id = OBJECT_ID(N'dbo.plc_machine_readings')
+           )
+          CREATE INDEX IX_plc_machine_readings_machine_recorded_desc
+            ON dbo.plc_machine_readings (machine_key, recorded_at DESC, id DESC);
+
+        IF OBJECT_ID(N'dbo.plc_machine_reading_values', N'U') IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM sys.indexes
+             WHERE [name] = N'IX_plc_machine_reading_values_reading_parameter'
+               AND object_id = OBJECT_ID(N'dbo.plc_machine_reading_values')
+           )
+          CREATE INDEX IX_plc_machine_reading_values_reading_parameter
+            ON dbo.plc_machine_reading_values (reading_id, parameter_key);
       `);
     })().catch((error) => {
       schemaReadyPromise = null;
@@ -130,7 +243,7 @@ function normalizeMachine(row = {}) {
     machine_id: row.machine_id || null,
     machine_key: row.machine_key,
     machine_name: row.machine_name,
-    machine_type: row.machine_type || "ube",
+    machine_type: inferMachineType({ ...row, register_config: registerConfig }),
     plant_code: row.plant_code || null,
     ip_address: row.ip_address,
     port: Number(row.port || 5002),
@@ -147,33 +260,40 @@ function normalizeMachine(row = {}) {
   };
 }
 
-function registersForType(type = "ube") {
+function registersForType(_type = "generic") {
   return [];
 }
 
 function normalizeRegisters(input) {
   if (!Array.isArray(input)) return null;
   return input
-    .map((item, index) => ({
-      id: cleanText(item.id) || `${cleanText(item.name) || "register"}-${index}`,
-      name: cleanText(item.name),
-      device: cleanText(item.device) || "",
-      stringDevice: cleanText(item.stringDevice) || "",
-      stringLength: cleanInt(item.stringLength, ""),
-      type: cleanText(item.type) || "int",
-      scale: item.scale === "" || item.scale === null || item.scale === undefined ? 1 : Number(item.scale),
-      computed: cleanText(item.computed) || "",
-      enabled: cleanBool(item.enabled, true),
-      min: cleanNumber(item.min ?? item.minimum),
-      max: cleanNumber(item.max ?? item.maximum),
-      warning_min: cleanNumber(item.warning_min ?? item.warningMin),
-      warning_max: cleanNumber(item.warning_max ?? item.warningMax),
-      unit: cleanText(item.unit) || "",
-      show_on_monitor: cleanBool(item.show_on_monitor ?? item.showOnMonitor, true),
-      show_to_operator: cleanBool(item.show_to_operator ?? item.showToOperator, false),
-      log_history: cleanBool(item.log_history ?? item.logHistory, true),
-      alarm_enabled: cleanBool(item.alarm_enabled ?? item.alarmEnabled, false),
-    }))
+    .map((item, index) => {
+      const type = normalizeRegisterType(item.type);
+      const device = normalizeRegisterAddress(item.device);
+      const stringDevice = normalizeRegisterAddress(item.stringDevice || item.string_device);
+      const textDevice = stringDevice || (type === "text" ? device : "");
+
+      return {
+        id: cleanText(item.id) || `${cleanText(item.name) || "register"}-${index}`,
+        name: cleanText(item.name),
+        device: type === "text" ? "" : device,
+        stringDevice: textDevice,
+        stringLength: cleanInt(item.stringLength ?? item.string_length, ""),
+        type,
+        scale: item.scale === "" || item.scale === null || item.scale === undefined ? 1 : Number(item.scale),
+        computed: cleanText(item.computed) || "",
+        enabled: cleanBool(item.enabled, true),
+        min: cleanNumber(item.min ?? item.minimum),
+        max: cleanNumber(item.max ?? item.maximum),
+        warning_min: cleanNumber(item.warning_min ?? item.warningMin),
+        warning_max: cleanNumber(item.warning_max ?? item.warningMax),
+        unit: cleanText(item.unit) || "",
+        show_on_monitor: cleanBool(item.show_on_monitor ?? item.showOnMonitor, true),
+        show_to_operator: cleanBool(item.show_to_operator ?? item.showToOperator, false),
+        log_history: cleanBool(item.log_history ?? item.logHistory, true),
+        alarm_enabled: cleanBool(item.alarm_enabled ?? item.alarmEnabled, false),
+      };
+    })
     .filter((item) => item.name && (item.computed || item.device || item.stringDevice));
 }
 
@@ -185,7 +305,8 @@ async function saveMachineRecord(input = {}) {
   const id = cleanInt(input.id);
   const key = await uniqueMachineKey(input.machine_key || name, id);
   if (!key) throw new Error("Machine key is required");
-  const type = machineType(input.machine_type);
+  const registerConfig = normalizeRegisters(input.register_config) || [];
+  const type = inferMachineType({ ...input, register_config: registerConfig });
   const payload = {
     machine_key: key,
     machine_id: cleanInt(input.machine_id),
@@ -197,7 +318,7 @@ async function saveMachineRecord(input = {}) {
     protocol: protocolType(input.protocol),
     sequence_no: cleanInt(input.sequence_no),
     is_active: input.is_active === undefined ? 1 : Number(Boolean(input.is_active)),
-    register_config_json: JSON.stringify(normalizeRegisters(input.register_config) || []),
+    register_config_json: JSON.stringify(registerConfig),
     notes: cleanText(input.notes),
   };
 
@@ -299,10 +420,12 @@ async function listMachines(_req, res) {
     res.json({
       success: true,
       data: rows.map(normalizeMachine),
-      default_registers: registersForType("ube"),
+      default_registers: registersForType("generic"),
       default_registers_by_type: {
+        generic: registersForType("generic"),
         ube: registersForType("ube"),
         leaktest: registersForType("leaktest"),
+        gauge: registersForType("gauge"),
       },
     });
   } catch (error) {
@@ -379,6 +502,7 @@ async function testConnection(req, res) {
 module.exports = {
   ensureSchema,
   listMachines,
+  normalizeMachineType,
   saveMachine,
   deleteMachine,
   testConnection,

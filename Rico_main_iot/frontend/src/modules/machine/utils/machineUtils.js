@@ -1,6 +1,11 @@
 import { LINES_BY_DIVISION } from "../constants";
 
 export function getDivision(machine = {}) {
+  const assignedDivision = String(machine.line_division || machine.category || "").trim();
+  if (assignedDivision && assignedDivision.toLowerCase() !== "uncategorized") {
+    return assignedDivision;
+  }
+
   const n = `${machine.line_division || ""} ${machine.category || ""} ${machine.name || ""}`.toUpperCase();
   if (n.includes("H.P.D.C") || n.includes("HPDC") || n.includes("TILTING") ||
       n.includes("FURNACE") || n.includes("DOSING") || n.includes("DEGASSING") ||
