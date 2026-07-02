@@ -1063,6 +1063,80 @@ function normalizeRegisterName(value) {
     .replace(/^_+|_+$/g, "");
 }
 
+const UBE_PART_NAME_REGISTER_NAMES = new Set([
+  "part_name",
+  "part",
+  "part_no",
+  "part_number",
+  "part_code",
+  "model_name",
+  "model_code",
+  "die_name",
+  "die_no",
+  "die_number",
+  "die_code",
+  "current_part",
+  "current_part_name",
+  "current_die",
+  "current_die_name",
+]);
+
+function isLikelyPartName(value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  if (text === "-") return false;
+  if (/^[\u0000\s]+$/.test(text)) return false;
+  return /[A-Za-z0-9]/.test(text) && text.length >= 3;
+}
+
+function getConfiguredUbePartNameTargets(machine = {}) {
+  if (!Array.isArray(machine.registerConfig)) return [];
+  return machine.registerConfig
+    .filter((parameter) => parameter && parameter.enabled !== false)
+    .filter((parameter) => UBE_PART_NAME_REGISTER_NAMES.has(normalizeRegisterName(
+      parameter.name || parameter.parameter || parameter.label
+    )))
+    .map((parameter) => {
+      const sourceDevice = String(parameter.stringDevice || parameter.device || "").trim();
+      if (!sourceDevice) return null;
+      const target = resolveStringReadTarget(sourceDevice, parameter.stringLength || UBE_PART_NAME_LENGTH);
+      return {
+        startDevice: target.startDevice,
+        length: target.length,
+        source: parameter.name || parameter.parameter || parameter.label || sourceDevice,
+      };
+    })
+    .filter(Boolean);
+}
+
+function getUbePartNameTargets(machine = {}) {
+  const envDevices = String(process.env.PLC_UBE_PART_NAME_DEVICES || UBE_PART_NAME_DEVICE)
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((device) => {
+      const target = resolveStringReadTarget(device, UBE_PART_NAME_LENGTH);
+      return { startDevice: target.startDevice, length: target.length, source: device };
+    });
+
+  const targets = [...getConfiguredUbePartNameTargets(machine), ...envDevices];
+  const seen = new Set();
+  return targets.filter((target) => {
+    const key = `${target.startDevice}:${target.length}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function readUbePartName(sock, machine = {}) {
+  for (const target of getUbePartNameTargets(machine)) {
+    const value = await readString(sock, target.startDevice, target.length).catch(() => "");
+    if (isLikelyPartName(value)) return value.trim();
+  }
+  return "";
+}
+
 const LEAK_PARAMETER_ALIASES = new Map(
   Object.entries({
     part_qr_code: [
@@ -2691,7 +2765,7 @@ function startPlcMonitor(io) {
         ? []
         : UBE_READ_PARAMETERS;
 
-    const partName = isGauge ? "" : await readString(sock, UBE_PART_NAME_DEVICE, UBE_PART_NAME_LENGTH).catch(() => "");
+    const partName = isGauge ? "" : await readUbePartName(sock, machine);
     const shotYearRaw = isGauge ? null : await readWord(sock, SHOT_DATE_TIME_DEVICES.year).catch(() => null);
     const shotMonthRaw = isGauge ? null : await readWord(sock, SHOT_DATE_TIME_DEVICES.month).catch(() => null);
     const shotDayRaw = isGauge ? null : await readWord(sock, SHOT_DATE_TIME_DEVICES.day).catch(() => null);
