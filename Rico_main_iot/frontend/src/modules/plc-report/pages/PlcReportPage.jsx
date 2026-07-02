@@ -589,6 +589,54 @@ function getMachineLabel(machine) {
   return machine?.machine_name || machine?.name || machine?.plc_ip || machine?.ip_address || getMachineId(machine);
 }
 
+const machineNameCollator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: "base",
+});
+
+function getMachineSortParts(machine) {
+  const label = getMachineLabel(machine);
+  const normalized = String(label || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/\s*-\s*/g, "-")
+    .replace(/([a-z])\s+(\d)/gi, "$1$2")
+    .replace(/(\d)\s+([a-z])/gi, "$1$2");
+  const match = normalized.match(/^(.*?)(?:-?\s*0*(\d+))$/);
+  return {
+    family: match ? match[1].replace(/[-\s]+$/g, "") : normalized,
+    number: match ? Number(match[2]) : Number.MAX_SAFE_INTEGER,
+    label: normalized,
+  };
+}
+
+function sortMachinesBySeries(source = []) {
+  return [...source].sort((a, b) => {
+    const aParts = getMachineSortParts(a);
+    const bParts = getMachineSortParts(b);
+    const familyDiff = machineNameCollator.compare(aParts.family, bParts.family);
+    if (familyDiff !== 0) return familyDiff;
+    if (aParts.number !== bParts.number) return aParts.number - bParts.number;
+    return machineNameCollator.compare(aParts.label, bParts.label);
+  });
+}
+
+function inferMachineKind(machine = {}, rows = []) {
+  const explicitKind = machine.machine_type || machine.kind || machine.machineType;
+  if (explicitKind) return String(explicitKind).toLowerCase();
+  const machineText = [
+    machine.machine_name,
+    machine.name,
+    machine.machine_key,
+    machine.machine_code,
+  ].join(" ").toLowerCase();
+  if (machineText.includes("gauge")) return "gauge";
+  if (machineText.includes("leak")) return "leaktest";
+  if (rows.some((row) => row?.part_scan_data !== undefined || row?.gauge_status !== undefined || row?.gauge_judgement !== undefined)) return "gauge";
+  if (rows.some((row) => String(row?.machine_type || row?.kind || "").toLowerCase() === "leaktest")) return "leaktest";
+  return "ube";
+}
+
 function normalizeMachineIdentity(value) {
   const compact = String(value || "")
     .trim()
