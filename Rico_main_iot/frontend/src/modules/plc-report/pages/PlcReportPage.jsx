@@ -39,6 +39,9 @@ const HIDDEN_COLUMNS = new Set([
   "shot_year",
   "machine_name",
   "machine_key",
+  "high_shot",
+  "high_shot_count",
+  "ng_counter_value",
   "ok_shot",
   "ng_counter",
   "plc_ip",
@@ -93,8 +96,6 @@ const PREFERRED_COLUMNS = [
   SHIFT_COLUMN,
   "shot_number",
   "shot_status",
-  "ok_shot",
-  "ng_counter",
   "cycle_time",
 ];
 
