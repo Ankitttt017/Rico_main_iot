@@ -39,6 +39,7 @@ const HIDDEN_COLUMNS = new Set([
   "shot_year",
   "machine_name",
   "machine_key",
+  "counter",
   "high_shot",
   "high_shot_count",
   "ng_counter_value",
@@ -90,6 +91,7 @@ const PREFERRED_COLUMNS = [
   "recorded_at",
   "plc_ip",
   "plc_port",
+  "scan_data",
   "part_name",
   "shot_date",
   "shot_time",
@@ -129,6 +131,7 @@ const SHOT_RESULT_FILTERS = [
 const REPORT_LABELS = {
   ...DISPLAY_LABELS,
   shot_status: "Shot Result",
+  scan_data: "Scan Data",
   ok_shot: "High Shot Count",
   ng_counter: "NG Counter",
   die_close_core_in_time: "Die-Close Core In Time",
@@ -543,6 +546,9 @@ function formatValue(value, key) {
 function formatReportCell(row, key, rowIndex = 0, rowCount = 0, rows = []) {
   if (key === SERIAL_COLUMN) return Math.max(1, rowCount - rowIndex);
   if (key === SHIFT_COLUMN) return getRowShift(row);
+  if (normalizeColumnKey(key) === "scan_data") {
+    return formatValue(row.scan_data || row.part_qr_code || row.part_name, key);
+  }
   // The production day runs from 06:00 to 05:59. For C-shift rows after
   // midnight, display the previous production date.
   if (key === "shot_date") return formatDateOnly(getRowProductionDate(row) || row[key]);
@@ -786,6 +792,9 @@ function buildColumns(rows, options = {}) {
   if (rows.length) {
     keys.add(SERIAL_COLUMN);
     keys.add(SHIFT_COLUMN);
+    if (hideLeakTestFields && rows.some((row) => row?.scan_data || row?.part_qr_code || row?.part_name)) {
+      keys.add("scan_data");
+    }
     if (rows.some((row) => getRowTimeParts(row))) keys.add("shot_time");
   }
   return [

@@ -32,6 +32,17 @@ function firstReadableValue(...values) {
   return values.find((value) => hasReadableValue(value)) || "";
 }
 
+function isLikelyScanData(value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  if (/^[A-Z]\d$/i.test(text)) return false;
+  return text.length >= 4;
+}
+
+function isScanField(name = "") {
+  return ["part_qr_code", "scan_data", "part_name", "part_scan_data", "Part Scan Data", "SCAN DATA", "Scan Data"].includes(String(name));
+}
+
 function toValidDate(value) {
   if (!value) return null;
   const normalized = typeof value === "string" && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(value)
@@ -703,6 +714,19 @@ function PLCDashboard() {
     selectedMachineStatus.partName,
     partName
   );
+  const displayScanData = firstReadableValue(
+    ...[
+      getReadingValue(readings, "part_scan_data"),
+      getReadingValue(readings, "Part Scan Data"),
+      readings.part_qr_code?.value,
+      readings.scan_data?.value,
+      readings.part_name?.value,
+      metaByIp[selectedMachineKey]?.partName,
+      metaByIp[plcConfig.ip]?.partName,
+      selectedMachineStatus.partName,
+      partName,
+    ].filter(isLikelyScanData)
+  );
   const compactCardHiddenFields = new Set([
     "machine_name",
     "plc_ip",
@@ -763,7 +787,11 @@ function PLCDashboard() {
       name,
       label,
       unit,
-      value: name === "shot_time" ? plcShotTime : getReadingValue(readings, name),
+      value: isLeakTestMachine && isScanField(name)
+        ? displayScanData || "-"
+        : name === "shot_time"
+          ? plcShotTime
+          : getReadingValue(readings, name),
     }));
   const ubeOverviewItems = [
     { name: "part_name", label: "Part Name", value: displayPartName || "-", tone: "cyan" },
@@ -964,7 +992,11 @@ function PLCDashboard() {
 
                     <div className="cards-grid">
                       {group.keys.map(({ name, unit, label }) => {
-                        const value = name === "shot_time" ? plcShotTime : getReadingValue(readings, name);
+                        const value = isLeakTestMachine && isScanField(name)
+                          ? displayScanData || "-"
+                          : name === "shot_time"
+                            ? plcShotTime
+                            : getReadingValue(readings, name);
                         return (
                           <ValueCard
                             key={name}
