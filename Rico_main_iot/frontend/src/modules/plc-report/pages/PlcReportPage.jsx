@@ -81,6 +81,7 @@ const SHIFT_COLUMN = "shift";
 
 const GAUGE_REPORT_COLUMNS = [
   SERIAL_COLUMN,
+  "scan_data",
   "scan_time",
   SHIFT_COLUMN,
   "cycle_time_in_sec",
@@ -561,7 +562,7 @@ function formatReportCell(row, key, rowIndex = 0, rowCount = 0, rows = []) {
   if (key === SHIFT_COLUMN) return getRowShift(row);
   if (key === "scan_time") return formatTimeParts12Hour(getRowTimeParts(row));
   if (normalizeColumnKey(key) === "scan_data") {
-    return formatValue(row.scan_data || row.part_qr_code || row.part_name, key);
+    return formatValue(row.scan_data || row.part_scan_data || row.part_qr_code || row.part_name, key);
   }
   // The production day runs from 06:00 to 05:59. For C-shift rows after
   // midnight, display the previous production date.
