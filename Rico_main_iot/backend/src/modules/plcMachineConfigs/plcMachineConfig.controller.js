@@ -193,7 +193,7 @@ async function ensureSchema() {
             id BIGINT IDENTITY(1,1) NOT NULL CONSTRAINT PK_plc_machine_reading_values PRIMARY KEY,
             reading_id BIGINT NOT NULL,
             parameter_key NVARCHAR(160) NOT NULL,
-            parameter_label NVARCHAR(200) NULL,
+            parameter_label NVARCHAR(200) NULL, 
             parameter_type NVARCHAR(40) NULL,
             parameter_unit NVARCHAR(40) NULL,
             numeric_value DECIMAL(18,4) NULL,

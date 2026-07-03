@@ -420,7 +420,8 @@ function parseDeviceRange(deviceRange) {
   if (!endRaw) return { startDevice: `${start.type}${start.addr}`, length: null };
 
   let resolvedEndRaw = endRaw;
-  if (/^[0-9A-F]+$/i.test(endRaw)) {
+  const endIsAddressOnly = !/^[A-Z]/i.test(endRaw) && /^[0-9A-F]+$/i.test(endRaw);
+  if (endIsAddressOnly) {
     const startAddress = String(startRaw || raw).replace(/^[A-Z]+/i, "");
     const shouldExpandSuffix =
       endRaw.length < startAddress.length &&
@@ -429,7 +430,8 @@ function parseDeviceRange(deviceRange) {
       ? `${startAddress.slice(0, startAddress.length - endRaw.length)}${endRaw}`
       : endRaw;
   }
-  const end = parseDevice(/^[0-9A-F]+$/i.test(resolvedEndRaw) ? `${start.type}${resolvedEndRaw}` : resolvedEndRaw);
+  const resolvedEndIsAddressOnly = !/^[A-Z]/i.test(resolvedEndRaw) && /^[0-9A-F]+$/i.test(resolvedEndRaw);
+  const end = parseDevice(resolvedEndIsAddressOnly ? `${start.type}${resolvedEndRaw}` : resolvedEndRaw);
   if (start.type !== end.type || end.addr < start.addr) {
     throw new Error(`Invalid PLC device range: ${deviceRange}`);
   }
@@ -810,7 +812,12 @@ async function readLeakQrCode(sock, configuredDevice = "", configuredLength = 14
   const matches = [];
   for (const device of getLeakQrDeviceCandidates(configuredDevice)) {
     if (!device) continue;
-    const target = resolveStringReadTarget(device, length);
+    let target = null;
+    try {
+      target = resolveStringReadTarget(device, length);
+    } catch {
+      continue;
+    }
     const value = await readString(sock, target.startDevice, target.length).catch(() => "");
     if (isLikelyLeakQrCode(value)) matches.push({ value, device });
   }
@@ -1206,7 +1213,12 @@ function normalizeLeakReadParameters(registerConfig = []) {
 
     if (isText) {
       const sourceDevice = configuredStringDevice || configuredDevice || defaults.stringDevice || defaults.device || "";
-      const target = sourceDevice ? resolveStringReadTarget(sourceDevice, parameter.stringLength || defaults.stringLength || 1) : null;
+      let target = null;
+      try {
+        target = sourceDevice ? resolveStringReadTarget(sourceDevice, parameter.stringLength || defaults.stringLength || 1) : null;
+      } catch {
+        target = null;
+      }
       next.stringDevice = target?.startDevice || sourceDevice;
       next.stringLength = target?.length || parameter.stringLength || defaults.stringLength || 1;
       next.device = "";
@@ -3022,9 +3034,14 @@ function startPlcMonitor(io) {
       const { name, device, stringDevice, stringLength } = parameter;
       if (name === "part_qr_code") {
         const qrTargetDevice = stringDevice || device || configuredQrDevice;
-        const qrTarget = qrTargetDevice
-          ? resolveStringReadTarget(qrTargetDevice, stringLength || configuredQrLength || 14)
-          : null;
+        let qrTarget = null;
+        try {
+          qrTarget = qrTargetDevice
+            ? resolveStringReadTarget(qrTargetDevice, stringLength || configuredQrLength || 14)
+            : null;
+        } catch {
+          qrTarget = null;
+        }
         configuredQrDevice = qrTarget?.startDevice || qrTargetDevice || configuredQrDevice;
         configuredQrLength = Number(qrTarget?.length || stringLength || configuredQrLength || 14);
       }
