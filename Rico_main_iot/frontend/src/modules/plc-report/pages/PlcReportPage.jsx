@@ -70,8 +70,10 @@ const HIDDEN_COLUMNS = new Set([
 ]);
 
 const LEAK_TEST_HIDDEN_COLUMNS = new Set([
+  "auto_bit",
   "part_name",
   "part_qr_code",
+  "scan_source_device",
 ]);
 
 const SERIAL_COLUMN = "serial_number";

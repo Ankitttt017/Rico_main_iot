@@ -41,8 +41,17 @@ const LoginPage = ({ onLogin }) => {
 
       <div className="relative w-full max-w-[920px] overflow-hidden rounded-xl bg-white/95 shadow-[0_22px_64px_rgba(15,36,56,0.16)] ring-1 ring-[#c9d8ea] backdrop-blur lg:grid lg:grid-cols-[0.98fr_1.02fr]">
         <section className="relative hidden min-h-[540px] overflow-hidden bg-[#092641] px-8 py-9 text-white lg:flex lg:flex-col lg:justify-between">
-          <div className="absolute inset-0 bg-[linear-gradient(150deg,_#09699a_0%,_#134b8f_44%,_#082641_100%)]" />
-          <div className="absolute inset-x-0 bottom-0 h-44 bg-[linear-gradient(0deg,_rgba(1,16,31,0.36),_transparent)]" />
+          <img
+            src="/iot-login-bg.jpg"
+            alt=""
+            className="absolute inset-0 h-full w-full object-cover"
+            onError={(e) => {
+              e.currentTarget.style.display = "none";
+            }}
+          />
+          <div className="absolute inset-0 bg-[linear-gradient(150deg,_rgba(9,105,154,0.54)_0%,_rgba(19,75,143,0.46)_44%,_rgba(8,38,65,0.78)_100%)]" />
+          <div className="absolute inset-0 bg-[#031321]/35" />
+          <div className="absolute inset-x-0 bottom-0 h-44 bg-[linear-gradient(0deg,_rgba(1,16,31,0.66),_transparent)]" />
           <div className="absolute left-8 right-8 top-8 h-px bg-white/15" />
 
           <div className="relative">
