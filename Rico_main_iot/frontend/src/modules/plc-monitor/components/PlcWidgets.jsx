@@ -36,6 +36,7 @@ export function Spark({ data, color = "#22d3ee" }) {
 
 export const STATUS_CFG = {
   idle: { label: "Waiting for Cycle", cls: "status-idle" },
+  running: { label: "Cycle Running", cls: "status-complete" },
   complete: { label: "Cycle Complete", cls: "status-complete" },
 };
 

@@ -220,6 +220,12 @@ function PLCDashboard() {
   }, [readings]);
 
   useEffect(() => {
+    if (hasReadingData(readings)) {
+      setCycleStatus(prev => prev === "complete" ? prev : "running");
+    }
+  }, [readings]);
+
+  useEffect(() => {
     machinesRef.current = machines;
   }, [machines]);
 
@@ -427,7 +433,7 @@ function PLCDashboard() {
     );
     setPartName(prev => prev === nextPartName ? prev : nextPartName);
     setShotTime(prev => prev === (nextMeta.shotTime || "") ? prev : (nextMeta.shotTime || ""));
-    setCycleStatus(prev => prev === "idle" ? prev : "idle");
+    setCycleStatus(hasReadingData(nextReadings) ? "running" : "idle");
   }, [historyByIp, metaByIp, readingsByIp, sparkByIp]);
 
   useEffect(() => {
@@ -600,6 +606,7 @@ function PLCDashboard() {
       setDraftConfig(prev => prev.ip === ip && prev.port === String(port) ? prev : { ip, port: String(port) });
       if (packetHasData) {
         setReadings(r);
+        setCycleStatus("running");
         rememberSelectedSnapshot(r, { observedAt: observedTimestamp, source: "live" });
       }
       setLastTimestamp(toValidDate(eventTimestamp) || toValidDate(observedTimestamp));
@@ -683,7 +690,9 @@ function PLCDashboard() {
         if (v?.value !== undefined && v.value !== null) pushSpark(k, v.value);
       });
       setConfigMessage(`${machines.find((machine) => getMachineKey(machine) === key)?.name || MACHINE_NAMES[ip] || ip} live data received.`);
-      setTimeout(() => setCycleStatus("idle"), 3000);
+      setTimeout(() => {
+        setCycleStatus(hasReadingData(r) ? "running" : "idle");
+      }, 3000);
     });
 
     return () => {
