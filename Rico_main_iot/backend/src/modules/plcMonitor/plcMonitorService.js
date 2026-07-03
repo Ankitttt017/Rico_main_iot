@@ -691,6 +691,22 @@ function normalizeGaugeNumber(value) {
   return Number.isFinite(number) ? Number(number.toFixed(4)) : null;
 }
 
+const GAUGE_STATUS_NAMES = new Set([
+  "gauge_status",
+  "status",
+  "dia_8_088_19_97_status",
+]);
+
+const GAUGE_JUDGEMENT_NAMES = new Set([
+  "gauge_judgement",
+  "gauge_judgment",
+  "judgement",
+  "judgment",
+  "result",
+  "receiving_gauge_judgement",
+  "receiving_gauge_judgment",
+]);
+
 function findGaugeReadingValue(readings = {}, names = []) {
   const normalizedTargets = new Set(names.map(normalizeRegisterName));
   for (const name of names) {
@@ -704,6 +720,17 @@ function findGaugeReadingValue(readings = {}, names = []) {
     }
   }
   return null;
+}
+
+function canonicalGaugeReadingName(name = "") {
+  const normalized = normalizeRegisterName(name);
+  if (GAUGE_STATUS_NAMES.has(normalized) || (normalized.includes("dia") && normalized.includes("status"))) {
+    return "gauge_status";
+  }
+  if (GAUGE_JUDGEMENT_NAMES.has(normalized)) {
+    return "gauge_judgement";
+  }
+  return "";
 }
 
 function findConfiguredRegisterDevice(machine, names = []) {
@@ -2817,6 +2844,10 @@ function startPlcMonitor(io) {
         if (!device && !stringDevice) { readings[name] = null; continue; }
 
         readings[name] = await readConfiguredParameter(sock, parameter, rawCache);
+        const canonicalGaugeName = isGauge ? canonicalGaugeReadingName(name) : "";
+        if (canonicalGaugeName && readings[canonicalGaugeName] === undefined) {
+          readings[canonicalGaugeName] = readings[name];
+        }
         const legacyColumn = getLegacyColumnForParameter(parameter);
         if (legacyColumn && readings[legacyColumn] === undefined) {
           readings[legacyColumn] = readings[name];
@@ -2831,6 +2862,19 @@ function startPlcMonitor(io) {
       } catch (error) {
         if (isPlcConnectionError(error)) throw error;
         readings[name] = null;
+      }
+    }
+
+    if (isGauge) {
+      if (readings.gauge_status === undefined || readings.gauge_status === null || readings.gauge_status === "") {
+        readings.gauge_status = await readWord(sock, process.env.PLC_GAUGE_STATUS_DEVICE || "D51")
+          .then((value) => scaleValue({ name: "gauge_status", type: "decimal" }, value))
+          .catch(() => null);
+      }
+      if (readings.gauge_judgement === undefined || readings.gauge_judgement === null || readings.gauge_judgement === "") {
+        readings.gauge_judgement = await readWord(sock, process.env.PLC_GAUGE_JUDGEMENT_DEVICE || "D50")
+          .then((value) => scaleValue({ name: "gauge_judgement", type: "decimal" }, value))
+          .catch(() => null);
       }
     }
 
