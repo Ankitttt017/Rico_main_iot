@@ -79,6 +79,14 @@ const LEAK_TEST_HIDDEN_COLUMNS = new Set([
 const SERIAL_COLUMN = "serial_number";
 const SHIFT_COLUMN = "shift";
 
+const GAUGE_REPORT_COLUMNS = [
+  SERIAL_COLUMN,
+  "scan_time",
+  SHIFT_COLUMN,
+  "cycle_time_in_sec",
+  "gauge_judgement",
+];
+
 const NOT_AVAILABLE_COLUMNS = new Set([
   "fix_1_flow",
   "fix_2_flow",
@@ -134,6 +142,9 @@ const REPORT_LABELS = {
   ...DISPLAY_LABELS,
   shot_status: "Shot Result",
   scan_data: "Scan Data",
+  scan_time: "Scan Time",
+  cycle_time_in_sec: "Cycle Time (sec)",
+  gauge_judgement: "Receiving Gauge Judgment",
   ok_shot: "High Shot Count",
   ng_counter: "NG Counter",
   die_close_core_in_time: "Die-Close Core In Time",
@@ -548,6 +559,7 @@ function formatValue(value, key) {
 function formatReportCell(row, key, rowIndex = 0, rowCount = 0, rows = []) {
   if (key === SERIAL_COLUMN) return Math.max(1, rowCount - rowIndex);
   if (key === SHIFT_COLUMN) return getRowShift(row);
+  if (key === "scan_time") return formatTimeParts12Hour(getRowTimeParts(row));
   if (normalizeColumnKey(key) === "scan_data") {
     return formatValue(row.scan_data || row.part_qr_code || row.part_name, key);
   }
@@ -785,6 +797,8 @@ function isHiddenForReport(key, hideLeakTestFields = false, isGauge = false) {
 function buildColumns(rows, options = {}) {
   const hideLeakTestFields = Boolean(options.hideLeakTestFields);
   const isGauge = Boolean(options.isGauge);
+  if (isGauge) return GAUGE_REPORT_COLUMNS;
+
   const keys = new Set();
   rows.forEach((row) => {
     Object.keys(row || {}).forEach((key) => {
