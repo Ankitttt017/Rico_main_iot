@@ -56,6 +56,8 @@ function hasReadingData(readings = {}) {
   return Object.values(readings).some((item) => hasReadableValue(item?.value));
 }
 
+const CYCLE_RUNNING_STALE_MS = Math.max(PLC_LATEST_POLL_MS * 2, 10000);
+
 function normalizeRegisterName(item = {}) {
   if (typeof item === "string") return item.trim();
   return String(item.name || item.parameter || item.parameter_name || item.register || item.label || "").trim();
@@ -212,6 +214,7 @@ function PLCDashboard() {
   const selectedSnapshotRef = useRef({ shotNumber: null, observedAtMs: 0, source: "" });
   const disconnectTimerRef = useRef(null);
   const lastSocketDataAtRef = useRef(0);
+  const lastSelectedDataAtRef = useRef(0);
   const lastDbRenderSignatureRef = useRef("");
   const readingsHasDataRef = useRef(false);
 
@@ -220,10 +223,17 @@ function PLCDashboard() {
   }, [readings]);
 
   useEffect(() => {
-    if (hasReadingData(readings)) {
-      setCycleStatus(prev => prev === "complete" ? prev : "running");
-    }
-  }, [readings]);
+    const timer = setInterval(() => {
+      const hasFreshSelectedData =
+        lastSelectedDataAtRef.current > 0 &&
+        Date.now() - lastSelectedDataAtRef.current <= CYCLE_RUNNING_STALE_MS;
+      if (!hasFreshSelectedData) {
+        setCycleStatus(prev => prev === "complete" ? prev : "idle");
+      }
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     machinesRef.current = machines;
@@ -433,7 +443,8 @@ function PLCDashboard() {
     );
     setPartName(prev => prev === nextPartName ? prev : nextPartName);
     setShotTime(prev => prev === (nextMeta.shotTime || "") ? prev : (nextMeta.shotTime || ""));
-    setCycleStatus(hasReadingData(nextReadings) ? "running" : "idle");
+    lastSelectedDataAtRef.current = 0;
+    setCycleStatus("idle");
   }, [historyByIp, metaByIp, readingsByIp, sparkByIp]);
 
   useEffect(() => {
@@ -605,6 +616,7 @@ function PLCDashboard() {
       });
       setDraftConfig(prev => prev.ip === ip && prev.port === String(port) ? prev : { ip, port: String(port) });
       if (packetHasData) {
+        lastSelectedDataAtRef.current = Date.now();
         setReadings(r);
         setCycleStatus("running");
         rememberSelectedSnapshot(r, { observedAt: observedTimestamp, source: "live" });
@@ -677,6 +689,7 @@ function PLCDashboard() {
       setDraftConfig(prev => prev.ip === ip && prev.port === String(port) ? prev : { ip, port: String(port) });
       setCycleStatus("complete");
       if (packetHasData) {
+        lastSelectedDataAtRef.current = Date.now();
         setReadings(r);
         rememberSelectedSnapshot(r, { observedAt: eventTimestamp, source: "live" });
       }
@@ -691,7 +704,10 @@ function PLCDashboard() {
       });
       setConfigMessage(`${machines.find((machine) => getMachineKey(machine) === key)?.name || MACHINE_NAMES[ip] || ip} live data received.`);
       setTimeout(() => {
-        setCycleStatus(hasReadingData(r) ? "running" : "idle");
+        const hasFreshSelectedData =
+          lastSelectedDataAtRef.current > 0 &&
+          Date.now() - lastSelectedDataAtRef.current <= CYCLE_RUNNING_STALE_MS;
+        setCycleStatus(hasFreshSelectedData ? "running" : "idle");
       }, 3000);
     });
 
@@ -852,6 +868,7 @@ function PLCDashboard() {
 
   const resetDashboardData = () => {
     lastSocketDataAtRef.current = 0;
+    lastSelectedDataAtRef.current = 0;
     readingsHasDataRef.current = false;
     setCycleStatus("idle");
     setLastTimestamp(null);
