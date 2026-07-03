@@ -145,7 +145,7 @@ const REPORT_LABELS = {
   scan_data: "Scan Data",
   scan_time: "Scan Time",
   cycle_time_in_sec: "Cycle Time (sec)",
-  gauge_judgement: "Receiving Gauge Judgment",
+  gauge_judgement: "Receiving Gauge Judgement",
   ok_shot: "High Shot Count",
   ng_counter: "NG Counter",
   die_close_core_in_time: "Die-Close Core In Time",
