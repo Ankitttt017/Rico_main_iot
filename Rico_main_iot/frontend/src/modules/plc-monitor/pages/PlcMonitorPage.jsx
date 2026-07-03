@@ -61,6 +61,15 @@ function normalizeRegisterName(item = {}) {
   return String(item.name || item.parameter || item.parameter_name || item.register || item.label || "").trim();
 }
 
+function normalizeMonitorFieldName(name = "") {
+  return String(name || "")
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toLowerCase();
+}
+
 function normalizeRegisterLabel(item = {}) {
   const name = normalizeRegisterName(item);
   if (!item || typeof item !== "object") return getDisplayLabel(name);
@@ -742,6 +751,17 @@ function PLCDashboard() {
     "Cycle Start",
     "Cycle Complete",
   ]);
+  const leakTestCardHiddenFields = new Set([
+    "cycle_start",
+    "cycle_end",
+    "cycle_complete",
+    "cycle_start_time",
+    "cycle_end_time",
+  ]);
+  const isHiddenCardField = (name) => {
+    if (compactCardHiddenFields.has(name)) return true;
+    return isLeakTestMachine && leakTestCardHiddenFields.has(normalizeMonitorFieldName(name));
+  };
   const configuredGroups = buildConfiguredGroups(selectedMachineKind, selectedMachineContext, readings);
   const legacyUbeGroups = REGISTER_GROUPS
     .filter((group) => group.kind === "ube")
@@ -777,11 +797,11 @@ function PLCDashboard() {
   const cardGroups = displayGroups
     .map((group) => ({
       ...group,
-      keys: group.keys.filter(({ name }) => !compactCardHiddenFields.has(name)),
+      keys: group.keys.filter(({ name }) => !isHiddenCardField(name)),
     }))
     .filter((group) => group.keys.length > 0);
   const configuredOverviewItems = (availableGroups[0]?.keys || [])
-    .filter(({ name }) => !compactCardHiddenFields.has(name))
+    .filter(({ name }) => !isHiddenCardField(name))
     .slice(0, 5)
     .map(({ name, label, unit }) => ({
       name,
