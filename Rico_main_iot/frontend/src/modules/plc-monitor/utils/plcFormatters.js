@@ -157,11 +157,11 @@ export function normalizeDisplayValue(name, value) {
     .toLowerCase();
   const raw = String(value).trim();
 
-  if (normalizedName === "gauge_status") {
+  if (normalizedName === "gauge_status" || normalizedName === "dia_8_088_19_97_status") {
     if (raw === "0") return "OK";
     if (raw === "1") return "NG";
   }
-  if (normalizedName === "gauge_judgement") {
+  if (normalizedName === "gauge_judgement" || normalizedName === "receiving_gauge_judgement") {
     if (raw === "0") return "NG";
     if (raw === "1") return "OK";
   }
@@ -233,16 +233,18 @@ const READING_VALUE_ALIASES = {
   "Part Scan Data": ["part_scan_data", "scan_data", "part_qr_code", "part_name"],
   "Cycle Time Sec": ["cycle_time_in_sec", "cycle_time"],
   "Cycle Time In Sec": ["cycle_time_in_sec", "cycle_time"],
-  "Gauge  Status": ["gauge_status", "Gauge Status", "status"],
-  "Gauge Status": ["gauge_status", "Gauge  Status", "status"],
-  "Gauge Judgement": ["gauge_judgement", "result"],
+  "Dia. 8.088 & 19.97 Status": ["gauge_status", "Gauge Status", "Gauge  Status", "status"],
+  "Gauge  Status": ["gauge_status", "Gauge Status", "Dia. 8.088 & 19.97 Status", "status"],
+  "Gauge Status": ["gauge_status", "Gauge  Status", "Dia. 8.088 & 19.97 Status", "status"],
+  "Gauge Judgement": ["gauge_judgement", "Receiving Gauge Judgement", "result"],
+  "Receiving Gauge Judgement": ["gauge_judgement", "Gauge Judgement", "result"],
   "Cycle Mode Auto/Manual": ["cycle_mode_auto_manual", "running_mode"],
   "Cycle Start": ["cycle_start"],
   "Cycle Complete": ["cycle_complete"],
   part_scan_data: ["Part Scan Data", "scan_data", "part_qr_code", "part_name"],
   cycle_time_in_sec: ["Cycle Time Sec", "Cycle Time In Sec", "cycle_time"],
-  gauge_status: ["Gauge Status", "Gauge  Status", "status"],
-  gauge_judgement: ["Gauge Judgement", "result"],
+  gauge_status: ["Dia. 8.088 & 19.97 Status", "Gauge Status", "Gauge  Status", "status"],
+  gauge_judgement: ["Receiving Gauge Judgement", "Gauge Judgement", "result"],
   cycle_mode_auto_manual: ["Cycle Mode Auto/Manual", "running_mode"],
   cycle_start: ["Cycle Start"],
   cycle_complete: ["Cycle Complete"],

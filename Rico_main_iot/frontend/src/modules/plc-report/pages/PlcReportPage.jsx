@@ -85,6 +85,7 @@ const GAUGE_REPORT_COLUMNS = [
   "scan_time",
   SHIFT_COLUMN,
   "cycle_time_in_sec",
+  "gauge_status",
   "gauge_judgement",
 ];
 
@@ -145,6 +146,7 @@ const REPORT_LABELS = {
   scan_data: "Scan Data",
   scan_time: "Scan Time",
   cycle_time_in_sec: "Cycle Time (sec)",
+  gauge_status: "Dia. 8.088 & 19.97 Status",
   gauge_judgement: "Receiving Gauge Judgement",
   ok_shot: "High Shot Count",
   ng_counter: "NG Counter",
