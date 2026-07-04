@@ -20,7 +20,7 @@ const DEFAULT_MACHINE = {
 };
 
 const REPORT_AUTO_REFRESH_MS = Number(import.meta.env.VITE_PLC_REPORT_REFRESH_MS || 5000);
-const REPORT_RESULT_LIMIT = Number(import.meta.env.VITE_PLC_REPORT_PAGE_SIZE || 100);
+const REPORT_RESULT_LIMIT = Number(import.meta.env.VITE_PLC_REPORT_LIMIT || 20000);
 const REPORT_EXPORT_PAGE_SIZE = Number(import.meta.env.VITE_PLC_REPORT_EXPORT_PAGE_SIZE || 20000);
 
 const HIDDEN_COLUMNS = new Set([
