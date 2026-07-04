@@ -597,7 +597,11 @@ function getTestingModeValue(row = {}) {
   const both = isTruthyModeValue(getRowValue(row, "both", "Both"));
   const dry = isTruthyModeValue(getRowValue(row, "dry", "Dry"));
   const wey = isTruthyModeValue(getRowValue(row, "wey", "Wey"));
-  return both || (dry && wey) ? "True" : "";
+  return [
+    dry ? "Dry" : "",
+    wey ? "Wey" : "",
+    both ? "Both" : "",
+  ].filter(Boolean).join(" / ");
 }
 
 function formatValue(value, key) {
