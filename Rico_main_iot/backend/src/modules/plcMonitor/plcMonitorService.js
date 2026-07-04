@@ -1786,8 +1786,13 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
 
   const appendProductionFilters = (filters, values) => {
     if (shotNumber) {
-      filters.push("CAST(shot_number AS NVARCHAR(80)) LIKE ?");
-      values.push(`%${String(shotNumber).trim()}%`);
+      const searchValue = String(shotNumber).trim();
+      filters.push(`(
+        (TRY_CONVERT(BIGINT, ?) IS NOT NULL AND TRY_CONVERT(BIGINT, shot_number) = TRY_CONVERT(BIGINT, ?))
+        OR
+        (TRY_CONVERT(BIGINT, ?) IS NULL AND LTRIM(RTRIM(CAST(shot_number AS NVARCHAR(80)))) = ?)
+      )`);
+      values.push(searchValue, searchValue, searchValue, searchValue);
     }
     const resultMap = { ok: 1, warm: 3, ng: 5 };
     if (resultMap[shotResult]) {
