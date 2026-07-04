@@ -888,6 +888,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   const [machines, setMachines] = useState([DEFAULT_MACHINE]);
   const [lines, setLines] = useState([]);
   const [machinesByLine, setMachinesByLine] = useState({});
+  const [reportMachinesReady, setReportMachinesReady] = useState(false);
   const [selectedLineId, setSelectedLineId] = useState("all");
   const [selectedMachineId, setSelectedMachineId] = useState(getMachineId(DEFAULT_MACHINE));
   const [draftLineId, setDraftLineId] = useState("all");
@@ -945,9 +946,13 @@ export default function PlcReportPage({ onLogout, currentUser }) {
         }));
         if (!active) return;
         setMachinesByLine(Object.fromEntries(machineEntries));
+        setReportMachinesReady(true);
       })
       .catch(() => {
-        if (active) setMachines([DEFAULT_MACHINE]);
+        if (active) {
+          setMachines([DEFAULT_MACHINE]);
+          setReportMachinesReady(true);
+        }
       });
     return () => { active = false; };
   }, []);
@@ -1118,11 +1123,22 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   }, [draftShotNumberFilter]);
 
   const loadReport = useCallback(async ({ silent = false } = {}) => {
+    const selectedMachineIp = getMachineReportIp(selectedMachine);
+    if (!reportMachinesReady || !selectedMachineIp) {
+      if (!silent) {
+        setRows([]);
+        setPagination((current) => ({ ...current, total: 0, totalPages: 1 }));
+        setServerKpis({ ok: 0, warm: 0, off: 0 });
+        setLoading(false);
+      }
+      return;
+    }
+
     if (!silent) setLoading(true);
     setError("");
     try {
       const response = await getPlcReadingHistory({
-        ip: getMachineReportIp(selectedMachine),
+        ip: selectedMachineIp,
         from: fromDate,
         to: toDate,
         page: pagination.page,
@@ -1151,7 +1167,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [activeResultFilterValue, fromDate, pagination.page, pagination.pageSize, selectedMachine, shiftFilter, shotNumberFilter, toDate]);
+  }, [activeResultFilterValue, fromDate, pagination.page, pagination.pageSize, reportMachinesReady, selectedMachine, shiftFilter, shotNumberFilter, toDate]);
 
   useEffect(() => {
     loadReport();
@@ -1246,13 +1262,16 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   ].filter(Boolean).join("-");
 
   const loadAllReportRows = useCallback(async () => {
+    const selectedMachineIp = getMachineReportIp(selectedMachine);
+    if (!selectedMachineIp) return [];
+
     const allRows = [];
     let page = 1;
     let totalPages = 1;
 
     do {
       const response = await getPlcReadingHistory({
-        ip: getMachineReportIp(selectedMachine),
+        ip: selectedMachineIp,
         from: fromDate,
         to: toDate,
         page,
