@@ -1879,10 +1879,24 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
     const values = [targetMachine.ip || targetId];
     if (from) { filters.push("CAST(Cycle_End_Time AS DATETIME2(3)) >= ?"); values.push(from); }
     if (to) { filters.push("CAST(Cycle_End_Time AS DATETIME2(3)) < DATEADD(day, 1, CAST(? AS date))"); values.push(to); }
-    values.push(Number(targetMachine.port || 1027));
+    if (shotNumber) {
+      filters.push("LTRIM(RTRIM([Part_QR_Code])) LIKE ?");
+      values.push(`%${String(shotNumber).trim()}%`);
+    }
+    const leakResultMap = { ok: "OK", ng: "NG" };
+    if (leakResultMap[shotResult]) {
+      filters.push("UPPER(LTRIM(RTRIM([Result]))) = ?");
+      values.push(leakResultMap[shotResult]);
+    }
+    if (shift && shift !== "all") {
+      const hourExpr = "DATEPART(hour, Cycle_End_Time)";
+      const minuteExpr = "DATEPART(minute, Cycle_End_Time)";
+      if (shift === "A") filters.push(`(${hourExpr} >= 6 AND (${hourExpr} < 14 OR (${hourExpr} = 14 AND ${minuteExpr} < 30)))`);
+      if (shift === "B") filters.push(`((${hourExpr} > 14 OR (${hourExpr} = 14 AND ${minuteExpr} >= 30)) AND ${hourExpr} < 23)`);
+      if (shift === "C") filters.push(`(${hourExpr} < 6 OR ${hourExpr} >= 23)`);
+    }
 
-    const { rows } = await db.query(
-      `WITH leak_rows AS (
+    const leakRowsCte = `WITH leak_rows AS (
         SELECT
           [Id],[Machine],[PLC_IP],[Status],[Cycle_End_Time],[Part_QR_Code],
           [Body_Leak_Value],[Gall_1],[Gall_2],[Result],[Running_Mode],
@@ -1897,8 +1911,10 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
           ) AS duplicate_rank
         FROM ${LEAK_TEST_TABLE}
         WHERE ${filters.join(" AND ")}
-      )
-      SELECT TOP (${safeLimit})
+      )`;
+
+    const leakSelect = `
+      SELECT
         [Id] AS id,
         CAST([Cycle_End_Time] AS DATETIME2(3)) AS recorded_at,
         CAST([Cycle_End_Time] AS DATETIME2(3)) AS cycle_end_time,
@@ -1910,9 +1926,51 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
         [Running_Mode] AS running_mode, [Manual] AS manual, [Dry] AS dry,
         [Wey] AS wey, [Both] AS both, [Cycle_Time] AS cycle_time
       FROM leak_rows
-      WHERE duplicate_rank = 1
-      ORDER BY Cycle_End_Time DESC, Id DESC`,
-      values
+      WHERE duplicate_rank = 1`;
+
+    const rowValues = [...values, Number(targetMachine.port || 1027)];
+    if (isPaged) {
+      const [{ rows }, { rows: countRows }, { rows: kpiRows }] = await Promise.all([
+        db.query(
+          `${leakRowsCte}
+          ${leakSelect}
+          ORDER BY Cycle_End_Time DESC, Id DESC
+          OFFSET ${offset} ROWS FETCH NEXT ${safeLimit} ROWS ONLY`,
+          rowValues
+        ),
+        db.query(
+          `${leakRowsCte}
+          SELECT COUNT(1) AS total
+          FROM leak_rows
+          WHERE duplicate_rank = 1`,
+          values
+        ),
+        db.query(
+          `${leakRowsCte}
+          SELECT
+            SUM(CASE WHEN UPPER(LTRIM(RTRIM([Result]))) = 'OK' THEN 1 ELSE 0 END) AS ok,
+            0 AS warm,
+            SUM(CASE WHEN UPPER(LTRIM(RTRIM([Result]))) = 'NG' THEN 1 ELSE 0 END) AS off_count
+          FROM leak_rows
+          WHERE duplicate_rank = 1`,
+          values
+        ),
+      ]);
+      return {
+        rows: sortHistoryRows(rows.map(formatDbRowForClient)),
+        total: Number(countRows[0]?.total || 0),
+        page: safePage,
+        pageSize: safeLimit,
+        kpis: normalizeProductionKpis(kpiRows[0]),
+      };
+    }
+
+    const { rows } = await db.query(
+      `${leakRowsCte}
+      ${leakSelect}
+      ORDER BY Cycle_End_Time DESC, Id DESC
+      OFFSET 0 ROWS FETCH NEXT ${safeLimit} ROWS ONLY`,
+      rowValues
     );
     return sortHistoryRows(rows.map(formatDbRowForClient));
   }

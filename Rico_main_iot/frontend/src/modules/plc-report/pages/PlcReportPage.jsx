@@ -140,6 +140,12 @@ const SHOT_RESULT_FILTERS = [
   { key: "ng", label: "NG", status: 5 },
 ];
 
+const LEAK_RESULT_FILTERS = [
+  { key: "all", label: "All Result" },
+  { key: "ok", label: "OK", status: 1 },
+  { key: "ng", label: "NG", status: 5 },
+];
+
 const REPORT_LABELS = {
   ...DISPLAY_LABELS,
   shot_status: "Shot Result",
@@ -298,8 +304,9 @@ function getShiftFilterLabel(key) {
   return SHIFT_FILTERS.find((filter) => filter.key === key)?.label || "All Shift";
 }
 
-function getShotResultFilterLabel(key) {
-  return SHOT_RESULT_FILTERS.find((filter) => filter.key === key)?.label || "All Result";
+function getShotResultFilterLabel(key, isLeakTest = false) {
+  const filters = isLeakTest ? LEAK_RESULT_FILTERS : SHOT_RESULT_FILTERS;
+  return filters.find((filter) => filter.key === key)?.label || "All Result";
 }
 
 function formatDisplayDate(value) {
@@ -317,9 +324,13 @@ function slugify(value) {
     .toLowerCase();
 }
 
-function labelize(key) {
+function labelize(key, options = {}) {
+  const isLeakTest = Boolean(options.isLeakTest);
   if (key === SERIAL_COLUMN) return "S No";
   if (key === SHIFT_COLUMN) return "Shift";
+  if (isLeakTest && key === "shot_time") return "Scan Time";
+  if (isLeakTest && normalizeColumnKey(key) === "shot_number") return "Scan Number";
+  if (isLeakTest && ["shot_status", "result"].includes(normalizeColumnKey(key))) return "Scan Result";
   if (normalizeColumnKey(key) === "shot_number") return "Machine Shot Number";
   const normalizedKey = normalizeColumnKey(key);
   const baseLabel = REPORT_LABELS[normalizedKey] || String(key || "")
@@ -473,6 +484,10 @@ function getRowTimeParts(row = {}) {
   return getTimeParts(shotTime || timestamp);
 }
 
+function getReportResultValue(row = {}) {
+  return getRowValue(row, "shot_status", "Shot Status", "result", "Result", "status", "Status");
+}
+
 function getRowShift(row = {}) {
   return getShiftFromTimeParts(getRowTimeParts(row));
 }
@@ -533,7 +548,12 @@ function isRowInProductionFilter(row = {}, fromDate, toDate, shiftFilter, shotRe
   if (shiftFilter !== "all" && rowShift !== shiftFilter) return false;
   const resultFilter = SHOT_RESULT_FILTERS.find((filter) => filter.key === shotResultFilter);
   if (!resultFilter?.status) return true;
-  return Number(row.shot_status ?? row["Shot Status"]) === resultFilter.status;
+  const resultValue = getReportResultValue(row);
+  const normalizedText = String(resultValue || "").trim().toLowerCase();
+  if (normalizedText === "ok" || normalizedText === "ng") {
+    return normalizedText === resultFilter.key;
+  }
+  return Number(resultValue) === resultFilter.status;
 }
 
 function shotStatusLabel(value) {
@@ -555,6 +575,10 @@ function formatValue(value, key) {
   if (key === "shot_time") return formatTimeOnly(value);
   if (normalizedKey === "shot_status") {
     return shotStatusLabel(value);
+  }
+  if (normalizedKey === "result") {
+    const text = String(displayValue).trim();
+    return text || "-";
   }
   return String(displayValue);
 }
@@ -821,7 +845,7 @@ function buildColumns(rows, options = {}) {
     ...Array.from(keys)
       .filter((key) => !PREFERRED_COLUMNS.includes(key))
       .filter((key) => !isHiddenForReport(key, hideLeakTestFields, isGauge))
-      .sort((a, b) => labelize(a).localeCompare(labelize(b))),
+      .sort((a, b) => labelize(a, { isLeakTest: hideLeakTestFields }).localeCompare(labelize(b, { isLeakTest: hideLeakTestFields }))),
   ];
 }
 
@@ -1002,6 +1026,14 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     () => activeMachineOptions.find((machine) => getMachineId(machine) === selectedMachineId) || activeMachineOptions[0] || DEFAULT_MACHINE,
     [activeMachineOptions, selectedMachineId]
   );
+  const selectedMachineIsLeak = isLeakTestMachine(selectedMachine, rows);
+  const resultFilterOptions = selectedMachineIsLeak ? LEAK_RESULT_FILTERS : SHOT_RESULT_FILTERS;
+  const draftResultFilterValue = resultFilterOptions.some((filter) => filter.key === draftShotResultFilter)
+    ? draftShotResultFilter
+    : "all";
+  const activeResultFilterValue = resultFilterOptions.some((filter) => filter.key === shotResultFilter)
+    ? shotResultFilter
+    : "all";
 
   const searchMatchedMachineId = useMemo(() => {
     const q = reportSearch.toLowerCase();
@@ -1050,10 +1082,10 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     setFromDate(draftFromDate);
     setToDate(draftToDate);
     setShiftFilter(draftShiftFilter);
-    setShotResultFilter(draftShotResultFilter);
+    setShotResultFilter(draftResultFilterValue);
     setShotNumberFilter(draftShotNumberFilter.trim());
     setPagination((current) => ({ ...current, page: 1 }));
-  }, [draftFromDate, draftLineId, draftMachineId, draftQuickFilter, draftShiftFilter, draftShotNumberFilter, draftShotResultFilter, draftToDate]);
+  }, [draftFromDate, draftLineId, draftMachineId, draftQuickFilter, draftResultFilterValue, draftShiftFilter, draftShotNumberFilter, draftToDate]);
 
   const clearReportFilters = useCallback(() => {
     const range = getQuickDateRange("today");
@@ -1096,7 +1128,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
         page: pagination.page,
         pageSize: pagination.pageSize,
         shift: shiftFilter,
-        shotResult: shotResultFilter,
+        shotResult: activeResultFilterValue,
         shotNumber: shotNumberFilter,
       });
       const nextRows = Array.isArray(response.data?.data) ? response.data.data : [];
@@ -1119,7 +1151,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [fromDate, pagination.page, pagination.pageSize, selectedMachine, shiftFilter, shotNumberFilter, shotResultFilter, toDate]);
+  }, [activeResultFilterValue, fromDate, pagination.page, pagination.pageSize, selectedMachine, shiftFilter, shotNumberFilter, toDate]);
 
   useEffect(() => {
     loadReport();
@@ -1135,6 +1167,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     () => isLeakTestMachine(selectedMachine, filteredRows),
     [filteredRows, selectedMachine]
   );
+  const isLeakReport = selectedMachineIsLeak || hideLeakTestFields;
   const showGaugeFields = useMemo(
     () => isGaugeMachine(selectedMachine, filteredRows),
     [filteredRows, selectedMachine]
@@ -1155,7 +1188,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       tableScrollRef.current.scrollLeft = 0;
       tableScrollRef.current.scrollTop = 0;
     }
-  }, [columns.length, fromDate, selectedMachineId, shiftFilter, shotNumberFilter, shotResultFilter, toDate]);
+  }, [columns.length, fromDate, selectedMachineId, shiftFilter, shotNumberFilter, activeResultFilterValue, toDate]);
   const kpis = useMemo(() => {
     const counts = {
       ok: serverKpis.ok,
@@ -1166,7 +1199,17 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     };
     if (pagination.total) return counts;
     reportRows.forEach((row) => {
-      const value = Number(row.shot_status ?? row["Shot Status"]);
+      const rawValue = getReportResultValue(row);
+      const normalizedText = String(rawValue || "").trim().toLowerCase();
+      if (normalizedText === "ok") {
+        counts.ok += 1;
+        return;
+      }
+      if (normalizedText === "ng") {
+        counts.off += 1;
+        return;
+      }
+      const value = Number(rawValue);
       if (value === 1) counts.ok += 1;
       if (value === 3) counts.warm += 1;
       if (value === 5) counts.off += 1;
@@ -1178,11 +1221,20 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   const reportRangeLabel = `${formatDisplayDate(fromDate)} to ${formatDisplayDate(toDate)}`;
   const reportFilterLabel = getQuickFilterLabel(activeQuickFilter);
   const reportShiftLabel = getShiftFilterLabel(shiftFilter);
-  const reportShotResultLabel = getShotResultFilterLabel(shotResultFilter);
+  const reportShotResultLabel = getShotResultFilterLabel(activeResultFilterValue, isLeakReport);
+  const reportResultFilterTitle = isLeakReport ? "Scan Result" : "Shot Result";
+  const reportSearchTitle = isLeakReport ? "Scan Data" : "Shot No.";
+  const reportSearchPlaceholder = isLeakReport ? "Enter scan data" : "Find shot number";
+  const reportSearchSummaryLabel = isLeakReport ? "Scan search" : "Shot search";
+  const machineLabel = selectedMachine?.machine_name || selectedMachine?.plc_ip || "Machine";
+  const reportTitle = `${machineLabel} ${isLeakReport ? "Scan" : "Production"} Report`;
+  const reportSubtitle = isLeakReport ? "Leak test scan history" : "Machine production history";
+  const okKpiTitle = isLeakReport ? "OK Scan" : "OK Shot";
+  const warmKpiTitle = isLeakReport ? "Warm Up Scan" : "Warm Up Shot";
+  const offKpiTitle = isLeakReport ? "NG Scan" : "Off Shot";
   const activeLineLabel = selectedLineId === "all"
     ? "All Lines"
     : getLineLabel(lines.find((line) => getLineId(line) === String(selectedLineId)) || { line_name: "Selected Line" });
-  const machineLabel = selectedMachine?.machine_name || selectedMachine?.plc_ip || "Machine";
   const reportFileBaseName = [
     "rico-production-report",
     slugify(machineLabel),
@@ -1206,7 +1258,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
         page,
         pageSize: REPORT_EXPORT_PAGE_SIZE,
         shift: shiftFilter,
-        shotResult: shotResultFilter,
+        shotResult: activeResultFilterValue,
         shotNumber: shotNumberFilter,
       });
       const pageRows = Array.isArray(response.data?.data) ? response.data.data : [];
@@ -1216,7 +1268,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     } while (page <= totalPages);
 
     return sortRowsLatestFirst(allRows);
-  }, [fromDate, selectedMachine, shiftFilter, shotNumberFilter, shotResultFilter, toDate]);
+  }, [activeResultFilterValue, fromDate, selectedMachine, shiftFilter, shotNumberFilter, toDate]);
 
   const downloadPdf = async () => {
     setExporting(true);
@@ -1233,9 +1285,10 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       hideLeakTestFields: isLeakTestMachine(selectedMachine, exportRows),
       isGauge: isGaugeMachine(selectedMachine, exportRows),
     });
-    const title = `${machineLabel} Production Report`;
+    const exportIsLeakReport = isLeakTestMachine(selectedMachine, exportRows);
+    const title = `${machineLabel} ${exportIsLeakReport ? "Scan" : "Production"} Report`;
     const generatedAt = formatDateTime(new Date());
-    const header = exportColumns.map((key) => `<th>${escapeHtml(labelize(key))}</th>`).join("");
+    const header = exportColumns.map((key) => `<th>${escapeHtml(labelize(key, { isLeakTest: exportIsLeakReport }))}</th>`).join("");
     const body = exportRows.map((row, index) => (
       `<tr>${exportColumns.map((key) => `<td${reportCellHtmlAttrs(row, key)}>${escapeHtml(formatReportCell(row, key, index, exportRows.length, exportRows))}</td>`).join("")}</tr>`
     )).join("");
@@ -1302,9 +1355,9 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       <div class="detail"><span>Filter</span><strong>${escapeHtml(reportFilterLabel)} / ${escapeHtml(reportShiftLabel)} / ${escapeHtml(reportShotResultLabel)}</strong></div>
     </div>
     <div class="summary">
-      <div class="kpi"><span>OK Shot</span><strong>${kpis.ok}</strong></div>
-      <div class="kpi"><span>Warm Up Shot</span><strong>${kpis.warm}</strong></div>
-      <div class="kpi"><span>Off Shot</span><strong>${kpis.off}</strong></div>
+      <div class="kpi"><span>${escapeHtml(okKpiTitle)}</span><strong>${kpis.ok}</strong></div>
+      <div class="kpi"><span>${escapeHtml(warmKpiTitle)}</span><strong>${kpis.warm}</strong></div>
+      <div class="kpi"><span>${escapeHtml(offKpiTitle)}</span><strong>${kpis.off}</strong></div>
       <div class="kpi"><span>Total Production</span><strong>${kpis.totalProduction}</strong></div>
       <div class="kpi"><span>Shift</span><strong>${kpis.shift}</strong></div>
     </div>
@@ -1333,9 +1386,10 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       hideLeakTestFields: isLeakTestMachine(selectedMachine, exportRows),
       isGauge: isGaugeMachine(selectedMachine, exportRows),
     });
+    const exportIsLeakReport = isLeakTestMachine(selectedMachine, exportRows);
     const colSpan = Math.max(exportColumns.length || 1, 8);
     const generatedAt = formatDateTime(new Date());
-    const header = exportColumns.map((key) => `<th>${escapeHtml(labelize(key))}</th>`).join("");
+    const header = exportColumns.map((key) => `<th>${escapeHtml(labelize(key, { isLeakTest: exportIsLeakReport }))}</th>`).join("");
     const body = exportRows.map((row, index) => (
       `<tr>${exportColumns.map((key) => `<td${reportCellHtmlAttrs(row, key)}>${escapeHtml(formatReportCell(row, key, index, exportRows.length, exportRows))}</td>`).join("")}</tr>`
     )).join("");
@@ -1365,7 +1419,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   <table>
     <tr><td colspan="${colSpan}" class="section">Report Details</td></tr>
     <tr>
-      <td class="label">Report Type</td><td class="value" colspan="2">Production Report</td>
+      <td class="label">Report Type</td><td class="value" colspan="2">${escapeHtml(exportIsLeakReport ? "Scan Report" : "Production Report")}</td>
       <td class="label">Generated At</td><td class="value" colspan="3">${escapeHtml(generatedAt)}</td>
     </tr>
     <tr>
@@ -1382,13 +1436,13 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     </tr>
     <tr>
       <td class="label">Date Range</td><td class="value" colspan="2">${escapeHtml(reportFilterLabel)}</td>
-      <td class="label">Shot Result</td><td class="value" colspan="3">${escapeHtml(reportShotResultLabel)}</td>
+      <td class="label">${escapeHtml(reportResultFilterTitle)}</td><td class="value" colspan="3">${escapeHtml(reportShotResultLabel)}</td>
     </tr>
     <tr><td colspan="${colSpan}" class="section">Production Summary</td></tr>
     <tr>
-      <td class="summary-label">OK Shot</td>
-      <td class="summary-label">Warm Up Shot</td>
-      <td class="summary-label">Off Shot</td>
+      <td class="summary-label">${escapeHtml(okKpiTitle)}</td>
+      <td class="summary-label">${escapeHtml(warmKpiTitle)}</td>
+      <td class="summary-label">${escapeHtml(offKpiTitle)}</td>
       <td class="summary-label">Total Production</td>
       <td class="summary-label">Shift</td>
     </tr>
@@ -1413,9 +1467,9 @@ export default function PlcReportPage({ onLogout, currentUser }) {
         <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="min-w-0">
-              <h1 className="text-xl font-black leading-tight text-slate-950 sm:text-2xl">{machineLabel} Production Report</h1>
+              <h1 className="text-xl font-black leading-tight text-slate-950 sm:text-2xl">{reportTitle}</h1>
               <p className="text-sm font-semibold text-slate-500">
-                Machine production history | {fromDate} to {toDate}
+                {reportSubtitle} | {fromDate} to {toDate}
               </p>
             </div>
           </div>
@@ -1511,13 +1565,13 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                   </select>
                 </label>
                 <label className="block">
-                  <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">Shot Result</span>
+                  <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">{reportResultFilterTitle}</span>
                   <select
-                    value={draftShotResultFilter}
+                    value={draftResultFilterValue}
                     onChange={(event) => setDraftShotResultFilter(event.target.value)}
                     className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
                   >
-                    {SHOT_RESULT_FILTERS.map((filter) => (
+                    {resultFilterOptions.map((filter) => (
                       <option key={filter.key} value={filter.key}>{filter.label}</option>
                     ))}
                   </select>
@@ -1531,7 +1585,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                   <input type="date" value={draftToDate} onChange={handleToDateChange} className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" />
                 </label>
                 <label className="block">
-                  <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">Shot No.</span>
+                  <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">{reportSearchTitle}</span>
                   <input
                     type="search"
                     value={draftShotNumberFilter}
@@ -1539,7 +1593,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                     onKeyDown={(event) => {
                       if (event.key === "Enter") applyReportFilters();
                     }}
-                    placeholder="Find shot number"
+                    placeholder={reportSearchPlaceholder}
                     className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
                   />
                 </label>
@@ -1561,9 +1615,9 @@ export default function PlcReportPage({ onLogout, currentUser }) {
 
         <section className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(190px,1fr))]">
           <KpiCard title="Total Production" value={kpis.totalProduction} tone="blue" />
-          <KpiCard title="OK Shot" value={kpis.ok} tone="emerald" />
-          <KpiCard title="Warm Up Shot" value={kpis.warm} tone="amber" />
-          <KpiCard title="Off Shot" value={kpis.off} tone="rose" />
+          <KpiCard title={okKpiTitle} value={kpis.ok} tone="emerald" />
+          <KpiCard title={warmKpiTitle} value={kpis.warm} tone="amber" />
+          <KpiCard title={offKpiTitle} value={kpis.off} tone="rose" />
           <KpiCard title="Shift" value={kpis.shift} tone="indigo" />
         </section>
 
@@ -1573,7 +1627,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
               <h2 className="text-sm font-black uppercase tracking-[0.14em] text-slate-800">Overall Machine Report</h2>
               <p className="text-xs font-semibold text-slate-500">
                 Latest records first | Page {pagination.page} of {pagination.totalPages} | {pagination.total} records
-                {shotNumberFilter && ` | Shot search: ${shotNumberFilter}`}
+                {shotNumberFilter && ` | ${reportSearchSummaryLabel}: ${shotNumberFilter}`}
               </p>
             </div>
             {loading && <span className="text-xs font-bold text-blue-600">Loading...</span>}
@@ -1590,7 +1644,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                 <tr>
                   {columns.map((key) => (
                     <th key={key} className="border-b border-r border-slate-200 px-4 py-3 text-center align-middle font-black uppercase tracking-[0.06em] last:border-r-0">
-                      <span className="block whitespace-normal leading-tight">{labelize(key)}</span>
+                      <span className="block whitespace-normal leading-tight">{labelize(key, { isLeakTest: isLeakReport })}</span>
                     </th>
                   ))}
                 </tr>
