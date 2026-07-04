@@ -1999,9 +1999,11 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
 
     if (from) { values.push(from); }
     if (to) { values.push(to); }
+    if (shotNumber) { values.push(`%${String(shotNumber).trim()}%`); }
     const filteredSelectSql = `${selectSql}
       ${from ? " AND [Recorded_At] >= ?" : ""}
-      ${to ? " AND [Recorded_At] < DATEADD(day, 1, CAST(? AS date))" : ""}`;
+      ${to ? " AND [Recorded_At] < DATEADD(day, 1, CAST(? AS date))" : ""}
+      ${shotNumber ? " AND LTRIM(RTRIM([Part_Scan_Data])) LIKE ?" : ""}`;
 
     if (isPaged) {
       const [{ rows }, { rows: countRows }] = await Promise.all([

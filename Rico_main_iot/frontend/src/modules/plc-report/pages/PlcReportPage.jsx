@@ -1032,11 +1032,14 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     [activeMachineOptions, selectedMachineId]
   );
   const selectedMachineIsLeak = isLeakTestMachine(selectedMachine, rows);
+  const selectedMachineIsGauge = isGaugeMachine(selectedMachine, rows);
   const resultFilterOptions = selectedMachineIsLeak ? LEAK_RESULT_FILTERS : SHOT_RESULT_FILTERS;
   const draftResultFilterValue = resultFilterOptions.some((filter) => filter.key === draftShotResultFilter)
     ? draftShotResultFilter
     : "all";
-  const activeResultFilterValue = resultFilterOptions.some((filter) => filter.key === shotResultFilter)
+  const activeResultFilterValue = selectedMachineIsGauge
+    ? "all"
+    : resultFilterOptions.some((filter) => filter.key === shotResultFilter)
     ? shotResultFilter
     : "all";
 
@@ -1188,6 +1191,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     () => isGaugeMachine(selectedMachine, filteredRows),
     [filteredRows, selectedMachine]
   );
+  const isGaugeReport = selectedMachineIsGauge || showGaugeFields;
 
   const columns = useMemo(
     () => buildColumns(filteredRows, { hideLeakTestFields, isGauge: showGaugeFields }),
@@ -1238,10 +1242,17 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   const reportFilterLabel = getQuickFilterLabel(activeQuickFilter);
   const reportShiftLabel = getShiftFilterLabel(shiftFilter);
   const reportShotResultLabel = getShotResultFilterLabel(activeResultFilterValue, isLeakReport);
-  const reportResultFilterTitle = isLeakReport ? "Scan Result" : "Shot Result";
-  const reportSearchTitle = isLeakReport ? "Scan Data" : "Shot No.";
-  const reportSearchPlaceholder = isLeakReport ? "Enter scan data" : "Find shot number";
-  const reportSearchSummaryLabel = isLeakReport ? "Scan search" : "Shot search";
+  const reportFilterSummary = [
+    reportFilterLabel,
+    reportShiftLabel,
+    isGaugeReport ? null : reportShotResultLabel,
+    reportRangeLabel,
+  ].filter(Boolean).join(" | ");
+  const reportResultFilterTitle = isGaugeReport ? "Filter" : isLeakReport ? "Scan Result" : "Shot Result";
+  const reportResultFilterValue = isGaugeReport ? reportFilterSummary : reportShotResultLabel;
+  const reportSearchTitle = (isLeakReport || isGaugeReport) ? "Scan Data" : "Shot No.";
+  const reportSearchPlaceholder = (isLeakReport || isGaugeReport) ? "Enter scan data" : "Find shot number";
+  const reportSearchSummaryLabel = (isLeakReport || isGaugeReport) ? "Scan search" : "Shot search";
   const machineLabel = selectedMachine?.machine_name || selectedMachine?.plc_ip || "Machine";
   const reportTitle = `${machineLabel} ${isLeakReport ? "Scan" : "Production"} Report`;
   const reportSubtitle = isLeakReport ? "Leak test scan history" : "Machine production history";
@@ -1256,7 +1267,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     slugify(machineLabel),
     slugify(reportFilterLabel),
     slugify(reportShiftLabel),
-    slugify(reportShotResultLabel),
+    isGaugeReport ? null : slugify(reportShotResultLabel),
     fromDate,
     toDate,
   ].filter(Boolean).join("-");
@@ -1359,7 +1370,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       <div>
         <div class="company">Rico Auto Industries Limited</div>
         <h1>${escapeHtml(title)}</h1>
-        <div class="meta">${escapeHtml(reportFilterLabel)} | ${escapeHtml(reportShiftLabel)} | ${escapeHtml(reportShotResultLabel)} | ${escapeHtml(reportRangeLabel)} | ${exportRows.length} records</div>
+        <div class="meta">${escapeHtml(reportFilterSummary)} | ${exportRows.length} records</div>
       </div>
       <div class="doc">
         <div><span>Report</span><strong>Production</strong></div>
@@ -1371,7 +1382,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       <div class="detail"><span>Machine</span><strong>${escapeHtml(machineLabel)}</strong></div>
       <div class="detail"><span>PLC IP</span><strong>${escapeHtml(selectedMachine?.plc_ip || "-")}</strong></div>
       <div class="detail"><span>Date Range</span><strong>${escapeHtml(reportRangeLabel)}</strong></div>
-      <div class="detail"><span>Filter</span><strong>${escapeHtml(reportFilterLabel)} / ${escapeHtml(reportShiftLabel)} / ${escapeHtml(reportShotResultLabel)}</strong></div>
+      <div class="detail"><span>Filter</span><strong>${escapeHtml(reportFilterSummary.replace(/\s\|\s/g, " / "))}</strong></div>
     </div>
     <div class="summary">
       <div class="kpi"><span>${escapeHtml(okKpiTitle)}</span><strong>${kpis.ok}</strong></div>
@@ -1455,7 +1466,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     </tr>
     <tr>
       <td class="label">Date Range</td><td class="value" colspan="2">${escapeHtml(reportFilterLabel)}</td>
-      <td class="label">${escapeHtml(reportResultFilterTitle)}</td><td class="value" colspan="3">${escapeHtml(reportShotResultLabel)}</td>
+      <td class="label">${escapeHtml(reportResultFilterTitle)}</td><td class="value" colspan="3">${escapeHtml(reportResultFilterValue)}</td>
     </tr>
     <tr><td colspan="${colSpan}" class="section">Production Summary</td></tr>
     <tr>
@@ -1503,7 +1514,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
             <div>
               <p className="text-xs font-black uppercase tracking-[0.18em] text-blue-600">Filters</p>
               <p className="mt-1 text-sm font-bold text-slate-600">
-                {reportFilterLabel} | {reportShiftLabel} | {reportShotResultLabel} | {reportRangeLabel}
+                {reportFilterSummary}
               </p>
             </div>
             <div className="flex items-center gap-3">
@@ -1583,18 +1594,20 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                     ))}
                   </select>
                 </label>
-                <label className="block">
-                  <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">{reportResultFilterTitle}</span>
-                  <select
-                    value={draftResultFilterValue}
-                    onChange={(event) => setDraftShotResultFilter(event.target.value)}
-                    className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-                  >
-                    {resultFilterOptions.map((filter) => (
-                      <option key={filter.key} value={filter.key}>{filter.label}</option>
-                    ))}
-                  </select>
-                </label>
+                {!isGaugeReport && (
+                  <label className="block">
+                    <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">{reportResultFilterTitle}</span>
+                    <select
+                      value={draftResultFilterValue}
+                      onChange={(event) => setDraftShotResultFilter(event.target.value)}
+                      className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                    >
+                      {resultFilterOptions.map((filter) => (
+                        <option key={filter.key} value={filter.key}>{filter.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 <label className="block">
                   <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">From</span>
                   <input type="date" value={draftFromDate} onChange={handleFromDateChange} className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" />
