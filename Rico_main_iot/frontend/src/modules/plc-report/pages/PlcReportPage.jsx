@@ -1259,6 +1259,25 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   const okKpiTitle = isLeakReport ? "OK Scan" : "OK Shot";
   const warmKpiTitle = isLeakReport ? "Warm Up Scan" : "Warm Up Shot";
   const offKpiTitle = isLeakReport ? "NG Scan" : "Off Shot";
+  const reportKpiItems = useMemo(() => {
+    const total = { title: "Total Production", value: kpis.totalProduction, tone: "blue", className: "summary-total" };
+    const shift = { title: "Shift", value: kpis.shift, tone: "indigo", className: "summary-shift" };
+    if (isGaugeReport) return [total, shift];
+    const ok = { title: okKpiTitle, value: kpis.ok, tone: "emerald", className: "summary-ok" };
+    const off = { title: offKpiTitle, value: kpis.off, tone: "rose", className: "summary-off" };
+    if (isLeakReport) return [total, ok, off, shift];
+    const warm = { title: warmKpiTitle, value: kpis.warm, tone: "amber", className: "summary-warm" };
+    return [total, ok, warm, off, shift];
+  }, [isGaugeReport, isLeakReport, kpis.off, kpis.ok, kpis.shift, kpis.totalProduction, kpis.warm, offKpiTitle, okKpiTitle, warmKpiTitle]);
+  const reportKpiHeaderHtml = reportKpiItems
+    .map((item) => `<td class="summary-label">${escapeHtml(item.title)}</td>`)
+    .join("");
+  const reportKpiValueHtml = reportKpiItems
+    .map((item) => `<td class="${item.className}">${escapeHtml(item.value)}</td>`)
+    .join("");
+  const reportKpiCardHtml = reportKpiItems
+    .map((item) => `<div class="kpi"><span>${escapeHtml(item.title)}</span><strong>${escapeHtml(item.value)}</strong></div>`)
+    .join("");
   const activeLineLabel = selectedLineId === "all"
     ? "All Lines"
     : getLineLabel(lines.find((line) => getLineId(line) === String(selectedLineId)) || { line_name: "Selected Line" });
@@ -1348,7 +1367,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     .detail:last-child{border-right:0}
     .detail span{display:block;font-size:10px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:.08em}
     .detail strong{display:block;font-size:13px;margin-top:4px;color:#0f172a}
-    .summary{display:grid;grid-template-columns:repeat(5,1fr);border-bottom:1px solid #cbd5e1}
+    .summary{display:grid;grid-template-columns:repeat(${reportKpiItems.length},1fr);border-bottom:1px solid #cbd5e1}
     .kpi{border-right:1px solid #cbd5e1;padding:10px 14px}
     .kpi:last-child{border-right:0}
     .kpi span{display:block;font-size:10px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:.08em}
@@ -1385,11 +1404,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       <div class="detail"><span>Filter</span><strong>${escapeHtml(reportFilterSummary.replace(/\s\|\s/g, " / "))}</strong></div>
     </div>
     <div class="summary">
-      <div class="kpi"><span>${escapeHtml(okKpiTitle)}</span><strong>${kpis.ok}</strong></div>
-      <div class="kpi"><span>${escapeHtml(warmKpiTitle)}</span><strong>${kpis.warm}</strong></div>
-      <div class="kpi"><span>${escapeHtml(offKpiTitle)}</span><strong>${kpis.off}</strong></div>
-      <div class="kpi"><span>Total Production</span><strong>${kpis.totalProduction}</strong></div>
-      <div class="kpi"><span>Shift</span><strong>${kpis.shift}</strong></div>
+      ${reportKpiCardHtml}
     </div>
     <div class="table-title">Detailed Production Records</div>
     <table><thead><tr>${header}</tr></thead><tbody>${body || `<tr><td colspan="${exportColumns.length || 1}">No records</td></tr>`}</tbody></table>
@@ -1470,18 +1485,10 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     </tr>
     <tr><td colspan="${colSpan}" class="section">Production Summary</td></tr>
     <tr>
-      <td class="summary-label">${escapeHtml(okKpiTitle)}</td>
-      <td class="summary-label">${escapeHtml(warmKpiTitle)}</td>
-      <td class="summary-label">${escapeHtml(offKpiTitle)}</td>
-      <td class="summary-label">Total Production</td>
-      <td class="summary-label">Shift</td>
+      ${reportKpiHeaderHtml}
     </tr>
     <tr>
-      <td class="summary-ok">${kpis.ok}</td>
-      <td class="summary-warm">${kpis.warm}</td>
-      <td class="summary-off">${kpis.off}</td>
-      <td class="summary-total">${kpis.totalProduction}</td>
-      <td class="summary-shift">${escapeHtml(kpis.shift)}</td>
+      ${reportKpiValueHtml}
     </tr>
     <tr><td colspan="${colSpan}" class="section">Detailed Production Records</td></tr>
     <tr>${header}</tr>
@@ -1646,11 +1653,9 @@ export default function PlcReportPage({ onLogout, currentUser }) {
         </section>
 
         <section className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(190px,1fr))]">
-          <KpiCard title="Total Production" value={kpis.totalProduction} tone="blue" />
-          <KpiCard title={okKpiTitle} value={kpis.ok} tone="emerald" />
-          <KpiCard title={warmKpiTitle} value={kpis.warm} tone="amber" />
-          <KpiCard title={offKpiTitle} value={kpis.off} tone="rose" />
-          <KpiCard title="Shift" value={kpis.shift} tone="indigo" />
+          {reportKpiItems.map((item) => (
+            <KpiCard key={item.title} title={item.title} value={item.value} tone={item.tone} />
+          ))}
         </section>
 
         <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
