@@ -20,7 +20,7 @@ const DEFAULT_MACHINE = {
 };
 
 const REPORT_AUTO_REFRESH_MS = Number(import.meta.env.VITE_PLC_REPORT_REFRESH_MS || 5000);
-const REPORT_PAGE_SIZE = Number(import.meta.env.VITE_PLC_REPORT_PAGE_SIZE || 100);
+const REPORT_RESULT_LIMIT = Number(import.meta.env.VITE_PLC_REPORT_PAGE_SIZE || 100);
 const REPORT_EXPORT_PAGE_SIZE = Number(import.meta.env.VITE_PLC_REPORT_EXPORT_PAGE_SIZE || 20000);
 
 const HIDDEN_COLUMNS = new Set([
@@ -906,7 +906,6 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   const [draftShotResultFilter, setDraftShotResultFilter] = useState(shotResultFilter);
   const [draftShotNumberFilter, setDraftShotNumberFilter] = useState("");
   const [rows, setRows] = useState([]);
-  const [pagination, setPagination] = useState({ page: 1, pageSize: REPORT_PAGE_SIZE, total: 0, totalPages: 1 });
   const [serverKpis, setServerKpis] = useState({
     ok: 0,
     warm: 0,
@@ -1092,7 +1091,6 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     setShiftFilter(draftShiftFilter);
     setShotResultFilter(draftResultFilterValue);
     setShotNumberFilter(draftShotNumberFilter.trim());
-    setPagination((current) => ({ ...current, page: 1 }));
   }, [draftFromDate, draftLineId, draftMachineId, draftQuickFilter, draftResultFilterValue, draftShiftFilter, draftShotNumberFilter, draftToDate]);
 
   const clearReportFilters = useCallback(() => {
@@ -1113,14 +1111,12 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     setShotResultFilter("all");
     setDraftShotNumberFilter("");
     setShotNumberFilter("");
-    setPagination((current) => ({ ...current, page: 1 }));
   }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
       const nextShotNumber = draftShotNumberFilter.trim();
       setShotNumberFilter((current) => current === nextShotNumber ? current : nextShotNumber);
-      setPagination((current) => current.page === 1 ? current : { ...current, page: 1 });
     }, 350);
     return () => window.clearTimeout(timer);
   }, [draftShotNumberFilter]);
@@ -1130,7 +1126,6 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     if (!reportMachinesReady || !selectedMachineIp) {
       if (!silent) {
         setRows([]);
-        setPagination((current) => ({ ...current, total: 0, totalPages: 1 }));
         setServerKpis({ ok: 0, warm: 0, off: 0 });
         setLoading(false);
       }
@@ -1144,20 +1139,13 @@ export default function PlcReportPage({ onLogout, currentUser }) {
         ip: selectedMachineIp,
         from: fromDate,
         to: toDate,
-        page: pagination.page,
-        pageSize: pagination.pageSize,
+        limit: REPORT_RESULT_LIMIT,
         shift: shiftFilter,
         shotResult: activeResultFilterValue,
         shotNumber: shotNumberFilter,
       });
       const nextRows = Array.isArray(response.data?.data) ? response.data.data : [];
       setRows(sortRowsLatestFirst(nextRows));
-      setPagination((current) => response.data?.pagination ? {
-        page: response.data.pagination.page || current.page,
-        pageSize: response.data.pagination.pageSize || current.pageSize,
-        total: response.data.pagination.total || 0,
-        totalPages: response.data.pagination.totalPages || 1,
-      } : { ...current, total: nextRows.length, totalPages: 1 });
       setServerKpis({
         ok: Number(response.data?.kpis?.ok || 0),
         warm: Number(response.data?.kpis?.warm || 0),
@@ -1165,12 +1153,11 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       });
     } catch (err) {
       if (!silent) setRows([]);
-      if (!silent) setPagination((current) => ({ ...current, total: 0, totalPages: 1 }));
       setError(err.response?.data?.error || err.response?.data?.message || "Unable to load PLC report.");
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [activeResultFilterValue, fromDate, pagination.page, pagination.pageSize, reportMachinesReady, selectedMachine, shiftFilter, shotNumberFilter, toDate]);
+  }, [activeResultFilterValue, fromDate, reportMachinesReady, selectedMachine, shiftFilter, shotNumberFilter, toDate]);
 
   useEffect(() => {
     loadReport();
@@ -1214,10 +1201,9 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       ok: serverKpis.ok,
       warm: serverKpis.warm,
       off: serverKpis.off,
-      totalProduction: pagination.total,
+      totalProduction: reportRows.length,
       shift: shiftFilter === "all" ? "All" : shiftFilter,
     };
-    if (pagination.total) return counts;
     reportRows.forEach((row) => {
       const rawValue = getReportResultValue(row);
       const normalizedText = String(rawValue || "").trim().toLowerCase();
@@ -1236,7 +1222,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     });
     if (!reportRows.length) counts.shift = shiftFilter === "all" ? "All" : shiftFilter;
     return counts;
-  }, [pagination.total, reportRows, serverKpis, shiftFilter]);
+  }, [reportRows, serverKpis, shiftFilter]);
 
   const reportRangeLabel = `${formatDisplayDate(fromDate)} to ${formatDisplayDate(toDate)}`;
   const reportFilterLabel = getQuickFilterLabel(activeQuickFilter);
@@ -1295,28 +1281,17 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     const selectedMachineIp = getMachineReportIp(selectedMachine);
     if (!selectedMachineIp) return [];
 
-    const allRows = [];
-    let page = 1;
-    let totalPages = 1;
-
-    do {
-      const response = await getPlcReadingHistory({
-        ip: selectedMachineIp,
-        from: fromDate,
-        to: toDate,
-        page,
-        pageSize: REPORT_EXPORT_PAGE_SIZE,
-        shift: shiftFilter,
-        shotResult: activeResultFilterValue,
-        shotNumber: shotNumberFilter,
-      });
-      const pageRows = Array.isArray(response.data?.data) ? response.data.data : [];
-      allRows.push(...pageRows);
-      totalPages = Number(response.data?.pagination?.totalPages || 1);
-      page += 1;
-    } while (page <= totalPages);
-
-    return sortRowsLatestFirst(allRows);
+    const response = await getPlcReadingHistory({
+      ip: selectedMachineIp,
+      from: fromDate,
+      to: toDate,
+      limit: REPORT_EXPORT_PAGE_SIZE,
+      shift: shiftFilter,
+      shotResult: activeResultFilterValue,
+      shotNumber: shotNumberFilter,
+    });
+    const exportRows = Array.isArray(response.data?.data) ? response.data.data : [];
+    return sortRowsLatestFirst(exportRows);
   }, [activeResultFilterValue, fromDate, selectedMachine, shiftFilter, shotNumberFilter, toDate]);
 
   const downloadPdf = async () => {
@@ -1663,7 +1638,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
             <div>
               <h2 className="text-sm font-black uppercase tracking-[0.14em] text-slate-800">Overall Machine Report</h2>
               <p className="text-xs font-semibold text-slate-500">
-                Latest records first | Page {pagination.page} of {pagination.totalPages} | {pagination.total} records
+                Latest records first | {reportRows.length} records
                 {shotNumberFilter && ` | ${reportSearchSummaryLabel}: ${shotNumberFilter}`}
               </p>
             </div>
@@ -1717,30 +1692,8 @@ export default function PlcReportPage({ onLogout, currentUser }) {
           </div>
           <div className="flex flex-col gap-3 border-t border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-xs font-bold text-slate-500">
-              Showing {reportRows.length ? ((pagination.page - 1) * pagination.pageSize) + 1 : 0}
-              {" "}to {Math.min(pagination.page * pagination.pageSize, pagination.total)} of {pagination.total}
+              Showing {reportRows.length} latest records
             </p>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                disabled={loading || pagination.page <= 1}
-                onClick={() => setPagination((current) => ({ ...current, page: Math.max(1, current.page - 1) }))}
-                className="h-9 rounded-lg border border-slate-300 px-3 text-sm font-black text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Prev
-              </button>
-              <span className="min-w-24 text-center text-xs font-black uppercase tracking-wide text-slate-500">
-                {pagination.page} / {pagination.totalPages}
-              </span>
-              <button
-                type="button"
-                disabled={loading || pagination.page >= pagination.totalPages}
-                onClick={() => setPagination((current) => ({ ...current, page: Math.min(current.totalPages, current.page + 1) }))}
-                className="h-9 rounded-lg border border-slate-300 px-3 text-sm font-black text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Next
-              </button>
-            </div>
           </div>
         </section>
       </div>
