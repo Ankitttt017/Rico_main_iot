@@ -71,13 +71,19 @@ const HIDDEN_COLUMNS = new Set([
 
 const LEAK_TEST_HIDDEN_COLUMNS = new Set([
   "auto_bit",
+  "machine",
+  "ip",
   "part_name",
   "part_qr_code",
   "scan_source_device",
+  "dry",
+  "wey",
+  "both",
 ]);
 
 const SERIAL_COLUMN = "serial_number";
 const SHIFT_COLUMN = "shift";
+const TESTING_MODE_COLUMN = "testing_mode";
 
 const GAUGE_REPORT_COLUMNS = [
   SERIAL_COLUMN,
@@ -111,6 +117,22 @@ const PREFERRED_COLUMNS = [
   "shot_number",
   "shot_status",
   "cycle_time",
+];
+
+const LEAK_TEST_PREFERRED_COLUMNS = [
+  SERIAL_COLUMN,
+  "scan_data",
+  "shot_time",
+  SHIFT_COLUMN,
+  "result",
+  "body_leak_value",
+  TESTING_MODE_COLUMN,
+  "gall_1",
+  "gall_2",
+  "cycle_time",
+  "running_mode",
+  "manual",
+  "status",
 ];
 
 const SHOT_STATUS = {
@@ -328,6 +350,7 @@ function labelize(key, options = {}) {
   const isLeakTest = Boolean(options.isLeakTest);
   if (key === SERIAL_COLUMN) return "S No";
   if (key === SHIFT_COLUMN) return "Shift";
+  if (key === TESTING_MODE_COLUMN) return "Testing Mode";
   if (isLeakTest && key === "shot_time") return "Scan Time";
   if (isLeakTest && normalizeColumnKey(key) === "shot_number") return "Scan Number";
   if (isLeakTest && ["shot_status", "result"].includes(normalizeColumnKey(key))) return "Scan Result";
@@ -564,6 +587,19 @@ function shotStatusLabel(value) {
   return "-";
 }
 
+function isTruthyModeValue(value) {
+  if (value === true || value === 1) return true;
+  const text = String(value ?? "").trim().toLowerCase();
+  return ["1", "true", "yes", "y", "on"].includes(text);
+}
+
+function getTestingModeValue(row = {}) {
+  const both = isTruthyModeValue(getRowValue(row, "both", "Both"));
+  const dry = isTruthyModeValue(getRowValue(row, "dry", "Dry"));
+  const wey = isTruthyModeValue(getRowValue(row, "wey", "Wey"));
+  return both || (dry && wey) ? "True" : "";
+}
+
 function formatValue(value, key) {
   if (NOT_AVAILABLE_COLUMNS.has(normalizeColumnKey(key))) return "N/A";
   if (value === null || value === undefined || value === "") return "-";
@@ -586,6 +622,7 @@ function formatValue(value, key) {
 function formatReportCell(row, key, rowIndex = 0, rowCount = 0, rows = []) {
   if (key === SERIAL_COLUMN) return Math.max(1, rowCount - rowIndex);
   if (key === SHIFT_COLUMN) return getRowShift(row);
+  if (key === TESTING_MODE_COLUMN) return getTestingModeValue(row);
   if (key === "scan_time") return formatTimeParts12Hour(getRowTimeParts(row));
   if (normalizeColumnKey(key) === "scan_data") {
     return formatValue(row.scan_data || row.part_scan_data || row.part_qr_code || row.part_name, key);
@@ -838,12 +875,14 @@ function buildColumns(rows, options = {}) {
     if (hideLeakTestFields && rows.some((row) => row?.scan_data || row?.part_qr_code || row?.part_name)) {
       keys.add("scan_data");
     }
+    if (hideLeakTestFields) keys.add(TESTING_MODE_COLUMN);
     if (rows.some((row) => getRowTimeParts(row))) keys.add("shot_time");
   }
+  const preferredColumns = hideLeakTestFields ? LEAK_TEST_PREFERRED_COLUMNS : PREFERRED_COLUMNS;
   return [
-    ...PREFERRED_COLUMNS.filter((key) => keys.has(key) && !isHiddenForReport(key, hideLeakTestFields, isGauge)),
+    ...preferredColumns.filter((key) => keys.has(key) && !isHiddenForReport(key, hideLeakTestFields, isGauge)),
     ...Array.from(keys)
-      .filter((key) => !PREFERRED_COLUMNS.includes(key))
+      .filter((key) => !preferredColumns.includes(key))
       .filter((key) => !isHiddenForReport(key, hideLeakTestFields, isGauge))
       .sort((a, b) => labelize(a, { isLeakTest: hideLeakTestFields }).localeCompare(labelize(b, { isLeakTest: hideLeakTestFields }))),
   ];
@@ -853,6 +892,7 @@ function getColumnWidth(key) {
   const normalizedKey = normalizeColumnKey(key);
   if (key === SERIAL_COLUMN) return 72;
   if (key === SHIFT_COLUMN) return 88;
+  if (key === TESTING_MODE_COLUMN) return 140;
   if (key === "recorded_at") return 150;
   if (key === "machine_name") return 140;
   if (["part_name", "part_qr_code", "scan_data", "part_scan_data"].includes(normalizedKey)) return 240;
