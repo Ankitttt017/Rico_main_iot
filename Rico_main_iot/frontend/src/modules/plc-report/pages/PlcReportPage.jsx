@@ -168,6 +168,8 @@ const LEAK_RESULT_FILTERS = [
   { key: "ng", label: "NG", status: 5 },
 ];
 
+const PLANT_ENVIRONMENT_COLUMNS = ["plant_temperature", "plant_humidity"];
+
 const REPORT_LABELS = {
   ...DISPLAY_LABELS,
   shot_status: "Shot Result",
@@ -202,6 +204,8 @@ const REPORT_LABELS = {
   clamp_tonnage_op_low_pct: "Clamp Tonnage (OP.Low)",
   clamp_tonnage_he_up_pct: "Clamp Tonnage (HE.Up)",
   vacuum_pressure: "Vacuum Pressure",
+  plant_temperature: "Plant Temperature",
+  plant_humidity: "Plant Humidity",
   clamp_force_pct: "Clamp Force",
   clamp_tonnage: "Clamp Tonnage",
   shot_acc_pressure: "Shot Acc. Pressure",
@@ -252,6 +256,8 @@ const REPORT_UNITS = {
   clamp_tonnage_op_low_pct: "%",
   clamp_tonnage_he_up_pct: "%",
   vacuum_pressure: "mbar",
+  plant_temperature: "C",
+  plant_humidity: "%",
   clamp_force_pct: "%",
   clamp_tonnage: "T",
   shot_acc_pressure: "MPa",
@@ -881,12 +887,21 @@ function buildColumns(rows, options = {}) {
     if (rows.some((row) => getRowTimeParts(row))) keys.add("shot_time");
   }
   const preferredColumns = hideLeakTestFields ? LEAK_TEST_PREFERRED_COLUMNS : PREFERRED_COLUMNS;
+  const remainingColumns = Array.from(keys)
+    .filter((key) => !preferredColumns.includes(key))
+    .filter((key) => !PLANT_ENVIRONMENT_COLUMNS.includes(key))
+    .filter((key) => !isHiddenForReport(key, hideLeakTestFields, isGauge))
+    .sort((a, b) => labelize(a, { isLeakTest: hideLeakTestFields }).localeCompare(labelize(b, { isLeakTest: hideLeakTestFields })));
+  if (!hideLeakTestFields && !isGauge) {
+    const plantColumns = PLANT_ENVIRONMENT_COLUMNS.filter((key) => keys.has(key) && !isHiddenForReport(key, hideLeakTestFields, isGauge));
+    if (plantColumns.length) {
+      const vacuumIndex = remainingColumns.indexOf("vacuum_pressure");
+      remainingColumns.splice(vacuumIndex >= 0 ? vacuumIndex + 1 : remainingColumns.length, 0, ...plantColumns);
+    }
+  }
   return [
     ...preferredColumns.filter((key) => keys.has(key) && !isHiddenForReport(key, hideLeakTestFields, isGauge)),
-    ...Array.from(keys)
-      .filter((key) => !preferredColumns.includes(key))
-      .filter((key) => !isHiddenForReport(key, hideLeakTestFields, isGauge))
-      .sort((a, b) => labelize(a, { isLeakTest: hideLeakTestFields }).localeCompare(labelize(b, { isLeakTest: hideLeakTestFields }))),
+    ...remainingColumns,
   ];
 }
 

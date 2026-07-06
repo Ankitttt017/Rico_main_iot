@@ -655,6 +655,8 @@ BEGIN
     [clamp_tonnage_op_low_pct] DECIMAL(18,2) NULL,
     [clamp_tonnage_he_up_pct] DECIMAL(18,2) NULL,
     [vacuum_pressure] DECIMAL(18,2) NULL,
+    [plant_temperature] DECIMAL(18,2) NULL,
+    [plant_humidity] DECIMAL(18,2) NULL,
     [clamp_force_pct] DECIMAL(18,2) NULL,
     [clamp_tonnage] DECIMAL(18,2) NULL,
     [shot_acc_pressure] DECIMAL(18,2) NULL,
@@ -823,6 +825,10 @@ IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_he_up_pct') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_he_up_pct] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'vacuum_pressure') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [vacuum_pressure] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'plant_temperature') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [plant_temperature] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'plant_humidity') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [plant_humidity] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_force_pct') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [clamp_force_pct] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage') IS NULL

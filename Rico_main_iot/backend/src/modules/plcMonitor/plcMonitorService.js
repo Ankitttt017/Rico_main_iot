@@ -4,6 +4,7 @@ const net = require("net");
 const fs = require("fs");
 const path = require("path");
 const db = require("../../config/db");
+const { readPlantEnvironment } = require("./plantEnvironmentReader");
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // MACHINE CONFIG
@@ -2952,6 +2953,10 @@ function startPlcMonitor(io) {
       if (readings[legacyColumn] === undefined && readings[parameterName] !== undefined) {
         readings[legacyColumn] = readings[parameterName];
       }
+    }
+
+    if (!isGauge) {
+      Object.assign(readings, await readPlantEnvironment());
     }
 
     if (cycleTiming?.startedAt && cycleTiming?.endedAt) {

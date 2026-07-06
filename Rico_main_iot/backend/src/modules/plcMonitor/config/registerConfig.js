@@ -120,6 +120,11 @@ const EXCEL_PARAMETERS = [
 
 const UBE_LIMIT_STATUS_PARAMETERS = [];
 
+const PLANT_ENVIRONMENT_PARAMETERS = [
+  { name: "plant_temperature", type: "decimal" },
+  { name: "plant_humidity", type: "decimal" },
+];
+
 const LEAK_TEST_PARAMETERS = [
   {
     name: "part_qr_code",
@@ -161,7 +166,12 @@ const UBE_READ_PARAMETERS = [...EXCEL_PARAMETERS, ...UBE_LIMIT_STATUS_PARAMETERS
   return ["M", "X", "Y"].includes(parameter.device[0]) && UBE_ALLOWED_BIT_DEVICES.has(parameter.device);
 });
 
-const ALL_PARAMETERS = [...EXCEL_PARAMETERS, ...UBE_LIMIT_STATUS_PARAMETERS, ...LEAK_TEST_PARAMETERS];
+const ALL_PARAMETERS = [
+  ...EXCEL_PARAMETERS,
+  ...UBE_LIMIT_STATUS_PARAMETERS,
+  ...LEAK_TEST_PARAMETERS,
+  ...PLANT_ENVIRONMENT_PARAMETERS,
+];
 const PARAMETER_BY_NAME = new Map(ALL_PARAMETERS.map((p) => [p.name, p]));
 
 const LEGACY_COLUMNS_BY_PARAMETER = {
@@ -263,6 +273,19 @@ const LIVE_READING_METADATA_COLUMNS = new Set([
   "error",
 ]);
 
+const UBE_LEGACY_REPORT_COLUMNS = Array.from(new Set(Object.values(LEGACY_COLUMNS_BY_PARAMETER)))
+  .filter((name) => name !== "shot_number")
+  .flatMap((name) => {
+    const columns = [[name, name]];
+    if (name === "vacuum_pressure") {
+      columns.push(
+        ["plant_temperature", "Plant Temperature (C)"],
+        ["plant_humidity", "Plant Humidity (%)"]
+      );
+    }
+    return columns;
+  });
+
 const REPORT_COLUMNS = [
   ["machine_name", "Machine"],
   ["part_name", "Part Name"],
@@ -271,9 +294,7 @@ const REPORT_COLUMNS = [
   ["shot_date_full", "Shot Date"],
   ["shot_number", "Shot Number"],
   ["ok_shot", "OK Shot"],
-  ...Array.from(new Set(Object.values(LEGACY_COLUMNS_BY_PARAMETER)))
-    .filter((name) => name !== "shot_number")
-    .map((name) => [name, name]),
+  ...UBE_LEGACY_REPORT_COLUMNS,
   ...EXCEL_PARAMETERS.filter((p) => !p.hidden && !DROPPED_READING_COLUMNS.has(p.name)).map((p) => [p.name, p.name]),
   ...LEAK_TEST_PARAMETERS.filter((p) => !p.hidden && p.name !== "part_qr_code").map((p) => [p.name, p.name]),
 ];
@@ -329,6 +350,8 @@ const EXTRA_READING_COLUMNS = [
   ["ng_counter", "INT"],
   ["cycle_start_time", "DATETIME2(3)"],
   ["cycle_end_time", "DATETIME2(3)"],
+  ["plant_temperature", "DECIMAL(18,2)"],
+  ["plant_humidity", "DECIMAL(18,2)"],
 ];
 
 const TWO_DIGIT_READING_COLUMNS = new Set([
@@ -359,6 +382,8 @@ const UBE_CLIENT_READING_NAMES = new Set([
   "cycle_time",
   "cycle_start_time",
   "cycle_end_time",
+  "plant_temperature",
+  "plant_humidity",
   ...EXCEL_PARAMETERS.map((p) => p.name),
   ...Object.values(LEGACY_COLUMNS_BY_PARAMETER),
 ]);
@@ -413,6 +438,7 @@ module.exports = {
   PLC_RECONNECT_AFTER_TIMEOUT_MS,
   EXCEL_PARAMETERS,
   UBE_LIMIT_STATUS_PARAMETERS,
+  PLANT_ENVIRONMENT_PARAMETERS,
   LEAK_TEST_PARAMETERS,
   UBE_READ_PARAMETERS,
   ALL_PARAMETERS,

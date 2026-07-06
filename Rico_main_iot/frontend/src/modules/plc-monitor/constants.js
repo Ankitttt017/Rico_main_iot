@@ -167,6 +167,17 @@ export const REGISTER_GROUPS = [
     ],
   },
   {
+    id: "plant_environment",
+    label: "Plant Temperature & Humidity",
+    kind: "ube",
+    icon: "ENV",
+    color: "#0ea5e9",
+    keys: [
+      { name: "plant_temperature", unit: "C" },
+      { name: "plant_humidity", unit: "%" },
+    ],
+  },
+  {
     id: "machine_bits",
     label: "Machine Bits",
     kind: "ube",
@@ -379,6 +390,8 @@ export const DISPLAY_LABELS = {
   clamp_tonnage_op_low_pct: "Clamp Tonnage OP Low %",
   clamp_tonnage_he_up_pct: "Clamp Tonnage HE Up %",
   vacuum_pressure: "Vacuum Pressure",
+  plant_temperature: "Plant Temperature",
+  plant_humidity: "Plant Humidity",
   clamp_force_pct: "Clamp Force",
   clamp_tonnage: "Clamp Tonnage",
   shot_acc_pressure: "Shot Acc. Pressure",
