@@ -557,11 +557,9 @@ function getRowProductionDate(row = {}) {
   return productionDate || calendarDate;
 }
 
-function formatTimeParts12Hour(parts) {
+function formatTimeParts24Hour(parts) {
   if (!parts) return "-";
-  const period = parts.hour >= 12 ? "PM" : "AM";
-  const hour = parts.hour % 12 || 12;
-  return `${String(hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}:${String(parts.second).padStart(2, "0")} ${period}`;
+  return `${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}:${String(parts.second).padStart(2, "0")}`;
 }
 
 function isRowInProductionFilter(row = {}, fromDate, toDate, shiftFilter, shotResultFilter = "all") {
@@ -627,7 +625,7 @@ function formatReportCell(row, key, rowIndex = 0, rowCount = 0, rows = []) {
   if (key === SERIAL_COLUMN) return Math.max(1, rowCount - rowIndex);
   if (key === SHIFT_COLUMN) return getRowShift(row);
   if (key === TESTING_MODE_COLUMN) return getTestingModeValue(row);
-  if (key === "scan_time") return formatTimeParts12Hour(getRowTimeParts(row));
+  if (key === "scan_time") return formatTimeParts24Hour(getRowTimeParts(row));
   if (normalizeColumnKey(key) === "scan_data") {
     return formatValue(row.scan_data || row.part_scan_data || row.part_qr_code || row.part_name, key);
   }
@@ -635,7 +633,7 @@ function formatReportCell(row, key, rowIndex = 0, rowCount = 0, rows = []) {
   // midnight, display the previous production date.
   if (key === "shot_date") return formatDateOnly(getRowProductionDate(row) || row[key]);
   if (key === "shot_time") {
-    return formatTimeParts12Hour(getRowTimeParts(row));
+    return formatTimeParts24Hour(getRowTimeParts(row));
   }
   if (normalizeColumnKey(key) === "ng_counter" && rowIndex > 0) {
     const previousValue = rows[rowIndex - 1]?.[key];
