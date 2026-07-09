@@ -711,16 +711,77 @@ const GAUGE_JUDGEMENT_NAMES = new Set([
 function findGaugeReadingValue(readings = {}, names = []) {
   const normalizedTargets = new Set(names.map(normalizeRegisterName));
   for (const name of names) {
-    if (readings[name] !== null && readings[name] !== undefined && readings[name] !== "") {
-      return readings[name];
-    }
-  }
-  for (const [name, value] of Object.entries(readings || {})) {
-    if (value !== null && value !== undefined && value !== "" && normalizedTargets.has(normalizeRegisterName(name))) {
+    const value = unwrapReadingValue(readings[name]);
+    if (value !== null && value !== undefined && value !== "") {
       return value;
     }
   }
+  for (const [name, value] of Object.entries(readings || {})) {
+    const readingValue = unwrapReadingValue(value);
+    if (
+      readingValue !== null &&
+      readingValue !== undefined &&
+      readingValue !== "" &&
+      normalizedTargets.has(normalizeRegisterName(name))
+    ) {
+      return readingValue;
+    }
+  }
   return null;
+}
+
+function unwrapReadingValue(reading) {
+  if (reading && typeof reading === "object" && !Buffer.isBuffer(reading)) {
+    if (Object.prototype.hasOwnProperty.call(reading, "value")) {
+      return unwrapReadingValue(reading.value);
+    }
+    if (Object.prototype.hasOwnProperty.call(reading, "raw")) {
+      return unwrapReadingValue(reading.raw);
+    }
+  }
+  return reading;
+}
+
+function flattenClientReadings(readings = {}) {
+  return Object.fromEntries(
+    Object.entries(readings || {}).map(([name, reading]) => [name, unwrapReadingValue(reading)])
+  );
+}
+
+function buildGaugeReadingSignature(readings = {}) {
+  const partScanData = String(findGaugeReadingValue(readings, [
+    "Part Scan Data",
+    "part_scan_data",
+    "part_qr_code",
+    "scan_data",
+    "qr_code",
+  ]) || "").trim();
+  const gaugeStatus = String(findGaugeReadingValue(readings, ["Gauge Status", "gauge_status", "status", "Status"]) ?? "").trim();
+  const gaugeJudgement = String(findGaugeReadingValue(readings, [
+    "Gauge Judgement",
+    "gauge_judgement",
+    "judgement",
+    "judgment",
+    "result",
+    "Result",
+  ]) ?? "").trim();
+  const cycleTime = String(findGaugeReadingValue(readings, [
+    "Cycle Time In Sec",
+    "Cycle Time Sec",
+    "cycle_time_in_sec",
+    "cycle_time_sec",
+    "cycle_time",
+  ]) ?? "").trim();
+  const cycleMode = String(findGaugeReadingValue(readings, [
+    "Cycle Mode Auto/Manual",
+    "Cycle Mode Auto Manual",
+    "cycle_mode_auto_manual",
+    "cycle_mode",
+    "mode",
+  ]) ?? "").trim();
+
+  if (!partScanData && !gaugeStatus && !gaugeJudgement) return "";
+  return [partScanData, gaugeStatus, gaugeJudgement, cycleTime, cycleMode].join("|");
 }
 
 function canonicalGaugeReadingName(name = "") {
@@ -2295,7 +2356,7 @@ async function saveToDBUnlocked(machine, partName, readings) {
     if (duplicateShotRows.length) return { skipped: true, reason: "duplicate-shot-number" };
   }
 
-  if (hasPlcRecordedAt) {
+  if (hasPlcRecordedAt && (shotNumber === null || shotNumber === undefined || !shotDate)) {
     const duplicateFilters = [
       "(machine_key = ? OR plc_ip = ?)",
     ];
@@ -2857,7 +2918,16 @@ function startPlcMonitor(io) {
   const readAll = async (
     machine,
     sock,
-    { persist = true, emit = true, liveOnly = false, cycleTiming = null, persistStoppage = persist } = {}
+    {
+      persist = true,
+      emit = true,
+      liveOnly = false,
+      cycleTiming = null,
+      persistStoppage = persist,
+      skipBitParameters = false,
+      skipStringParameters = false,
+      continueOnReadError = false,
+    } = {}
   ) => {
     const readings = {};
     const rawCache = new Map();
@@ -2908,6 +2978,14 @@ function startPlcMonitor(io) {
         if (computed === "serial") { readings[name] = reportSerial; continue; }
         if (computed === "shotTime") { readings[name] = shotTime; continue; }
         if (!device && !stringDevice) { readings[name] = null; continue; }
+        if (skipStringParameters && (stringDevice || isStringRegisterType(parameter.type))) {
+          readings[name] = null;
+          continue;
+        }
+        if (skipBitParameters && ["M", "X", "Y"].includes(String(device || "").trim().toUpperCase()[0])) {
+          readings[name] = null;
+          continue;
+        }
 
         readings[name] = await readConfiguredParameter(sock, parameter, rawCache);
         const canonicalGaugeName = isGauge ? canonicalGaugeReadingName(name) : "";
@@ -2926,7 +3004,7 @@ function startPlcMonitor(io) {
           );
         }
       } catch (error) {
-        if (isPlcConnectionError(error)) throw error;
+        if (!continueOnReadError && isPlcConnectionError(error)) throw error;
         readings[name] = null;
       }
     }
@@ -3524,10 +3602,15 @@ function startPlcMonitor(io) {
           closeSocket(sock);
           await sleep(PLC_RECONNECT_AFTER_TIMEOUT_MS);
           sock = await connectPLC(machine);
+          const gaugeNeedsReadConfirmation = isGaugeMachine(machine);
           updateMachineState(machine, {
-            connected: true,
-            error: null,
-            shotStatus: "PLC reconnected; monitoring resumed.",
+            connected: !gaugeNeedsReadConfirmation,
+            error: gaugeNeedsReadConfirmation
+              ? `Gauge PLC socket reconnected after ${reason}, waiting for register response.`
+              : null,
+            shotStatus: gaugeNeedsReadConfirmation
+              ? "Gauge socket reconnected; waiting for register data."
+              : "PLC reconnected; monitoring resumed.",
           });
           return sock;
         };
@@ -3729,6 +3812,65 @@ function startPlcMonitor(io) {
           let cycleStartAt = lastCycleStartBit === 1 ? new Date() : null;
           let cycleEndHandled = lastCycleEndBit === 1;
           let lastGaugeLiveReadAt = 0;
+          let lastGaugeFallbackSignature = "";
+          let lastGaugeFallbackReadAt = 0;
+
+          const captureGaugeFallbackSnapshot = async (reason) => {
+            const now = new Date();
+            const payload = await readAll(machine, sock, {
+              persist: false,
+              emit: true,
+              liveOnly: true,
+              skipBitParameters: true,
+              skipStringParameters: true,
+              continueOnReadError: true,
+              cycleTiming: cycleStartAt
+                ? {
+                    startedAt: cycleStartAt,
+                    endedAt: now,
+                    durationSec: Number(((now - cycleStartAt) / 1000).toFixed(2)),
+                  }
+                : null,
+            });
+            const gaugeReadings = flattenClientReadings(payload.readings || {});
+            if (cycleStartDevice) gaugeReadings.cycle_start = Number.isFinite(Number(lastCycleStartBit)) ? lastCycleStartBit : null;
+            if (cycleEndDevice) gaugeReadings.cycle_complete = Number.isFinite(Number(lastCycleEndBit)) ? lastCycleEndBit : null;
+
+            const signature = buildGaugeReadingSignature(gaugeReadings);
+            const hasGaugeData = Boolean(signature);
+            const shouldSave =
+              signature &&
+              signature !== lastGaugeFallbackSignature &&
+              String(process.env.PLC_GAUGE_SAVE_ON_FALLBACK_CHANGE || "true").toLowerCase() !== "false";
+
+            if (shouldSave) {
+              const saveResult = await saveGaugeToDB(machine, payload.partName, gaugeReadings, {
+                trigger: reason,
+                recordedAt: now,
+              });
+              if (!saveResult?.skipped) lastGaugeFallbackSignature = signature;
+            } else if (signature) {
+              lastGaugeFallbackSignature = signature;
+            }
+
+            const timeoutMessage = `Gauge PLC read timeout on ${cycleStartDevice || "cycle start"}/${cycleEndDevice || "cycle end"}; no register data received.`;
+            updateMachineState(machine, {
+              connected: hasGaugeData,
+              error: hasGaugeData ? null : timeoutMessage,
+              lastCycleAt: shouldSave ? now.toISOString() : machineState.get(machine.key || machine.ip)?.lastCycleAt,
+              latestReading: hasGaugeData
+                ? formatLiveReadingSnapshot(machine, payload.partName, gaugeReadings, payload.observedAt || now.toISOString())
+                : formatDbReading(null, { ...machine, connected: false, error: timeoutMessage }),
+              cycleTime: gaugeReadings.cycle_time ?? gaugeReadings.cycle_time_in_sec ?? null,
+              shotStatus: shouldSave
+                ? "Gauge fallback snapshot saved."
+                : hasGaugeData
+                  ? "Gauge fallback snapshot updated."
+                  : "Gauge PLC read timeout; waiting for register data.",
+            });
+
+            return payload;
+          };
 
           while (isMonitorCurrent()) {
             if (!monitoringRunning) { await sleep(gaugePollMs); continue; }
@@ -3744,6 +3886,15 @@ function startPlcMonitor(io) {
               if (isPlcReadTimeoutError(error)) {
                 await refreshSocketAfterTimeout(`gauge cycle bits ${cycleStartDevice}/${cycleEndDevice}`);
                 consecutiveReadFailures = 0;
+                if (Date.now() - lastGaugeFallbackReadAt >= Number(process.env.PLC_GAUGE_FALLBACK_READ_MS || 3000)) {
+                  lastGaugeFallbackReadAt = Date.now();
+                  await captureGaugeFallbackSnapshot("cycle-bit-timeout").catch((fallbackError) => {
+                    updateMachineState(machine, {
+                      connected: true,
+                      error: `Gauge fallback read failed after bit timeout: ${fallbackError.message}`,
+                    });
+                  });
+                }
                 await sleep(gaugePollMs);
                 continue;
               }
@@ -3773,6 +3924,8 @@ function startPlcMonitor(io) {
                 persist: false,
                 emit: true,
                 liveOnly: true,
+                skipBitParameters: true,
+                continueOnReadError: true,
                 cycleTiming: { startedAt: cycleStartAt, endedAt: cycleStartAt, durationSec: 0 },
               });
               lastGaugeLiveReadAt = Date.now();
@@ -3781,9 +3934,7 @@ function startPlcMonitor(io) {
                 error: null,
                 shotStatus: `Gauge cycle started on ${cycleStartDevice}; waiting for ${cycleEndDevice}.`,
                 latestReading: payload?.readings
-                  ? formatLiveReadingSnapshot(machine, payload.partName, Object.fromEntries(
-                      Object.entries(payload.readings).map(([name, reading]) => [name, reading?.value ?? reading])
-                    ), payload.observedAt)
+                  ? formatLiveReadingSnapshot(machine, payload.partName, flattenClientReadings(payload.readings), payload.observedAt)
                   : machineState.get(machine.key || machine.ip)?.latestReading,
               });
             }
@@ -3796,6 +3947,8 @@ function startPlcMonitor(io) {
                 persist: false,
                 emit: true,
                 liveOnly: true,
+                skipBitParameters: true,
+                continueOnReadError: true,
                 cycleTiming: { startedAt: cycleStartAt, endedAt: now, durationSec },
               }).catch((error) => {
                 if (isPlcReadTimeoutError(error)) return { timeout: true, error };
@@ -3813,9 +3966,7 @@ function startPlcMonitor(io) {
               } else if (payload) {
                 consecutiveReadFailures = 0;
                 lastGaugeLiveReadAt = Date.now();
-                const liveReadings = Object.fromEntries(
-                  Object.entries(payload.readings || {}).map(([name, reading]) => [name, reading?.value ?? reading])
-                );
+                const liveReadings = flattenClientReadings(payload.readings || {});
                 updateMachineState(machine, {
                   connected: true,
                   error: null,
@@ -3849,11 +4000,11 @@ function startPlcMonitor(io) {
                 persist: false,
                 emit: true,
                 liveOnly: true,
+                skipBitParameters: true,
+                continueOnReadError: true,
                 cycleTiming: { startedAt: cycleStartAt, endedAt: cycleEndAt, durationSec },
               });
-              const gaugeReadings = Object.fromEntries(
-                Object.entries(payload.readings || {}).map(([name, reading]) => [name, reading?.value ?? reading])
-              );
+              const gaugeReadings = flattenClientReadings(payload.readings || {});
               gaugeReadings.cycle_start = 1;
               gaugeReadings.cycle_complete = 1;
               gaugeReadings.cycle_start_time = cycleStartAt.toISOString();
@@ -3910,6 +4061,27 @@ function startPlcMonitor(io) {
         let lastSeenShotNumber = null;
         let lastLiveSavedShotNumber = null;
         let consecutiveReadFailures = 0;
+        const captureUbeCycleSnapshot = async (startedAt, endedAt, durationSec) => {
+          let snapshotSock = null;
+          try {
+            await sleep(UBE_CYCLE_END_DELAY_MS);
+            snapshotSock = await connectPLC(machine);
+            await readAll(machine, snapshotSock, {
+              persist: true,
+              emit: true,
+              cycleTiming: startedAt && durationSec !== null
+                ? { startedAt, endedAt, durationSec }
+                : null,
+            });
+          } catch (error) {
+            updateMachineState(machine, {
+              connected: true,
+              error: `Cycle snapshot failed: ${error.message}`,
+            });
+          } finally {
+            closeSocket(snapshotSock);
+          }
+        };
 
         while (isMonitorCurrent()) {
           if (!monitoringRunning) { await sleep(UBE_CYCLE_END_POLL_MS); continue; }
@@ -3966,22 +4138,8 @@ function startPlcMonitor(io) {
                 : `Cycle end is ON; duration ${durationSec ?? "-"} sec. Waiting before PLC snapshot.`,
             });
 
-            await sleep(UBE_CYCLE_END_DELAY_MS);
-            await readAll(machine, sock, {
-              persist: true,
-              emit: true,
-              cycleTiming: cycleStartAt && durationSec !== null
-                ? { startedAt: cycleStartAt, endedAt: cycleEndAt, durationSec }
-                : null,
-            }).catch(async (error) => {
-              if (isPlcReadTimeoutError(error)) {
-                await refreshSocketAfterTimeout("cycle snapshot");
-                return;
-              }
-              updateMachineState(machine, {
-                connected: true,
-                error: `Cycle snapshot failed: ${error.message}`,
-              });
+            captureUbeCycleSnapshot(cycleStartAt, cycleEndAt, durationSec).catch((error) => {
+              console.error(`PLC cycle snapshot task failed for ${machine.ip}:`, error.message);
             });
             cycleStartAt = null;
           } else if (loopStartedAt - lastLiveReadAt >= UBE_LIVE_READ_MS) {

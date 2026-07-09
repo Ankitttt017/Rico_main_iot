@@ -45,6 +45,7 @@ function normalizeConfiguredMachine(machine = {}, index = 0) {
     key: key || `machine-${index + 1}`,
     ip,
     port: Number(machine.port || machine.plc_port || 5002),
+    protocol: String(machine.protocol || machine.plc_protocol || "SLMP").trim().toUpperCase(),
     name,
     kind,
     registerConfig,
@@ -82,7 +83,7 @@ async function getConfiguredMachines(forceRefresh = false) {
 
     const { rows } = await db.query(`
       SELECT pc.id, pc.machine_id, pc.machine_key, pc.machine_name, pc.machine_type,
-             pc.ip_address, pc.port, pc.register_config_json
+             pc.ip_address, pc.port, pc.protocol, pc.register_config_json
       FROM dbo.plc_machine_configs pc WITH (NOLOCK)
       LEFT JOIN dbo.iot_machines m WITH (NOLOCK) ON m.id = pc.machine_id
       WHERE pc.is_active = 1
@@ -100,6 +101,7 @@ async function getConfiguredMachines(forceRefresh = false) {
         machine_type: row.machine_type,
         ip: row.ip_address,
         port: row.port,
+        protocol: row.protocol,
         register_config: (() => {
           try {
             return row.register_config_json ? JSON.parse(row.register_config_json) : null;
