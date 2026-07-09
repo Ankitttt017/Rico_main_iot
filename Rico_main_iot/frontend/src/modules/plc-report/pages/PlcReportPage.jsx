@@ -1354,6 +1354,9 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   const reportSearchTitle = (isLeakReport || isGaugeReport) ? "Scan Data" : "Shot No.";
   const reportSearchPlaceholder = (isLeakReport || isGaugeReport) ? "Enter scan data" : "Find shot number";
   const reportSearchSummaryLabel = (isLeakReport || isGaugeReport) ? "Scan search" : "Shot search";
+  const filterGridClass = isGaugeReport
+    ? "grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))] 2xl:[grid-template-columns:minmax(170px,1fr)_minmax(170px,1fr)_minmax(150px,0.9fr)_minmax(130px,0.8fr)_minmax(150px,0.9fr)_minmax(150px,0.9fr)_minmax(300px,1.8fr)_minmax(110px,0.6fr)_minmax(130px,0.7fr)] 2xl:items-end"
+    : "grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))] 2xl:[grid-template-columns:minmax(170px,1fr)_minmax(170px,1fr)_minmax(150px,0.9fr)_minmax(130px,0.8fr)_minmax(150px,0.9fr)_minmax(150px,0.9fr)_minmax(120px,0.7fr)_minmax(260px,1.6fr)_minmax(130px,0.8fr)] 2xl:items-end";
   const machineLabel = selectedMachine?.machine_name || selectedMachine?.plc_ip || "Machine";
   const reportTitle = `${machineLabel} ${isLeakReport ? "Scan" : "Production"} Report`;
   const reportSubtitle = isLeakReport ? "Leak test scan history" : "Machine production history";
@@ -1630,7 +1633,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
 
           {filtersOpen && (
             <div className="border-t border-slate-200 p-3 sm:p-4">
-              <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))] 2xl:[grid-template-columns:minmax(170px,1fr)_minmax(170px,1fr)_minmax(150px,0.9fr)_minmax(130px,0.8fr)_minmax(150px,0.9fr)_minmax(150px,0.9fr)_minmax(120px,0.7fr)_minmax(260px,1.6fr)_minmax(130px,0.8fr)] 2xl:items-end">
+              <div className={filterGridClass}>
                 <label className="block">
                   <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">Line</span>
                   <select
