@@ -455,10 +455,28 @@ function isExactShotNumberMatch(row = {}, searchValue = "") {
   return valuesMatchExactly(shotValue, searchValue);
 }
 
+function isExactScanDataMatch(row = {}, searchValue = "") {
+  const scanValue = getRowValue(
+    row,
+    "scan_data",
+    "part_qr_code",
+    "part_name",
+    "Part_QR_Code",
+    "Scan Data"
+  );
+  return valuesMatchExactly(scanValue, searchValue);
+}
+
 function filterExactShotRows(rows = [], shotSearch = "") {
   const searchValue = String(shotSearch || "").trim();
   if (!searchValue) return rows;
   return rows.filter((row) => isExactShotNumberMatch(row, searchValue));
+}
+
+function filterExactScanRows(rows = [], scanSearch = "") {
+  const searchValue = String(scanSearch || "").trim();
+  if (!searchValue) return rows;
+  return rows.filter((row) => isExactScanDataMatch(row, searchValue));
 }
 
 function getTimeParts(value) {
@@ -1230,9 +1248,11 @@ export default function PlcReportPage({ onLogout, currentUser }) {
         shotNumber: shotNumberFilter,
       });
       const nextRows = Array.isArray(response.data?.data) ? response.data.data : [];
-      const exactRows = selectedMachineIsLeak || selectedMachineIsGauge
+      const exactRows = selectedMachineIsGauge
         ? nextRows
-        : filterExactShotRows(nextRows, shotNumberFilter);
+        : selectedMachineIsLeak
+          ? filterExactScanRows(nextRows, shotNumberFilter)
+          : filterExactShotRows(nextRows, shotNumberFilter);
       setRows(sortRowsLatestFirst(exactRows));
       setServerKpis({
         ok: Number(response.data?.kpis?.ok || 0),
@@ -1256,9 +1276,11 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   }, [loadReport]);
 
   const filteredRows = useMemo(
-    () => selectedMachineIsLeak || selectedMachineIsGauge
+    () => selectedMachineIsGauge
       ? rows
-      : filterExactShotRows(rows, shotNumberFilter),
+      : selectedMachineIsLeak
+        ? filterExactScanRows(rows, shotNumberFilter)
+        : filterExactShotRows(rows, shotNumberFilter),
     [rows, selectedMachineIsGauge, selectedMachineIsLeak, shotNumberFilter]
   );
 
@@ -1384,9 +1406,11 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       shotNumber: shotNumberFilter,
     });
     const exportRows = Array.isArray(response.data?.data) ? response.data.data : [];
-    const exactRows = selectedMachineIsLeak || selectedMachineIsGauge
+    const exactRows = selectedMachineIsGauge
       ? exportRows
-      : filterExactShotRows(exportRows, shotNumberFilter);
+      : selectedMachineIsLeak
+        ? filterExactScanRows(exportRows, shotNumberFilter)
+        : filterExactShotRows(exportRows, shotNumberFilter);
     return sortRowsLatestFirst(exactRows);
   }, [activeResultFilterValue, fromDate, selectedMachine, selectedMachineIsGauge, selectedMachineIsLeak, shiftFilter, shotNumberFilter, toDate]);
 
@@ -1606,7 +1630,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
 
           {filtersOpen && (
             <div className="border-t border-slate-200 p-3 sm:p-4">
-              <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))] 2xl:[grid-template-columns:minmax(170px,1fr)_minmax(170px,1fr)_minmax(150px,0.9fr)_minmax(130px,0.8fr)_minmax(150px,0.9fr)_minmax(150px,0.9fr)_minmax(110px,0.7fr)_minmax(110px,0.7fr)_minmax(130px,0.8fr)_minmax(110px,0.7fr)] 2xl:items-end">
+              <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))] 2xl:[grid-template-columns:minmax(170px,1fr)_minmax(170px,1fr)_minmax(150px,0.9fr)_minmax(130px,0.8fr)_minmax(150px,0.9fr)_minmax(150px,0.9fr)_minmax(120px,0.7fr)_minmax(260px,1.6fr)_minmax(130px,0.8fr)] 2xl:items-end">
                 <label className="block">
                   <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">Line</span>
                   <select
@@ -1694,7 +1718,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                   <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">To</span>
                   <input type="date" value={draftToDate} onChange={handleToDateChange} className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" />
                 </label>
-                <label className="block">
+                <label className="block sm:col-span-2 2xl:col-span-1">
                   <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">{reportSearchTitle}</span>
                   <input
                     type="search"
@@ -1710,9 +1734,6 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                 <button type="button" onClick={applyReportFilters} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-blue-700 sm:self-end">
                   <CheckCircle2 className="h-4 w-4" />
                   Apply
-                </button>
-                <button type="button" onClick={clearReportFilters} className="inline-flex h-10 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 text-sm font-black text-slate-700 shadow-sm transition hover:bg-slate-50 sm:self-end">
-                  Clear
                 </button>
                 <button type="button" onClick={downloadExcel} disabled={exporting} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-wait disabled:opacity-60 sm:self-end">
                   <Download className="h-4 w-4" />
@@ -1779,9 +1800,11 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                 {!reportRows.length && !loading && (
                   <tr>
                     <td colSpan={columns.length || 1} className="px-4 py-10 text-center text-sm font-bold text-slate-500">
-                      {shotNumberFilter && !isLeakReport && !isGaugeReport
-                        ? `Shot number ${shotNumberFilter} not found for selected date range`
-                        : "No records found for selected date range"}
+                      {shotNumberFilter && isLeakReport
+                        ? `Scan data ${shotNumberFilter} not found for selected date range`
+                        : shotNumberFilter && !isGaugeReport
+                          ? `Shot number ${shotNumberFilter} not found for selected date range`
+                          : "No records found for selected date range"}
                     </td>
                   </tr>
                 )}

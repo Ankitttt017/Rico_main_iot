@@ -4,8 +4,22 @@ const db = require("../../../config/db");
 
 const DEFAULT_MACHINES = [];
 const CONFIG_CACHE_MS = Number(process.env.PLC_MACHINE_CONFIG_CACHE_MS || 60000);
+const UBE_MACHINE_IPS = new Set(
+  String(process.env.PLC_UBE_MACHINE_IPS || "192.168.117.200,192.168.117.201,192.168.117.202,192.168.117.203")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+);
 let cachedMachines = null;
 let cachedAt = 0;
+
+function normalizeMachineKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9.-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
 
 function normalizeConfiguredMachine(machine = {}, index = 0) {
   const ip = String(machine.ip || machine.ip_address || "").trim();
@@ -30,14 +44,14 @@ function normalizeConfiguredMachine(machine = {}, index = 0) {
       ? "gauge"
       : machineText.includes("leak")
         ? "leaktest"
-        : rawKind;
+        : machineText.includes("ube") || machineText.includes("ueb") || UBE_MACHINE_IPS.has(ip)
+          ? "ube"
+          : rawKind;
   const defaultPrefix = kind === "generic" ? "PLC Machine" : kind.toUpperCase();
   const name = String(machine.name || machine.machine_name || ip || `${defaultPrefix}-${index + 1}`).trim();
-  const key = String(machine.key || machine.machine_key || machine.machine_code || name || ip)
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9.-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  const key = kind === "ube" && ip
+    ? ip
+    : normalizeMachineKey(machine.key || machine.machine_key || machine.machine_code || name || ip);
 
   return {
     id: machine.id || machine.plc_config_id || null,

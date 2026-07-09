@@ -63,6 +63,7 @@ const REQUIRED_INDEXES = [
   "IX_PlcCycleReadings_machine_shot_date_number",
   "IX_PlcCycleReadings_ip_shot_date_number",
   "IX_PlcConnectionEvents_started_at_desc",
+  "IX_plc_machine_configs_ip_address",
   "IX_plc_machine_readings_machine_recorded_desc",
   "IX_plc_machine_reading_values_reading_parameter",
   "IX_Leaktest_ip_cycle_end_desc",

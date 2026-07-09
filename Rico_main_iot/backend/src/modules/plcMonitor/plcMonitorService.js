@@ -69,6 +69,12 @@ const latestReadingsCache = {
 };
 const PLC_LATEST_DB_CACHE_MS = Math.max(500, Number(process.env.PLC_LATEST_DB_CACHE_MS || 3000));
 const PLC_LATEST_DB_TIMEOUT_MS = Math.max(500, Number(process.env.PLC_LATEST_DB_TIMEOUT_MS || 2500));
+const UBE_MACHINE_IPS = new Set(
+  String(process.env.PLC_UBE_MACHINE_IPS || "192.168.117.200,192.168.117.201,192.168.117.202,192.168.117.203")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+);
 const STOPPAGE_READING_KEYS = new Set([
   "MINOR STOPPAGE sec.",
   "minor_stoppage",
@@ -250,6 +256,13 @@ function isLeakTestMachine(machine) {
   return getMachineTypeName(machine) === "leaktest";
 }
 
+function getCanonicalMachineKey(machine = {}) {
+  const ip = String(machine.ip || machine.plc_ip || machine.ip_address || "").trim();
+  const rawKey = String(machine.key || machine.machine_key || "").trim();
+  if (ip && (isUbeMachine(machine) || UBE_MACHINE_IPS.has(ip))) return ip;
+  return rawKey || ip;
+}
+
 function getMachineTypeName(machine) {
   const rawKind = String(machine?.kind || machine?.machine_type || machine?.machineType || "").trim().toLowerCase();
   if (rawKind && rawKind !== "ube" && rawKind !== "generic") return rawKind;
@@ -318,7 +331,7 @@ function isReportSaveEnabledForMachine(machine) {
  * so frontend can filter easily
  */
 function buildEmitPayload(machine, data) {
-  const machineKey = machine.key || machine.ip;
+  const machineKey = getCanonicalMachineKey(machine);
   const machineType = getMachineTypeName(machine);
   return {
     ...data,
@@ -1067,10 +1080,10 @@ function formatLiveReadingSnapshot(machine, partName, readings = {}, timestamp =
   return formatDbReading(
     {
       ...readings,
-      id: `live-${machine.key || machine.ip}`,
+      id: `live-${getCanonicalMachineKey(machine)}`,
       recorded_at: timestamp || readings.shot_datetime || null,
       created_at: new Date().toISOString(),
-      machine_key: machine.key || machine.ip,
+      machine_key: getCanonicalMachineKey(machine),
       machine_name: machine.name,
       plc_ip: machine.ip,
       plc_port: machine.port,
@@ -1658,7 +1671,7 @@ function buildConnectionEventsExcelXml(rows, meta = {}) {
 
 async function getLatestReadingsForMachines(machineSnapshots = getMachines()) {
   const cacheKey = machineSnapshots
-    .map((machine) => `${machine.key || machine.ip || ""}:${machine.ip || ""}:${machine.kind || ""}`)
+    .map((machine) => `${getCanonicalMachineKey(machine) || ""}:${machine.ip || ""}:${machine.kind || ""}`)
     .join("|");
   if (
     latestReadingsCache.data &&
@@ -1704,7 +1717,7 @@ async function getLatestReadingsForMachinesUnlocked(machineSnapshots = getMachin
 
   if (ubeMachines.length) {
     for (const machine of ubeMachines) {
-      const machineKey = machine.key || machine.ip;
+      const machineKey = getCanonicalMachineKey(machine);
       const machineIp = machine.ip || machine.key;
       const { rows } = await db.query(
         `SELECT TOP 1 *
@@ -1775,7 +1788,7 @@ async function getLatestReadingsForMachinesUnlocked(machineSnapshots = getMachin
 
   if (gaugeMachines.length) {
     for (const machine of gaugeMachines) {
-      const machineKey = machine.key || machine.ip;
+      const machineKey = getCanonicalMachineKey(machine);
       const { rows } = await db.query(
         `SELECT TOP 1
           [Id] AS id,
@@ -1805,7 +1818,7 @@ async function getLatestReadingsForMachinesUnlocked(machineSnapshots = getMachin
   const results = [];
   for (const machine of machines) {
     const dbReading = formatDbReading(
-      rowByKey.get(machine.key || machine.ip) || rowByKey.get(machine.ip),
+      rowByKey.get(getCanonicalMachineKey(machine)) || rowByKey.get(machine.ip),
       machine
     );
     results.push(chooseFreshestReading(dbReading, machine));
@@ -1947,8 +1960,8 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
     if (from) { filters.push("CAST(Cycle_End_Time AS DATETIME2(3)) >= ?"); values.push(from); }
     if (to) { filters.push("CAST(Cycle_End_Time AS DATETIME2(3)) < DATEADD(day, 1, CAST(? AS date))"); values.push(to); }
     if (shotNumber) {
-      filters.push("LTRIM(RTRIM([Part_QR_Code])) LIKE ?");
-      values.push(`%${String(shotNumber).trim()}%`);
+      filters.push("LTRIM(RTRIM([Part_QR_Code])) = ?");
+      values.push(String(shotNumber).trim());
     }
     const leakResultMap = { ok: "OK", ng: "NG" };
     if (leakResultMap[shotResult]) {
@@ -2207,7 +2220,7 @@ async function updatePreviousMinorStoppageMachine() {
 }
 
 function buildUbeTimestampSaveKey(machine, readings = {}) {
-  const machineKey = machine.key || machine.ip;
+  const machineKey = getCanonicalMachineKey(machine);
   const shotNumber = normalizeReadingForDB("shot_number", readings.shot_number ?? readings["SHOT NO."]);
   const shotDate = getReadingProductionDate(readings) || normalizeReadingForDB("shot_date", readings.shot_date);
   if (shotNumber !== null && shotNumber !== undefined && shotDate) {
@@ -2264,7 +2277,7 @@ function getRegisterMetadata(machine, name) {
 }
 
 async function persistGenericMachineReading(machine, partName, readings = {}, eventTime = null) {
-  const machineKey = machine.key || machine.ip;
+  const machineKey = getCanonicalMachineKey(machine);
   if (!machineKey) return { skipped: true, reason: "missing-machine-key" };
   const cleanReadings = withoutStoppageEventFields(readings);
 
@@ -2345,22 +2358,24 @@ async function saveToDBUnlocked(machine, partName, readings) {
   }
 
   if (shotNumber !== null && shotNumber !== undefined && shotDate) {
+    const machineKey = getCanonicalMachineKey(machine);
     const { rows: duplicateShotRows } = await db.query(
       `SELECT TOP 1 id FROM ${TABLE}
        WHERE (machine_key = ? OR plc_ip = ?)
          AND shot_date = ?
          AND shot_number = ?
        ORDER BY recorded_at DESC, id DESC`,
-      [machine.key || machine.ip, machine.ip, shotDate, shotNumber]
+      [machineKey, machine.ip, shotDate, shotNumber]
     );
     if (duplicateShotRows.length) return { skipped: true, reason: "duplicate-shot-number" };
   }
 
   if (hasPlcRecordedAt && (shotNumber === null || shotNumber === undefined || !shotDate)) {
+    const machineKey = getCanonicalMachineKey(machine);
     const duplicateFilters = [
       "(machine_key = ? OR plc_ip = ?)",
     ];
-    const duplicateValues = [machine.key || machine.ip, machine.ip];
+    const duplicateValues = [machineKey, machine.ip];
 
     duplicateFilters.push("ABS(DATEDIFF(second, recorded_at, ?)) <= ?");
     duplicateValues.push(plcRecordedAt, Number(process.env.PLC_DUPLICATE_SHOT_WINDOW_SEC || 15));
@@ -2376,7 +2391,7 @@ async function saveToDBUnlocked(machine, partName, readings) {
 
   const values = [
     plcRecordedAt,
-    machine.key || machine.ip,
+    getCanonicalMachineKey(machine),
     machine.name,
     machine.ip,
     machine.port,
@@ -2534,7 +2549,7 @@ async function saveGaugeToDB(machine, partName, readings, options = {}) {
          AND [Part_Scan_Data] = ?
          AND [Recorded_At] >= DATEADD(second, -?, SYSUTCDATETIME())
        ORDER BY [Recorded_At] DESC, [Id] DESC`,
-      [machine.key || machine.ip, machine.ip, partScanData, duplicateWindowSec]
+      [getCanonicalMachineKey(machine), machine.ip, partScanData, duplicateWindowSec]
     );
     if (rows.length) {
       return { skipped: true, reason: "duplicate-gauge-scan", partScanData };
@@ -2549,7 +2564,7 @@ async function saveGaugeToDB(machine, partName, readings, options = {}) {
     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       utcDateTimeString(options.recordedAt || readings.cycle_end_time || new Date()),
-      machine.key || machine.ip,
+      getCanonicalMachineKey(machine),
       machine.name,
       machine.ip,
       machine.port,
@@ -2638,7 +2653,7 @@ function ensureTableOnce() {
 function createInitialMachineState(machines) {
   return new Map(
     machines.map((machine) => [
-      machine.key || machine.ip,
+      getCanonicalMachineKey(machine),
       {
         ...machine,
         connected: false,
@@ -2719,7 +2734,7 @@ function startPlcMonitor(io) {
 
     // Per-machine specific status event â€” frontend can listen to individual machine
     list.forEach((m) => {
-      io.emit(`machine_status:${m.key || m.ip}`, m);
+      io.emit(`machine_status:${getCanonicalMachineKey(m)}`, m);
     });
 
     // Generic event for full list â€” backward compat
@@ -2732,7 +2747,7 @@ function startPlcMonitor(io) {
   };
 
   const updateMachineState = (machine, patch) => {
-    const key = machine.key || machine.ip;
+    const key = getCanonicalMachineKey(machine);
     const current = machineState.get(key) || { ...machine };
     machineState.set(key, {
       ...current,
@@ -2745,7 +2760,7 @@ function startPlcMonitor(io) {
   };
 
   const recordConnectionChange = async (machine, connected, reason = "") => {
-    const key = machine.key || machine.ip;
+    const key = getCanonicalMachineKey(machine);
     const existing = openConnectionEvents.get(key);
 
     try {
@@ -2782,7 +2797,7 @@ function startPlcMonitor(io) {
   };
 
   const buildUbeSaveKey = (machine, readings = {}) => {
-    const machineKey = machine.key || machine.ip;
+    const machineKey = getCanonicalMachineKey(machine);
     const shotNumber = readings.shot_number ?? readings["SHOT NO."] ?? "no-shot";
     const shotDateTime = readings.shot_datetime || "missing-plc-shot-datetime";
     return `${machineKey}:${shotNumber}:${shotDateTime}`;
@@ -2868,7 +2883,7 @@ function startPlcMonitor(io) {
   let reportSerial = 0;
 
   const updateBitDuration = (machine, name, value, now) => {
-    const key = `${machine.key || machine.ip}:${name}`;
+    const key = `${getCanonicalMachineKey(machine)}:${name}`;
     const current = bitOnState.get(key) || { onSince: null, lastDuration: 0 };
 
     if (Number(value) === 1) {
@@ -2902,7 +2917,7 @@ function startPlcMonitor(io) {
           (item) => (item.key || item.ip) === config.key || item.ip === config.ip
         ) || machines[0];
       const nextConfig = {
-        key: machine.key || machine.ip,
+        key: getCanonicalMachineKey(machine),
         ip: machine.ip,
         port: Number(config.port || machine.port),
         kind: getMachineTypeName(machine),
@@ -3059,7 +3074,7 @@ function startPlcMonitor(io) {
     STOPPAGE_READING_KEYS.forEach((key) => delete readings[key]);
 
     // â”€â”€ machineKey + machineType always in payload â”€â”€
-    const machineKey = machine.key || machine.ip;
+    const machineKey = getCanonicalMachineKey(machine);
     const machineType = getMachineTypeName(machine);
 
     const payload = {
@@ -3161,7 +3176,7 @@ function startPlcMonitor(io) {
       return { ...lastPayload, skipped: true };
     }
 
-    const machineKey = machine.key || machine.ip;
+    const machineKey = getCanonicalMachineKey(machine);
     const machineType = "ube";
 
     const emitData = {
@@ -3215,7 +3230,7 @@ function startPlcMonitor(io) {
     const rawCache = new Map();
     const now = cycleEndAt instanceof Date ? cycleEndAt : new Date(cycleEndAt);
     const timestamp = systemDateTimeString(now, { iso: true });
-    const machineKey = machine.key || machine.ip;
+    const machineKey = getCanonicalMachineKey(machine);
     const machineType = "leaktest";
     const currentState = machineState.get(machineKey) || {};
     const readParameters = normalizeLeakReadParameters(machine.registerConfig);
@@ -3398,7 +3413,7 @@ function startPlcMonitor(io) {
     const finalReadings = Object.fromEntries(
       Object.entries(lastPayload.readings || {}).map(([name, r]) => [name, r?.value])
     );
-    const machineKey = machine.key || machine.ip;
+    const machineKey = getCanonicalMachineKey(machine);
     const machineType = "leaktest";
     const signature = buildLeakSignature(finalReadings);
     const previousSnapshot = lastLeakSnapshots.get(machineKey);
@@ -3493,7 +3508,7 @@ function startPlcMonitor(io) {
         { iso: true }
       ),
     };
-    const machineKey = machine.key || machine.ip;
+    const machineKey = getCanonicalMachineKey(machine);
     const machineType = "leaktest";
     const signature = buildLeakSignature(readings);
     const previousSaved = lastLeakSnapshots.get(machineKey);
@@ -3567,7 +3582,7 @@ function startPlcMonitor(io) {
 
   const monitorTokens = new Map();
   const monitorMachine = async (machine, token) => {
-    const machineKey = machine.key || machine.ip;
+    const machineKey = getCanonicalMachineKey(machine);
     const machineLabel = `[${getMachineTypeName(machine).toUpperCase()}] ${machine.name} (${machine.ip})`;
     let reconnectAttempt = 0;
     const isMonitorCurrent = () => monitorTokens.get(machineKey) === token;
@@ -3857,7 +3872,7 @@ function startPlcMonitor(io) {
             updateMachineState(machine, {
               connected: hasGaugeData,
               error: hasGaugeData ? null : timeoutMessage,
-              lastCycleAt: shouldSave ? now.toISOString() : machineState.get(machine.key || machine.ip)?.lastCycleAt,
+              lastCycleAt: shouldSave ? now.toISOString() : machineState.get(getCanonicalMachineKey(machine))?.lastCycleAt,
               latestReading: hasGaugeData
                 ? formatLiveReadingSnapshot(machine, payload.partName, gaugeReadings, payload.observedAt || now.toISOString())
                 : formatDbReading(null, { ...machine, connected: false, error: timeoutMessage }),
@@ -3935,7 +3950,7 @@ function startPlcMonitor(io) {
                 shotStatus: `Gauge cycle started on ${cycleStartDevice}; waiting for ${cycleEndDevice}.`,
                 latestReading: payload?.readings
                   ? formatLiveReadingSnapshot(machine, payload.partName, flattenClientReadings(payload.readings), payload.observedAt)
-                  : machineState.get(machine.key || machine.ip)?.latestReading,
+                  : machineState.get(getCanonicalMachineKey(machine))?.latestReading,
               });
             }
 
@@ -4025,7 +4040,7 @@ function startPlcMonitor(io) {
                   timestamp: cycleEndAt.toISOString(),
                   observedAt: cycleEndAt.toISOString(),
                 };
-                io.emit(`plc_data:${machine.key || machine.ip}`, completedPayload);
+                io.emit(`plc_data:${getCanonicalMachineKey(machine)}`, completedPayload);
                 io.emit("plc_data", completedPayload);
                 io.emit("cycle_complete", completedPayload);
                 updateMachineState(machine, {
@@ -4251,7 +4266,7 @@ function startPlcMonitor(io) {
   const startMachineMonitors = async () => {
     for (let i = 0; i < machines.length; i++) {
       const machine = machines[i];
-      const machineKey = machine.key || machine.ip;
+      const machineKey = getCanonicalMachineKey(machine);
       if (monitorTokens.has(machineKey)) continue;
       const token = Symbol(machineKey);
       monitorTokens.set(machineKey, token);
@@ -4264,7 +4279,7 @@ function startPlcMonitor(io) {
 
   const refreshConfiguredMachines = async () => {
     const configuredMachines = await getConfiguredMachines(true);
-    const configuredByKey = new Map(configuredMachines.map((machine) => [machine.key || machine.ip, machine]));
+    const configuredByKey = new Map(configuredMachines.map((machine) => [getCanonicalMachineKey(machine), machine]));
     let changed = false;
 
     for (const [machineKey] of Array.from(monitorTokens.entries())) {
@@ -4277,7 +4292,7 @@ function startPlcMonitor(io) {
     machines = configuredMachines;
 
     configuredMachines.forEach((machine) => {
-      const machineKey = machine.key || machine.ip;
+      const machineKey = getCanonicalMachineKey(machine);
       if (!machineKey) return;
       const currentState = machineState.get(machineKey);
       const configChanged = currentState && (
@@ -4391,7 +4406,7 @@ function startPlcMonitor(io) {
     const targetId = args.ip || "";
     const liveMachines = Array.from(machineState.values()).filter((machine) => {
       if (!machine.latestReading?.has_data) return false;
-      const key = machine.key || machine.ip;
+      const key = getCanonicalMachineKey(machine);
       return !targetId || key === targetId || machine.ip === targetId;
     });
     if (!liveMachines.length) return rows;
@@ -4401,7 +4416,7 @@ function startPlcMonitor(io) {
       const liveReading = formatDbRowForClient(machine.latestReading);
       if (!isLiveReadingInHistoryRange(liveReading, args)) continue;
 
-      const machineKey = machine.key || machine.ip;
+      const machineKey = getCanonicalMachineKey(machine);
       const liveShot = getComparableShotNumber(liveReading);
       let replaced = false;
 

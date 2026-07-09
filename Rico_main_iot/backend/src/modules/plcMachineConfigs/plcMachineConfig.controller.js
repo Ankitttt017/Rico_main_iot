@@ -4,6 +4,12 @@ const net = require("net");
 const db = require("../../config/db");
 
 let schemaReadyPromise = null;
+const UBE_MACHINE_IPS = new Set(
+  String(process.env.PLC_UBE_MACHINE_IPS || "192.168.117.200,192.168.117.201,192.168.117.202,192.168.117.203")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+);
 
 function cleanText(value) {
   const text = String(value ?? "").trim();
@@ -56,6 +62,13 @@ function machineKey(value) {
     .replace(/^-+|-+$/g, "");
 }
 
+function canonicalMachineKeyFor({ ip, type, inputKey, name }) {
+  const cleanIp = cleanText(ip);
+  const normalizedType = normalizeMachineType(type);
+  if (cleanIp && (normalizedType === "ube" || UBE_MACHINE_IPS.has(cleanIp))) return cleanIp;
+  return machineKey(inputKey || name || cleanIp);
+}
+
 function normalizeMachineType(value) {
   return String(value || "generic")
     .trim()
@@ -96,6 +109,7 @@ function inferMachineType(input = {}) {
     return "gauge";
   }
   if (haystack.includes("leak")) return "leaktest";
+  if (haystack.includes("ube") || haystack.includes("ueb")) return "ube";
   if (["gauge", "leaktest", "ube"].includes(explicit)) return explicit;
   return explicit || "generic";
 }
@@ -167,6 +181,44 @@ async function ensureSchema() {
         BEGIN
           ALTER TABLE dbo.plc_machine_configs ADD plant_code NVARCHAR(40) NULL;
         END;
+
+        UPDATE pc
+        SET machine_key = pc.ip_address,
+            machine_type = 'ube',
+            updated_at = SYSUTCDATETIME()
+        FROM dbo.plc_machine_configs pc
+        WHERE pc.ip_address IN ('192.168.117.200', '192.168.117.201', '192.168.117.202', '192.168.117.203')
+          AND NOT EXISTS (
+            SELECT 1
+            FROM dbo.plc_machine_configs other
+            WHERE other.id <> pc.id
+              AND other.machine_key = pc.ip_address
+          );
+
+        IF OBJECT_ID(N'dbo.PlcCycleReadings', N'U') IS NOT NULL
+          UPDATE dbo.PlcCycleReadings
+          SET machine_key = plc_ip
+          WHERE plc_ip IN ('192.168.117.200', '192.168.117.201', '192.168.117.202', '192.168.117.203');
+
+        IF OBJECT_ID(N'dbo.PlcConnectionEvents', N'U') IS NOT NULL
+          UPDATE dbo.PlcConnectionEvents
+          SET machine_key = plc_ip
+          WHERE plc_ip IN ('192.168.117.200', '192.168.117.201', '192.168.117.202', '192.168.117.203');
+
+        IF OBJECT_ID(N'dbo.plc_machine_readings', N'U') IS NOT NULL
+          UPDATE dbo.plc_machine_readings
+          SET machine_key = plc_ip
+          WHERE plc_ip IN ('192.168.117.200', '192.168.117.201', '192.168.117.202', '192.168.117.203');
+      `);
+      await db.run(`
+        IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM sys.indexes
+             WHERE [name] = N'IX_plc_machine_configs_ip_address'
+               AND object_id = OBJECT_ID(N'dbo.plc_machine_configs')
+           )
+          CREATE INDEX IX_plc_machine_configs_ip_address
+            ON dbo.plc_machine_configs (ip_address);
       `);
       await db.run(`
         IF OBJECT_ID(N'dbo.plc_machine_readings', N'U') IS NULL
@@ -302,11 +354,27 @@ async function saveMachineRecord(input = {}) {
   if (!name) throw new Error("Machine name is required");
   const ip = cleanText(input.ip_address || input.ip);
   if (!ip || !isValidIpv4(ip)) throw new Error("Valid PLC IP address is required");
-  const id = cleanInt(input.id);
-  const key = await uniqueMachineKey(input.machine_key || name, id);
-  if (!key) throw new Error("Machine key is required");
+  let id = cleanInt(input.id);
   const registerConfig = normalizeRegisters(input.register_config) || [];
-  const type = inferMachineType({ ...input, register_config: registerConfig });
+  const type = inferMachineType({ ...input, ip_address: ip, register_config: registerConfig });
+  const existingByIp = await db.query(
+    "SELECT TOP 1 id FROM dbo.plc_machine_configs WHERE ip_address = ? AND (? IS NULL OR id <> ?) ORDER BY id",
+    [ip, id, id]
+  );
+  if (existingByIp.rows.length) {
+    if (id) throw new Error(`PLC IP ${ip} is already assigned to another machine config.`);
+    id = existingByIp.rows[0].id;
+  }
+  const stableBaseKey = canonicalMachineKeyFor({
+    ip,
+    type,
+    inputKey: input.machine_key,
+    name,
+  });
+  const key = type === "ube" || UBE_MACHINE_IPS.has(ip)
+    ? stableBaseKey
+    : await uniqueMachineKey(stableBaseKey, id);
+  if (!key) throw new Error("Machine key is required");
   const payload = {
     machine_key: key,
     machine_id: cleanInt(input.machine_id),

@@ -1017,6 +1017,46 @@ BEGIN
     );
 END;
 
+IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
+BEGIN
+  UPDATE pc
+  SET machine_key = pc.ip_address,
+      machine_type = N'ube',
+      updated_at = SYSUTCDATETIME()
+  FROM dbo.plc_machine_configs pc
+  WHERE pc.ip_address IN ('192.168.117.200', '192.168.117.201', '192.168.117.202', '192.168.117.203')
+    AND NOT EXISTS (
+      SELECT 1
+      FROM dbo.plc_machine_configs other
+      WHERE other.id <> pc.id
+        AND other.machine_key = pc.ip_address
+    );
+END;
+
+IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
+   AND NOT EXISTS (
+     SELECT 1 FROM sys.indexes
+     WHERE [name] = N'IX_plc_machine_configs_ip_address'
+       AND object_id = OBJECT_ID(N'dbo.plc_machine_configs')
+   )
+  CREATE INDEX IX_plc_machine_configs_ip_address
+    ON dbo.plc_machine_configs (ip_address);
+
+IF OBJECT_ID(N'dbo.PlcCycleReadings', N'U') IS NOT NULL
+  UPDATE dbo.PlcCycleReadings
+  SET machine_key = plc_ip
+  WHERE plc_ip IN ('192.168.117.200', '192.168.117.201', '192.168.117.202', '192.168.117.203');
+
+IF OBJECT_ID(N'dbo.PlcConnectionEvents', N'U') IS NOT NULL
+  UPDATE dbo.PlcConnectionEvents
+  SET machine_key = plc_ip
+  WHERE plc_ip IN ('192.168.117.200', '192.168.117.201', '192.168.117.202', '192.168.117.203');
+
+IF OBJECT_ID(N'dbo.plc_machine_readings', N'U') IS NOT NULL
+  UPDATE dbo.plc_machine_readings
+  SET machine_key = plc_ip
+  WHERE plc_ip IN ('192.168.117.200', '192.168.117.201', '192.168.117.202', '192.168.117.203');
+
 EXEC(N'CREATE OR ALTER TRIGGER dbo.trg_PlcCycleReadings_ShotDate
 ON dbo.PlcCycleReadings
 AFTER INSERT, UPDATE
