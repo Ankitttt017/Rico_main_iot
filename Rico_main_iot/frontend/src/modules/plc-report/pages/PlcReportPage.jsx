@@ -433,6 +433,34 @@ function getRowValue(row = {}, ...keys) {
   return null;
 }
 
+function valuesMatchExactly(left, right) {
+  const leftText = String(left ?? "").trim();
+  const rightText = String(right ?? "").trim();
+  if (!leftText || !rightText) return false;
+  if (leftText === rightText) return true;
+  if (/^\d+$/.test(leftText) && /^\d+$/.test(rightText)) {
+    return BigInt(leftText) === BigInt(rightText);
+  }
+  return false;
+}
+
+function isExactShotNumberMatch(row = {}, searchValue = "") {
+  const shotValue = getRowValue(
+    row,
+    "shot_number",
+    "SHOT NO.",
+    "Shot Number",
+    "machine_shot_number"
+  );
+  return valuesMatchExactly(shotValue, searchValue);
+}
+
+function filterExactShotRows(rows = [], shotSearch = "") {
+  const searchValue = String(shotSearch || "").trim();
+  if (!searchValue) return rows;
+  return rows.filter((row) => isExactShotNumberMatch(row, searchValue));
+}
+
 function getTimeParts(value) {
   if (!value) return null;
   const text = String(value).trim();
@@ -1202,7 +1230,10 @@ export default function PlcReportPage({ onLogout, currentUser }) {
         shotNumber: shotNumberFilter,
       });
       const nextRows = Array.isArray(response.data?.data) ? response.data.data : [];
-      setRows(sortRowsLatestFirst(nextRows));
+      const exactRows = selectedMachineIsLeak || selectedMachineIsGauge
+        ? nextRows
+        : filterExactShotRows(nextRows, shotNumberFilter);
+      setRows(sortRowsLatestFirst(exactRows));
       setServerKpis({
         ok: Number(response.data?.kpis?.ok || 0),
         warm: Number(response.data?.kpis?.warm || 0),
@@ -1214,7 +1245,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [activeResultFilterValue, fromDate, reportMachinesReady, selectedMachine, shiftFilter, shotNumberFilter, toDate]);
+  }, [activeResultFilterValue, fromDate, reportMachinesReady, selectedMachine, selectedMachineIsGauge, selectedMachineIsLeak, shiftFilter, shotNumberFilter, toDate]);
 
   useEffect(() => {
     loadReport();
@@ -1224,7 +1255,12 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     return () => window.clearInterval(timer);
   }, [loadReport]);
 
-  const filteredRows = useMemo(() => rows, [rows]);
+  const filteredRows = useMemo(
+    () => selectedMachineIsLeak || selectedMachineIsGauge
+      ? rows
+      : filterExactShotRows(rows, shotNumberFilter),
+    [rows, selectedMachineIsGauge, selectedMachineIsLeak, shotNumberFilter]
+  );
 
   const hideLeakTestFields = useMemo(
     () => isLeakTestMachine(selectedMachine, filteredRows),
@@ -1348,8 +1384,11 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       shotNumber: shotNumberFilter,
     });
     const exportRows = Array.isArray(response.data?.data) ? response.data.data : [];
-    return sortRowsLatestFirst(exportRows);
-  }, [activeResultFilterValue, fromDate, selectedMachine, shiftFilter, shotNumberFilter, toDate]);
+    const exactRows = selectedMachineIsLeak || selectedMachineIsGauge
+      ? exportRows
+      : filterExactShotRows(exportRows, shotNumberFilter);
+    return sortRowsLatestFirst(exactRows);
+  }, [activeResultFilterValue, fromDate, selectedMachine, selectedMachineIsGauge, selectedMachineIsLeak, shiftFilter, shotNumberFilter, toDate]);
 
   const downloadPdf = async () => {
     setExporting(true);
@@ -1740,7 +1779,9 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                 {!reportRows.length && !loading && (
                   <tr>
                     <td colSpan={columns.length || 1} className="px-4 py-10 text-center text-sm font-bold text-slate-500">
-                      No records found for selected date range
+                      {shotNumberFilter && !isLeakReport && !isGaugeReport
+                        ? `Shot number ${shotNumberFilter} not found for selected date range`
+                        : "No records found for selected date range"}
                     </td>
                   </tr>
                 )}
