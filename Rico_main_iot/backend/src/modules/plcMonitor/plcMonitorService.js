@@ -283,6 +283,11 @@ function getMachineTypeName(machine) {
   return rawKind || "ube";
 }
 
+const UBE_REGISTER_OVERRIDES_BY_NAME = new Map([
+  [normalizeRegisterName("CLAMP FORCE (%)"), { device: "D6918", type: "decimal", scale: 0.1 }],
+  [normalizeRegisterName("CLAMP TONNAGE (T)"), { device: "D6920", type: "decimal", scale: 0.01 }],
+]);
+
 function normalizeUbeReadParameter(parameter = {}) {
   const normalizedName = normalizeRegisterName(parameter.name || parameter.parameter || parameter.label);
   if (
@@ -291,6 +296,14 @@ function normalizeUbeReadParameter(parameter = {}) {
     normalizedName.includes("minor_stop")
   ) {
     return null;
+  }
+  const override = UBE_REGISTER_OVERRIDES_BY_NAME.get(normalizedName);
+  if (override) {
+    return {
+      ...parameter,
+      ...override,
+      stringDevice: "",
+    };
   }
   return parameter;
 }
@@ -303,9 +316,9 @@ function mergeUbeReadParameters(configuredParameters = []) {
     if (!parameter) return;
     const normalized = normalizeUbeReadParameter(parameter);
     if (!normalized) return;
-    const deviceKey = String(normalized.device || normalized.stringDevice || "").trim().toUpperCase();
     const nameKey = normalizeRegisterName(normalized.name || normalized.parameter || normalized.label);
-    const key = deviceKey || nameKey;
+    const deviceKey = String(normalized.device || normalized.stringDevice || "").trim().toUpperCase();
+    const key = nameKey || deviceKey;
     if (key && seen.has(key)) return;
     if (key) seen.add(key);
     merged.push(normalized);

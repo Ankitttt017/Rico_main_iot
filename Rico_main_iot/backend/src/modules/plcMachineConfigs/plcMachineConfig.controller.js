@@ -2,6 +2,10 @@
 
 const net = require("net");
 const db = require("../../config/db");
+const {
+  EXCEL_PARAMETERS,
+  LEAK_TEST_PARAMETERS,
+} = require("../plcMonitor/config/registerConfig");
 
 let schemaReadyPromise = null;
 const UBE_MACHINE_IPS = new Set(
@@ -76,6 +80,30 @@ function normalizeMachineType(value) {
     .replace(/[^a-z0-9_-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 40) || "generic";
+}
+
+function normalizeRegisterName(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+const UBE_REGISTER_OVERRIDES_BY_NAME = new Map([
+  [normalizeRegisterName("CLAMP FORCE (%)"), { device: "D6918", stringDevice: "", type: "decimal", scale: 0.1 }],
+  [normalizeRegisterName("CLAMP TONNAGE (T)"), { device: "D6920", stringDevice: "", type: "decimal", scale: 0.01 }],
+]);
+
+function normalizeUbeRegister(register = {}) {
+  const override = UBE_REGISTER_OVERRIDES_BY_NAME.get(normalizeRegisterName(register.name));
+  return override ? { ...register, ...override } : register;
+}
+
+function normalizeRegistersForMachineType(registers = [], type = "generic") {
+  if (!Array.isArray(registers)) return registers;
+  if (normalizeMachineType(type) !== "ube") return registers;
+  return registers.map(normalizeUbeRegister);
 }
 
 function inferMachineType(input = {}) {
@@ -290,19 +318,21 @@ function normalizeMachine(row = {}) {
   } catch {
     registerConfig = null;
   }
+  const machineType = inferMachineType({ ...row, register_config: registerConfig });
+  const normalizedRegisterConfig = normalizeRegistersForMachineType(registerConfig, machineType);
   return {
     id: row.id || null,
     machine_id: row.machine_id || null,
     machine_key: row.machine_key,
     machine_name: row.machine_name,
-    machine_type: inferMachineType({ ...row, register_config: registerConfig }),
+    machine_type: machineType,
     plant_code: row.plant_code || null,
     ip_address: row.ip_address,
     port: Number(row.port || 5002),
     protocol: row.protocol || "SLMP",
     sequence_no: row.sequence_no ?? null,
     is_active: row.is_active === undefined ? true : Boolean(row.is_active),
-    register_config: Array.isArray(registerConfig) ? registerConfig : null,
+    register_config: Array.isArray(normalizedRegisterConfig) ? normalizedRegisterConfig : null,
     machine_code: row.machine_code || null,
     asset_machine_name: row.asset_machine_name || null,
     line_id: row.line_id || null,
@@ -313,7 +343,32 @@ function normalizeMachine(row = {}) {
 }
 
 function registersForType(_type = "generic") {
-  return [];
+  const type = normalizeMachineType(_type);
+  const registers = type === "ube"
+    ? EXCEL_PARAMETERS
+    : type === "leaktest"
+      ? LEAK_TEST_PARAMETERS
+      : [];
+  return normalizeRegistersForMachineType(registers, type).map((register, index) => ({
+    id: cleanText(register.id) || `${normalizeRegisterName(register.name) || "register"}-${index}`,
+    name: cleanText(register.name),
+    device: cleanText(register.device) || "",
+    stringDevice: cleanText(register.stringDevice) || "",
+    stringLength: register.stringLength || "",
+    type: normalizeRegisterType(register.type),
+    scale: register.scale === "" || register.scale === null || register.scale === undefined ? 1 : Number(register.scale),
+    computed: cleanText(register.computed) || "",
+    enabled: register.enabled === undefined ? true : Boolean(register.enabled),
+    min: cleanNumber(register.min ?? register.minimum),
+    max: cleanNumber(register.max ?? register.maximum),
+    warning_min: cleanNumber(register.warning_min ?? register.warningMin),
+    warning_max: cleanNumber(register.warning_max ?? register.warningMax),
+    unit: cleanText(register.unit) || "",
+    show_on_monitor: register.show_on_monitor === undefined ? true : Boolean(register.show_on_monitor),
+    show_to_operator: register.show_to_operator === undefined ? false : Boolean(register.show_to_operator),
+    log_history: register.log_history === undefined ? true : Boolean(register.log_history),
+    alarm_enabled: register.alarm_enabled === undefined ? false : Boolean(register.alarm_enabled),
+  }));
 }
 
 function normalizeRegisters(input) {
@@ -357,6 +412,7 @@ async function saveMachineRecord(input = {}) {
   let id = cleanInt(input.id);
   const registerConfig = normalizeRegisters(input.register_config) || [];
   const type = inferMachineType({ ...input, ip_address: ip, register_config: registerConfig });
+  const normalizedRegisterConfig = normalizeRegistersForMachineType(registerConfig, type);
   const existingByIp = await db.query(
     "SELECT TOP 1 id FROM dbo.plc_machine_configs WHERE ip_address = ? AND (? IS NULL OR id <> ?) ORDER BY id",
     [ip, id, id]
@@ -386,7 +442,7 @@ async function saveMachineRecord(input = {}) {
     protocol: protocolType(input.protocol),
     sequence_no: cleanInt(input.sequence_no),
     is_active: input.is_active === undefined ? 1 : Number(Boolean(input.is_active)),
-    register_config_json: JSON.stringify(registerConfig),
+    register_config_json: JSON.stringify(normalizedRegisterConfig),
     notes: cleanText(input.notes),
   };
 
