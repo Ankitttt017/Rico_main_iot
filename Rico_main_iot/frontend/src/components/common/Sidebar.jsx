@@ -18,6 +18,7 @@ import {
   Users,
   FileText,
   Map,
+  Video,
 } from "lucide-react";
 import BrandLogo from "./BrandLogo";
 import { getStats } from "../../services/api";
@@ -64,6 +65,7 @@ const navSections = [
     title: "External Apps",
     items: [
       { label: "Traceability", href: "http://192.168.100.136:9090", icon: Map, permission: "traceability:view", external: true },
+      { label: "Live Machine View", href: "http://192.168.100.136:3000", icon: Video, permission: "camera:view", external: true },
     ],
   },
 ];

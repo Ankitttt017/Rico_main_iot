@@ -63,7 +63,7 @@ const App = () => {
           role_key: username?.trim()?.toLowerCase() === "operator" ? "OPERATOR" : "SYSTEM_ADMIN",
           permissions: username?.trim()?.toLowerCase() === "operator"
             ? ["workstation:view", "workstation:operate"]
-            : ["master:manage", "master:view", "plc:manage", "plc:view", "reports:view", "reports:export", "workstation:view", "workstation:operate", "downtime:view", "downtime:manage", "traceability:view", "ng:view", "roles:manage", "system:config"],
+            : ["master:manage", "master:view", "plc:manage", "plc:view", "reports:view", "reports:export", "workstation:view", "workstation:operate", "downtime:view", "downtime:manage", "traceability:view", "camera:view", "ng:view", "roles:manage", "system:config"],
           landingPath: username?.trim()?.toLowerCase() === "operator" ? "/operator-workstation" : "/dashboard",
         };
     sessionStorage.setItem("rico_auth", "true");
