@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import toast from "react-hot-toast";
-import { Check, Eye, Minus, Pencil, Plus, Power, RefreshCcw, Trash2, X } from "lucide-react";
+import { Check, Pencil, Plus, Power, RefreshCcw, Trash2, X } from "lucide-react";
 import AppLayout from "../../../components/common/AppLayout";
 import {
   checkAuthUsername,
@@ -98,6 +98,11 @@ function isDefaultAdmin(user) {
   return String(user?.username || "").toLowerCase() === "admin";
 }
 
+function isSystemAdmin(user) {
+  const role = String(user?.role_key || user?.role || "").toUpperCase().replace(/[\s-]+/g, "_");
+  return role === "SYSTEM_ADMIN" || String(user?.username || user?.name || "").toLowerCase() === "admin";
+}
+
 function roleLabel(roles, key) {
   return roles.find((role) => role.key === key)?.label || key;
 }
@@ -114,18 +119,21 @@ function initials(name = "") {
   return String(name || "U").split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "U";
 }
 
-function suggestUsername(name) {
-  return String(name || "")
-    .toLowerCase()
-    .replace(/\s+/g, ".")
-    .replace(/[^a-z0-9._-]/g, "")
-    .replace(/^\.+|\.+$/g, "");
+function cleanUsername(value) {
+  return String(value || "")
+    .replace(/[^A-Za-z0-9 ._-]/g, "")
+    .replace(/\s{2,}/g, " ");
+}
+
+function normalizeUsername(value) {
+  return cleanUsername(value).trim();
 }
 
 function validateStep(step, form, mode) {
   const errors = {};
   if (step === 1) {
-    if (mode === "create" && !/^[a-z][a-z0-9._-]{2,29}$/.test(form.username)) errors.username = "Lowercase username, 3-30 chars";
+    const username = normalizeUsername(form.username);
+    if (mode === "create" && !/^[A-Za-z][A-Za-z0-9 ._-]{2,79}$/.test(username)) errors.username = "Use 3-80 letters, numbers, spaces, dots, underscores or hyphens";
     if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) errors.email = "Invalid email";
     if (mode === "create" && !/^(?=.*[A-Z])(?=.*\d).{8,}$/.test(form.password)) errors.password = "Min 8 chars, 1 uppercase, 1 number";
     if (mode === "edit" && form.password && !/^(?=.*[A-Z])(?=.*\d).{8,}$/.test(form.password)) errors.password = "Min 8 chars, 1 uppercase, 1 number";
@@ -144,6 +152,7 @@ function CreateUserModal({ isOpen, onClose, onSuccess, user, roles, currentUser 
   const [errors, setErrors] = useState({});
   const [saving, setSaving] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const canManagePasswords = isSystemAdmin(currentUser);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -191,7 +200,7 @@ function CreateUserModal({ isOpen, onClose, onSuccess, user, roles, currentUser 
     const nextErrors = validateStep(step, form, mode);
     if (step === 1 && mode === "create" && !nextErrors.username) {
       try {
-        const response = await checkAuthUsername(form.username);
+        const response = await checkAuthUsername(normalizeUsername(form.username));
         if (!response.data?.available) nextErrors.username = "Username already taken";
       } catch {
         nextErrors.username = "Unable to check username";
@@ -205,9 +214,11 @@ function CreateUserModal({ isOpen, onClose, onSuccess, user, roles, currentUser 
   const save = async () => {
     setSaving(true);
     try {
+      const username = normalizeUsername(form.username);
       const payload = {
         ...form,
-        fullName: form.username,
+        username,
+        fullName: username,
         performedBy: currentUser?.username || currentUser?.name || "admin",
       };
       const response = mode === "edit" ? await updateAuthUser(user.id, payload) : await createAuthUser(payload);
@@ -219,6 +230,8 @@ function CreateUserModal({ isOpen, onClose, onSuccess, user, roles, currentUser 
       setSaving(false);
     }
   };
+
+  const displayUsername = normalizeUsername(form.username) || "New user";
 
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
@@ -247,22 +260,24 @@ function CreateUserModal({ isOpen, onClose, onSuccess, user, roles, currentUser 
               <Field label="Username" error={errors.username}>
                 <input
                   disabled={mode === "edit"}
-                  placeholder="operator01"
-                  className="app-field h-10 w-full rounded-lg border px-3 lowercase disabled:bg-slate-100"
+                  placeholder="Username"
+                  className="app-field h-10 w-full rounded-lg border px-3 disabled:bg-slate-100"
                   value={form.username}
                   onChange={(event) => setForm((current) => ({
                     ...current,
-                    username: event.target.value.toLowerCase().replace(/\s+/g, ""),
-                    fullName: event.target.value.toLowerCase().replace(/\s+/g, ""),
+                    username: cleanUsername(event.target.value),
+                    fullName: cleanUsername(event.target.value),
                   }))}
                 />
               </Field>
-              <Field label={mode === "edit" ? "Password (leave blank to keep current)" : "Password"} error={errors.password}>
-                <div className="relative">
-                  <input type={showPassword ? "text" : "password"} placeholder="Password123" className="app-field h-10 w-full rounded-lg border px-3 pr-10" value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} />
-                  <button type="button" onClick={() => setShowPassword((value) => !value)} className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-400">show</button>
-                </div>
-              </Field>
+              {mode === "create" && (
+                <Field label="Password" error={errors.password}>
+                  <div className="relative">
+                    <input type={showPassword ? "text" : "password"} placeholder="Password123" className="app-field h-10 w-full rounded-lg border px-3 pr-12" value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} />
+                    <button type="button" onClick={() => setShowPassword((value) => !value)} className="absolute right-2 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-400">{showPassword ? "Hide" : "Show"}</button>
+                  </div>
+                </Field>
+              )}
               <Field label="Email" error={errors.email}>
                 <input placeholder="user@rico.com" className="app-field h-10 w-full rounded-lg border px-3" value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} />
               </Field>
@@ -272,6 +287,14 @@ function CreateUserModal({ isOpen, onClose, onSuccess, user, roles, currentUser 
               <Field label="Employee ID">
                 <input placeholder="E-1001" className="app-field h-10 w-full rounded-lg border px-3" value={form.employeeId} onChange={(event) => setForm((current) => ({ ...current, employeeId: event.target.value }))} />
               </Field>
+              {mode === "edit" && canManagePasswords && (
+                <Field label="New password" error={errors.password}>
+                  <div className="relative">
+                    <input type={showPassword ? "text" : "password"} placeholder="Leave blank to keep current" className="app-field h-10 w-full rounded-lg border px-3 pr-12" value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} />
+                    <button type="button" onClick={() => setShowPassword((value) => !value)} className="absolute right-2 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-400">{showPassword ? "Hide" : "Show"}</button>
+                  </div>
+                </Field>
+              )}
             </div>
           )}
 
@@ -289,7 +312,7 @@ function CreateUserModal({ isOpen, onClose, onSuccess, user, roles, currentUser 
                 ))}
               </div>
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                <p className="text-sm font-semibold text-[#1a2332]">Permissions jo milenge</p>
+                <p className="text-sm font-semibold text-[#1a2332]">Assigned permissions</p>
                 <div className="mt-3 grid gap-2 md:grid-cols-2">
                   {PERMISSION_ROWS.map(([, key, label]) => (
                     <label key={key} className="flex items-start gap-2 rounded-md bg-white px-3 py-2 text-xs text-slate-700 ring-1 ring-slate-100">
@@ -306,10 +329,10 @@ function CreateUserModal({ isOpen, onClose, onSuccess, user, roles, currentUser 
           {step === 3 && (
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-5">
               <div className="flex items-center gap-4">
-                <div className="flex h-14 w-14 items-center justify-center rounded-full bg-blue-100 text-lg font-semibold text-blue-700">{initials(form.username)}</div>
+                <div className="flex h-14 w-14 items-center justify-center rounded-full bg-blue-100 text-lg font-semibold text-blue-700">{initials(displayUsername)}</div>
                 <div>
-                  <p className="text-lg font-semibold text-[#1a2332]">{form.username}</p>
-                  <p className="text-sm text-[#6b7a8d]">{form.username} {form.email ? `| ${form.email}` : ""}</p>
+                  <p className="text-lg font-semibold text-[#1a2332]">{displayUsername}</p>
+                  {form.email && <p className="text-sm text-[#6b7a8d]">{form.email}</p>}
                 </div>
               </div>
               <div className="mt-5 grid gap-3 md:grid-cols-2">
@@ -369,6 +392,7 @@ export default function UserAccessPage({ onLogout, currentUser }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [highlightedUserId, setHighlightedUserId] = useState(null);
   const canEdit = canManage(currentUser);
+  const canManagePasswords = isSystemAdmin(currentUser);
 
   const load = async () => {
     setLoading(true);
@@ -386,8 +410,6 @@ export default function UserAccessPage({ onLogout, currentUser }) {
   useEffect(() => {
     load();
   }, []);
-
-  const permissionRows = useMemo(() => PERMISSION_ROWS.map(([group, key, label]) => ({ group, key, label })), []);
 
   const handleSuccess = (user) => {
     toast.success(`User "${user.fullName || user.username}" saved`);
@@ -412,7 +434,7 @@ export default function UserAccessPage({ onLogout, currentUser }) {
   const resetPassword = async (user) => {
     const password = window.prompt(`New password for ${user.username}`);
     if (!password) return;
-    await resetAuthUserPassword(user.id, { password });
+    await resetAuthUserPassword(user.id, { password, performedBy: currentUser?.username || currentUser?.name || "admin" });
     toast.success("Password reset");
   };
 
@@ -469,7 +491,7 @@ export default function UserAccessPage({ onLogout, currentUser }) {
                     </td>
                     <td className="px-4 py-3">
                       <p className="font-semibold text-[#1a2332]">{user.fullName || user.username}</p>
-                      <p className="text-xs text-[#6b7a8d]">{user.username}{user.email ? ` | ${user.email}` : ""}</p>
+                      {user.email && <p className="text-xs text-[#6b7a8d]">{user.email}</p>}
                     </td>
                     <td className="px-4 py-3">
                       <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${ROLE_PILL_STYLES[user.role] || "bg-slate-100 text-slate-700"}`}>
@@ -486,7 +508,7 @@ export default function UserAccessPage({ onLogout, currentUser }) {
                       <div className="flex justify-end gap-2">
                         <button title="Edit" disabled={!canEdit} onClick={() => { setModalUser(user); setModalOpen(true); }} className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-slate-50 disabled:opacity-40"><Pencil className="h-4 w-4" /></button>
                         <button title={isDefaultAdmin(user) ? "Default admin cannot be disabled" : "Activate / deactivate"} disabled={!canEdit || isDefaultAdmin(user)} onClick={() => toggleStatus(user)} className="rounded-md border border-slate-200 p-2 text-amber-600 hover:bg-amber-50 disabled:opacity-40"><Power className="h-4 w-4" /></button>
-                        <button title="Reset password" disabled={!canEdit} onClick={() => resetPassword(user)} className="rounded-md border border-slate-200 p-2 text-blue-600 hover:bg-blue-50 disabled:opacity-40"><RefreshCcw className="h-4 w-4" /></button>
+                        {canManagePasswords && <button title="Reset password" disabled={!canEdit} onClick={() => resetPassword(user)} className="rounded-md border border-slate-200 p-2 text-blue-600 hover:bg-blue-50 disabled:opacity-40"><RefreshCcw className="h-4 w-4" /></button>}
                         <button title={isDefaultAdmin(user) ? "Default admin cannot be deleted" : "Delete"} disabled={!canEdit || isDefaultAdmin(user)} onClick={() => removeUser(user)} className="rounded-md border border-red-200 p-2 text-red-600 hover:bg-red-50 disabled:opacity-40"><Trash2 className="h-4 w-4" /></button>
                       </div>
                     </td>
@@ -498,44 +520,6 @@ export default function UserAccessPage({ onLogout, currentUser }) {
           </div>
         </section>
 
-        <section className="overflow-hidden rounded-lg border border-[#c8d8e8] bg-white shadow-sm">
-          <div className="border-b border-[#d7e5f3] px-5 py-4">
-            <h2 className="text-base font-semibold text-[#1a2332]">Access Matrix</h2>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="min-w-[980px] w-full text-sm">
-              <thead className="bg-[#eef5ff] text-[#6b7a8d]">
-                <tr>
-                  <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.05em]">Area</th>
-                  <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.05em]">Permission</th>
-                  {roles.map((role) => <th key={role.key} className="px-4 py-3 text-center text-[11px] font-semibold uppercase tracking-[0.05em]">{role.label}</th>)}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {permissionRows.map((row) => (
-                  <tr key={row.key}>
-                    <td className="px-4 py-3 font-semibold text-[#1a2332]">{row.group}</td>
-                    <td className="px-4 py-3">
-                      <p className="font-semibold text-slate-700">{row.label}</p>
-                      <p className="text-xs text-slate-400">{row.key}</p>
-                    </td>
-                    {roles.map((role) => {
-                      const allowed = role.permissions?.includes(row.key);
-                      const viewOnly = !allowed && row.key.endsWith(":manage") && role.permissions?.includes(row.key.replace(":manage", ":view"));
-                      return (
-                        <td key={`${role.key}-${row.key}`} className="px-4 py-3 text-center">
-                          <span className={`inline-flex h-7 w-7 items-center justify-center rounded-full ${allowed ? "bg-emerald-100 text-emerald-700" : viewOnly ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-400"}`}>
-                            {allowed ? <Check className="h-4 w-4" /> : viewOnly ? <Eye className="h-4 w-4" /> : <Minus className="h-4 w-4" />}
-                          </span>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
       </div>
 
       <CreateUserModal

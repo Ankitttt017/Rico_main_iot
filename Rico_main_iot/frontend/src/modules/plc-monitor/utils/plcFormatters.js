@@ -260,8 +260,26 @@ function getAliasedValue(source = {}, name) {
 }
 
 function unwrapReadingValue(item) {
-  if (item && typeof item === "object" && Object.prototype.hasOwnProperty.call(item, "value")) {
-    return unwrapReadingValue(item.value);
+  if (item && typeof item === "object") {
+    if (Object.prototype.hasOwnProperty.call(item, "value")) {
+      return unwrapReadingValue(item.value);
+    }
+    if (Object.prototype.hasOwnProperty.call(item, "raw")) {
+      return unwrapReadingValue(item.raw);
+    }
+    if (Object.prototype.hasOwnProperty.call(item, "numeric_value")) {
+      return unwrapReadingValue(item.numeric_value);
+    }
+    if (Object.prototype.hasOwnProperty.call(item, "text_value")) {
+      return unwrapReadingValue(item.text_value);
+    }
+    if (Object.prototype.hasOwnProperty.call(item, "bool_value")) {
+      return unwrapReadingValue(item.bool_value);
+    }
+    if (Object.prototype.hasOwnProperty.call(item, "data")) {
+      return unwrapReadingValue(item.data);
+    }
+    return null;
   }
   return item;
 }

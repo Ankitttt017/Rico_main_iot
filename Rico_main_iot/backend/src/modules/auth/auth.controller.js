@@ -305,6 +305,17 @@ async function audit(action, performedBy, targetUser, details = {}) {
   }
 }
 
+async function isSystemAdminActor(username) {
+  const actor = String(username || "").trim();
+  if (!actor) return false;
+  if (actor.toLowerCase() === ROLE_DEFINITIONS.SYSTEM_ADMIN.defaultUsername) return true;
+  const { rows } = await db.query(
+    "SELECT TOP 1 role FROM dbo.app_users WHERE LOWER(username) = LOWER(?) AND is_active = 1",
+    [actor]
+  );
+  return roleKey(rows[0]?.role) === "SYSTEM_ADMIN";
+}
+
 async function login(req, res) {
   try {
     await ensureSchema();
@@ -375,12 +386,12 @@ async function checkUsername(req, res) {
 
 function validateUserInput(body, { edit = false } = {}) {
   const errors = [];
-  const username = String(body.username || "").trim().toLowerCase();
+  const username = String(body.username || "").replace(/\s+/g, " ").trim();
   const fullName = String(body.fullName || body.full_name || username).trim();
   const password = String(body.password || "");
   const role = roleKey(body.role);
   if (!edit && !fullName) errors.push("Username is required.");
-  if (!edit && !/^[a-z][a-z0-9._-]{2,29}$/.test(username)) errors.push("Username must be lowercase, no spaces, 3-30 chars.");
+  if (!edit && !/^[A-Za-z][A-Za-z0-9 ._-]{2,79}$/.test(username)) errors.push("Username must be 3-80 characters and can include letters, numbers, spaces, dots, underscores, or hyphens.");
   if (!edit && !/^(?=.*[A-Z])(?=.*\d).{8,}$/.test(password)) errors.push("Password min 8 chars, 1 uppercase, 1 number.");
   if (edit && password && !/^(?=.*[A-Z])(?=.*\d).{8,}$/.test(password)) errors.push("Password min 8 chars, 1 uppercase, 1 number.");
   if (!ROLE_DEFINITIONS[role]) errors.push("Valid role is required.");
@@ -439,6 +450,9 @@ async function updateUser(req, res) {
     const permissions = Array.isArray(req.body.permissions) && req.body.permissions.length ? req.body.permissions : roleMeta.permissions;
     const landingPath = req.body.landingPath || roleMeta.landingPath;
     if (req.body.password) {
+      if (!(await isSystemAdminActor(req.body.performedBy))) {
+        return res.status(403).json({ success: false, message: "Only a system administrator can update passwords." });
+      }
       await db.run(
         `UPDATE dbo.app_users
          SET display_name=?, full_name=?, employee_id=?, email=?, department=?, role=?, password_hash=?,
@@ -538,6 +552,9 @@ async function resetPassword(req, res) {
     await ensureSchema();
     const id = Number(req.params.id);
     const password = String(req.body.password || "");
+    if (!(await isSystemAdminActor(req.body.performedBy))) {
+      return res.status(403).json({ success: false, message: "Only a system administrator can reset passwords." });
+    }
     if (!/^(?=.*[A-Z])(?=.*\d).{8,}$/.test(password)) {
       return res.status(400).json({ success: false, message: "Password min 8 chars, 1 uppercase, 1 number." });
     }

@@ -48,12 +48,12 @@ export function formatValue(value, fallback = "-") {
   }
   if (typeof value === "object") {
     if (Object.prototype.hasOwnProperty.call(value, "value")) return formatValue(value.value, fallback);
+    if (Object.prototype.hasOwnProperty.call(value, "raw")) return formatValue(value.raw, fallback);
+    if (Object.prototype.hasOwnProperty.call(value, "numeric_value")) return formatValue(value.numeric_value, fallback);
+    if (Object.prototype.hasOwnProperty.call(value, "text_value")) return formatValue(value.text_value, fallback);
+    if (Object.prototype.hasOwnProperty.call(value, "bool_value")) return formatValue(value.bool_value, fallback);
     if (Object.prototype.hasOwnProperty.call(value, "data")) return formatValue(value.data, fallback);
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return String(value);
-    }
+    return fallback;
   }
 
   return value;

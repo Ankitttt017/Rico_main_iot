@@ -527,6 +527,17 @@ async function readBit(sock, device) {
   const response = await sendReceive(sock, buildPacket(device, 1, true), 1, `readBit(${device})`);
   return response[0] === 0 ? 0 : 1;
 }
+
+async function readControlSignal(sock, device) {
+  const normalizedDevice = String(device || "").trim().toUpperCase();
+  if (!normalizedDevice) return 0;
+  if (["M", "X", "Y"].includes(normalizedDevice[0])) {
+    return readBit(sock, normalizedDevice);
+  }
+  const value = await readWord(sock, normalizedDevice);
+  return Number(value) === 0 ? 0 : 1;
+}
+
 async function readString(sock, startDevice, length) {
   const response = await sendReceive(
     sock,
@@ -764,6 +775,16 @@ function unwrapReadingValue(reading) {
     if (Object.prototype.hasOwnProperty.call(reading, "raw")) {
       return unwrapReadingValue(reading.raw);
     }
+    if (Object.prototype.hasOwnProperty.call(reading, "numeric_value")) {
+      return unwrapReadingValue(reading.numeric_value);
+    }
+    if (Object.prototype.hasOwnProperty.call(reading, "text_value")) {
+      return unwrapReadingValue(reading.text_value);
+    }
+    if (Object.prototype.hasOwnProperty.call(reading, "bool_value")) {
+      return unwrapReadingValue(reading.bool_value);
+    }
+    return null;
   }
   return reading;
 }
@@ -2683,6 +2704,17 @@ function createInitialMachineState(machines) {
   );
 }
 
+function machineRegisterConfigSignature(machine = {}) {
+  const registers = Array.isArray(machine.registerConfig) ? machine.registerConfig : [];
+  return JSON.stringify(registers.map((item) => ({
+    name: item?.name || item?.parameter || "",
+    device: item?.device || "",
+    stringDevice: item?.stringDevice || item?.string_device || "",
+    type: item?.type || "",
+    enabled: item?.enabled !== false,
+  })));
+}
+
 function startPlcMonitor(io) {
   let machines = getMachines();
   const machineState = createInitialMachineState(machines);
@@ -3835,8 +3867,8 @@ function startPlcMonitor(io) {
             gaugePollMs,
             Number(process.env.PLC_GAUGE_LIVE_READ_MS || 1000)
           );
-          let lastCycleStartBit = cycleStartDevice ? await readBit(sock, cycleStartDevice).catch(() => 0) : 0;
-          let lastCycleEndBit = cycleEndDevice ? await readBit(sock, cycleEndDevice).catch(() => 0) : 0;
+          let lastCycleStartBit = cycleStartDevice ? await readControlSignal(sock, cycleStartDevice).catch(() => 0) : 0;
+          let lastCycleEndBit = cycleEndDevice ? await readControlSignal(sock, cycleEndDevice).catch(() => 0) : 0;
           let cycleStartAt = lastCycleStartBit === 1 ? new Date() : null;
           let cycleEndHandled = lastCycleEndBit === 1;
           let lastGaugeLiveReadAt = 0;
@@ -3907,8 +3939,8 @@ function startPlcMonitor(io) {
             let cycleStart = lastCycleStartBit;
             let cycleEnd = lastCycleEndBit;
             try {
-              cycleStart = cycleStartDevice ? await readBit(sock, cycleStartDevice) : 0;
-              cycleEnd = cycleEndDevice ? await readBit(sock, cycleEndDevice) : 0;
+              cycleStart = cycleStartDevice ? await readControlSignal(sock, cycleStartDevice) : 0;
+              cycleEnd = cycleEndDevice ? await readControlSignal(sock, cycleEndDevice) : 0;
               consecutiveReadFailures = 0;
             } catch (error) {
               if (isPlcReadTimeoutError(error)) {
@@ -4311,12 +4343,21 @@ function startPlcMonitor(io) {
       const configChanged = currentState && (
         currentState.ip !== machine.ip ||
         Number(currentState.port) !== Number(machine.port) ||
-        currentState.name !== machine.name
+        currentState.name !== machine.name ||
+        machineRegisterConfigSignature(currentState) !== machineRegisterConfigSignature(machine)
       );
 
       if (configChanged) {
         monitorTokens.delete(machineKey);
-        machineState.delete(machineKey);
+        machineState.set(machineKey, {
+          ...currentState,
+          ...machine,
+          connected: false,
+          error: null,
+          shotStatus: "Machine register config changed; restarting monitor.",
+          machineType: getMachineTypeName(machine),
+        });
+        changed = true;
       }
 
       if (machineState.has(machineKey)) {
