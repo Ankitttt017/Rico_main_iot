@@ -404,6 +404,59 @@ function normalizeRegisters(input) {
     .filter((item) => item.name && (item.computed || item.device || item.stringDevice));
 }
 
+async function tableExists(tableName) {
+  const { rows } = await db.query(
+    "SELECT CASE WHEN OBJECT_ID(?, 'U') IS NULL THEN 0 ELSE 1 END AS table_exists",
+    [tableName]
+  );
+  return Number(rows[0]?.table_exists || 0) === 1;
+}
+
+async function syncMachineNameReferences({ ip, machineKey, machineName }) {
+  const cleanIp = cleanText(ip);
+  const cleanKey = cleanText(machineKey);
+  const cleanName = cleanText(machineName);
+  if (!cleanName || (!cleanIp && !cleanKey)) return;
+
+  const updates = [
+    {
+      table: "dbo.Leaktest",
+      sql: "UPDATE dbo.Leaktest SET Machine = ? WHERE PLC_IP = ?",
+      params: [cleanName, cleanIp],
+      enabled: Boolean(cleanIp),
+    },
+    {
+      table: "dbo.Gauge",
+      sql: "UPDATE dbo.Gauge SET Machine_Name = ? WHERE PLC_IP = ? OR Machine_Key = ?",
+      params: [cleanName, cleanIp, cleanKey],
+      enabled: Boolean(cleanIp || cleanKey),
+    },
+    {
+      table: "dbo.PlcCycleReadings",
+      sql: "UPDATE dbo.PlcCycleReadings SET machine_name = ? WHERE plc_ip = ? OR machine_key = ?",
+      params: [cleanName, cleanIp, cleanKey],
+      enabled: Boolean(cleanIp || cleanKey),
+    },
+    {
+      table: "dbo.PlcConnectionEvents",
+      sql: "UPDATE dbo.PlcConnectionEvents SET machine_name = ? WHERE plc_ip = ? OR machine_key = ?",
+      params: [cleanName, cleanIp, cleanKey],
+      enabled: Boolean(cleanIp || cleanKey),
+    },
+    {
+      table: "dbo.plc_machine_readings",
+      sql: "UPDATE dbo.plc_machine_readings SET machine_name = ? WHERE plc_ip = ? OR machine_key = ?",
+      params: [cleanName, cleanIp, cleanKey],
+      enabled: Boolean(cleanIp || cleanKey),
+    },
+  ];
+
+  for (const update of updates) {
+    if (!update.enabled || !(await tableExists(update.table))) continue;
+    await db.run(update.sql, update.params);
+  }
+}
+
 async function saveMachineRecord(input = {}) {
   const name = cleanText(input.machine_name || input.name);
   if (!name) throw new Error("Machine name is required");
@@ -477,10 +530,15 @@ async function saveMachineRecord(input = {}) {
     if (payload.machine_id) {
       await db.run(`
         UPDATE dbo.iot_machines
-        SET ip_address = ?, port = ?, protocol = ?
+        SET name = ?, ip_address = ?, port = ?, protocol = ?
         WHERE id = ?
-      `, [payload.ip_address, String(payload.port), payload.protocol, payload.machine_id]);
+      `, [payload.machine_name, payload.ip_address, String(payload.port), payload.protocol, payload.machine_id]);
     }
+    await syncMachineNameReferences({
+      ip: payload.ip_address,
+      machineKey: payload.machine_key,
+      machineName: payload.machine_name,
+    });
     return id;
   }
 
@@ -507,10 +565,15 @@ async function saveMachineRecord(input = {}) {
   if (payload.machine_id) {
     await db.run(`
       UPDATE dbo.iot_machines
-      SET ip_address = ?, port = ?, protocol = ?
+      SET name = ?, ip_address = ?, port = ?, protocol = ?
       WHERE id = ?
-    `, [payload.ip_address, String(payload.port), payload.protocol, payload.machine_id]);
+    `, [payload.machine_name, payload.ip_address, String(payload.port), payload.protocol, payload.machine_id]);
   }
+  await syncMachineNameReferences({
+    ip: payload.ip_address,
+    machineKey: payload.machine_key,
+    machineName: payload.machine_name,
+  });
   return result.rows[0]?.id;
 }
 
