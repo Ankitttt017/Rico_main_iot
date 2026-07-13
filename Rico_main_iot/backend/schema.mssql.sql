@@ -1057,6 +1057,61 @@ IF OBJECT_ID(N'dbo.plc_machine_readings', N'U') IS NOT NULL
   SET machine_key = plc_ip
   WHERE plc_ip IN ('192.168.117.200', '192.168.117.201', '192.168.117.202', '192.168.117.203');
 
+IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
+   AND OBJECT_ID(N'dbo.Leaktest', N'U') IS NOT NULL
+BEGIN
+  UPDATE lt
+  SET lt.Machine = pc.machine_name
+  FROM dbo.Leaktest lt
+  INNER JOIN dbo.plc_machine_configs pc
+    ON pc.ip_address = lt.PLC_IP
+  WHERE ISNULL(lt.Machine, N'') <> ISNULL(pc.machine_name, N'');
+END;
+
+IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
+   AND OBJECT_ID(N'dbo.Gauge', N'U') IS NOT NULL
+BEGIN
+  UPDATE g
+  SET g.Machine_Name = pc.machine_name
+  FROM dbo.Gauge g
+  INNER JOIN dbo.plc_machine_configs pc
+    ON pc.ip_address = g.PLC_IP OR pc.machine_key = g.Machine_Key
+  WHERE ISNULL(g.Machine_Name, N'') <> ISNULL(pc.machine_name, N'');
+END;
+
+IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
+   AND OBJECT_ID(N'dbo.PlcCycleReadings', N'U') IS NOT NULL
+BEGIN
+  UPDATE r
+  SET r.machine_name = pc.machine_name
+  FROM dbo.PlcCycleReadings r
+  INNER JOIN dbo.plc_machine_configs pc
+    ON pc.ip_address = r.plc_ip OR pc.machine_key = r.machine_key
+  WHERE ISNULL(r.machine_name, N'') <> ISNULL(pc.machine_name, N'');
+END;
+
+IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
+   AND OBJECT_ID(N'dbo.PlcConnectionEvents', N'U') IS NOT NULL
+BEGIN
+  UPDATE e
+  SET e.machine_name = pc.machine_name
+  FROM dbo.PlcConnectionEvents e
+  INNER JOIN dbo.plc_machine_configs pc
+    ON pc.ip_address = e.plc_ip OR pc.machine_key = e.machine_key
+  WHERE ISNULL(e.machine_name, N'') <> ISNULL(pc.machine_name, N'');
+END;
+
+IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
+   AND OBJECT_ID(N'dbo.plc_machine_readings', N'U') IS NOT NULL
+BEGIN
+  UPDATE r
+  SET r.machine_name = pc.machine_name
+  FROM dbo.plc_machine_readings r
+  INNER JOIN dbo.plc_machine_configs pc
+    ON pc.ip_address = r.plc_ip OR pc.machine_key = r.machine_key
+  WHERE ISNULL(r.machine_name, N'') <> ISNULL(pc.machine_name, N'');
+END;
+
 EXEC(N'CREATE OR ALTER TRIGGER dbo.trg_PlcCycleReadings_ShotDate
 ON dbo.PlcCycleReadings
 AFTER INSERT, UPDATE
