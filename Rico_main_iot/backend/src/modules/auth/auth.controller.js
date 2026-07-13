@@ -174,7 +174,7 @@ function normalizeUser(row = {}) {
     landingPath: row.landing_path || meta.landingPath,
     isActive: row.is_active === true || row.is_active === 1,
     forcePasswordChange: row.force_password_change === true || row.force_password_change === 1,
-    locked: row.locked_until ? new Date(row.locked_until).getTime() > Date.now() : false,
+    locked: false,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -276,6 +276,7 @@ WHERE role IS NOT NULL`);
         "UPDATE dbo.app_users SET is_active = 1, updated_at = SYSUTCDATETIME() WHERE LOWER(username) = LOWER(?)",
         [ROLE_DEFINITIONS.SYSTEM_ADMIN.defaultUsername]
       );
+      await db.run("UPDATE dbo.app_users SET failed_attempts = 0, locked_until = NULL WHERE locked_until IS NOT NULL OR failed_attempts <> 0");
     })().catch((error) => {
       schemaReadyPromise = null;
       throw error;
@@ -333,18 +334,13 @@ async function login(req, res) {
     );
     const user = rows[0];
     if (!user) return res.status(401).json({ success: false, message: "Invalid username or password." });
-    if (user.locked_until && new Date(user.locked_until).getTime() > Date.now()) {
-      return res.status(423).json({ success: false, message: "Account locked after failed login attempts. Try again later." });
-    }
 
     if (!verifyPassword(password, user.password_hash)) {
-      const attempts = Number(user.failed_attempts || 0) + 1;
-      const lockedUntil = attempts >= 3 ? new Date(Date.now() + 15 * 60 * 1000).toISOString() : null;
       await db.run(
-        "UPDATE dbo.app_users SET failed_attempts = ?, locked_until = ?, updated_at = SYSUTCDATETIME() WHERE id = ?",
-        [attempts, lockedUntil, user.id]
+        "UPDATE dbo.app_users SET failed_attempts = 0, locked_until = NULL, updated_at = SYSUTCDATETIME() WHERE id = ?",
+        [user.id]
       );
-      return res.status(401).json({ success: false, message: attempts >= 3 ? "Account locked after 3 failed attempts." : "Invalid username or password." });
+      return res.status(401).json({ success: false, message: "Invalid username or password." });
     }
 
     await db.run(
