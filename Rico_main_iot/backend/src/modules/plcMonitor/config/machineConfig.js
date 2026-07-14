@@ -1,15 +1,12 @@
 "use strict";
 
-const db = require("../../../config/db");
+const {
+  loadActiveMachineRegisterConfigs,
+  plcMachineConfigTableExists,
+} = require("../repositories/plcRegisterConfigRepository");
 
 const DEFAULT_MACHINES = [];
 const CONFIG_CACHE_MS = Number(process.env.PLC_MACHINE_CONFIG_CACHE_MS || 60000);
-const UBE_MACHINE_IPS = new Set(
-  String(process.env.PLC_UBE_MACHINE_IPS || "192.168.117.200,192.168.117.201,192.168.117.202,192.168.117.203")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean)
-);
 let cachedMachines = null;
 let cachedAt = 0;
 
@@ -29,29 +26,10 @@ function normalizeConfiguredMachine(machine = {}, index = 0) {
     .replace(/[^a-z0-9_-]+/g, "-")
     .replace(/^-+|-+$/g, "") || "generic";
   const registerConfig = Array.isArray(machine.register_config) ? machine.register_config : null;
-  const machineText = [
-    machine.name,
-    machine.machine_name,
-    machine.machine_key,
-    machine.machine_code,
-  ].join(" ").toLowerCase();
-  const registerText = (registerConfig || [])
-    .map((item) => String(item?.name || item?.parameter || "").toLowerCase())
-    .join(" ");
-  const kind = rawKind !== "generic" && rawKind !== "ube"
-    ? rawKind
-    : machineText.includes("gauge") || registerText.includes("part scan") || registerText.includes("gauge status")
-      ? "gauge"
-      : machineText.includes("leak")
-        ? "leaktest"
-        : machineText.includes("ube") || machineText.includes("ueb") || UBE_MACHINE_IPS.has(ip)
-          ? "ube"
-          : rawKind;
+  const kind = rawKind || "generic";
   const defaultPrefix = kind === "generic" ? "PLC Machine" : kind.toUpperCase();
   const name = String(machine.name || machine.machine_name || ip || `${defaultPrefix}-${index + 1}`).trim();
-  const key = kind === "ube" && ip
-    ? ip
-    : normalizeMachineKey(machine.key || machine.machine_key || machine.machine_code || name || ip);
+  const key = normalizeMachineKey(machine.key || machine.machine_key || machine.machine_code || name || ip);
 
   return {
     id: machine.id || machine.plc_config_id || null,
@@ -67,62 +45,27 @@ function normalizeConfiguredMachine(machine = {}, index = 0) {
 }
 
 function getMachines() {
-  if (process.env.PLC_MACHINES_JSON) {
-    try {
-      const parsed = JSON.parse(process.env.PLC_MACHINES_JSON);
-      if (Array.isArray(parsed) && parsed.length) {
-        const machines = parsed
-          .map((machine, index) => normalizeConfiguredMachine(machine, index))
-          .filter((machine) => machine.ip);
-
-        if (machines.length) return machines;
-      }
-    } catch (error) {
-      console.error("Invalid PLC_MACHINES_JSON:", error.message);
-    }
-  }
   return DEFAULT_MACHINES;
 }
 
 async function getConfiguredMachines(forceRefresh = false) {
-  if (process.env.PLC_MACHINES_JSON) return getMachines();
   if (!forceRefresh && cachedMachines && Date.now() - cachedAt < CONFIG_CACHE_MS) return cachedMachines;
 
   try {
-    const existsResult = await db.query(`
-      SELECT CASE WHEN OBJECT_ID('dbo.plc_machine_configs', 'U') IS NULL THEN 0 ELSE 1 END AS table_exists
-    `);
-    const tableExists = Number(existsResult.rows[0]?.table_exists || 0) === 1;
-    if (!tableExists) return getMachines();
+    if (!(await plcMachineConfigTableExists())) return [];
 
-    const { rows } = await db.query(`
-      SELECT pc.id, pc.machine_id, pc.machine_key, pc.machine_name, pc.machine_type,
-             pc.ip_address, pc.port, pc.protocol, pc.register_config_json
-      FROM dbo.plc_machine_configs pc WITH (NOLOCK)
-      LEFT JOIN dbo.iot_machines m WITH (NOLOCK) ON m.id = pc.machine_id
-      WHERE pc.is_active = 1
-        AND (pc.machine_id IS NULL OR m.is_active = 1)
-        AND NULLIF(LTRIM(RTRIM(pc.ip_address)), '') IS NOT NULL
-      ORDER BY pc.sequence_no, pc.machine_name;
-    `);
-
+    const rows = await loadActiveMachineRegisterConfigs();
     const machines = rows
       .map((row, index) => normalizeConfiguredMachine({
-        key: row.machine_key,
+        key: row.machineKey,
         id: row.id,
-        machine_id: row.machine_id,
-        name: row.machine_name,
-        machine_type: row.machine_type,
-        ip: row.ip_address,
+        machine_id: row.machineId,
+        name: row.machineName,
+        machine_type: row.machineType,
+        ip: row.ipAddress,
         port: row.port,
         protocol: row.protocol,
-        register_config: (() => {
-          try {
-            return row.register_config_json ? JSON.parse(row.register_config_json) : null;
-          } catch {
-            return null;
-          }
-        })(),
+        register_config: row.registers,
       }, index))
       .filter((machine) => machine.ip);
 
@@ -133,7 +76,7 @@ async function getConfiguredMachines(forceRefresh = false) {
     console.error("Unable to load configured PLC machines:", error.message);
   }
 
-  return cachedMachines || getMachines();
+  return cachedMachines || [];
 }
 
 module.exports = {

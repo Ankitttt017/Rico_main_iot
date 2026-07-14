@@ -10,18 +10,6 @@ const MACHINE_READINGS_TABLE = "dbo.plc_machine_readings";
 const MACHINE_READING_VALUES_TABLE = "dbo.plc_machine_reading_values";
 
 const DEVICE_CODE = { M: 0x90, X: 0x9c, Y: 0x9d, D: 0xa8, R: 0xaf };
-const CYCLE_START_DEVICE = process.env.PLC_CYCLE_START_DEVICE || "M840";
-const CYCLE_END_DEVICE = process.env.PLC_CYCLE_END_DEVICE || "M4598";
-const SHOT_DATE_TIME_DEVICES = {
-  year: "D2100",
-  month: "D2101",
-  day: "D2102",
-  hour: "D2103",
-  minute: "D2104",
-  second: "D2105",
-};
-const UBE_ALLOWED_M_DEVICES = new Set([CYCLE_START_DEVICE, CYCLE_END_DEVICE]);
-const UBE_ALLOWED_BIT_DEVICES = new Set([CYCLE_START_DEVICE, CYCLE_END_DEVICE]);
 const UBE_CYCLE_END_DELAY_MS = Math.min(
   5000,
   Math.max(500, Number(process.env.PLC_CYCLE_END_DELAY_MS || 1000))
@@ -36,14 +24,7 @@ const PLC_PENDING_SAVE_FILE =
   process.env.PLC_PENDING_SAVE_FILE ||
   path.resolve(__dirname, "../../../../plc-pending-ube-saves.json");
 
-const LEAK_TEST_CONTROL = {
-  cycleStartDevice: process.env.PLC_LEAK_CYCLE_START_DEVICE || "M110",
-  cycleEndDevice: process.env.PLC_LEAK_CYCLE_END_DEVICE || "M300",
-};
-
 const GAUGE_CONTROL = {
-  cycleStartDevice: process.env.PLC_GAUGE_CYCLE_START_DEVICE || "M120",
-  cycleEndDevice: process.env.PLC_GAUGE_CYCLE_END_DEVICE || "M109",
   cycleEndDelayMs: Math.max(0, Number(process.env.PLC_GAUGE_CYCLE_END_DELAY_MS || 300)),
 };
 
@@ -55,124 +36,6 @@ const LEAK_CHANGE_MIN_INTERVAL_MS = Number(process.env.PLC_LEAK_CHANGE_MIN_INTER
 
 const PLC_READ_TIMEOUT_MS = Number(process.env.PLC_READ_TIMEOUT_MS || 8000);
 const PLC_RECONNECT_AFTER_TIMEOUT_MS = Number(process.env.PLC_RECONNECT_AFTER_TIMEOUT_MS || 500);
-
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// PARAMETERS
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-const EXCEL_PARAMETERS = [
-  { name: "Sr. No", type: "int", computed: "serial" },
-  { name: "Cycle End", device: "M4598", type: "int" },
-  { name: "SHOT TIME", type: "text", computed: "shotTime" },
-  { name: "SHOT NO.", device: "D1120", type: "int" },
-  { name: "CYCLE TIME sec.", device: "D1127", type: "decimal", scale: 0.1 },
-  { name: "HIGH SHOT COUNT", device: "D947", type: "int" },
-  { name: "NG COUNTER", device: "D955", type: "int" },
-  { name: "DIE-CLOSE CORE IN TIME sec", device: "D1128", type: "decimal", scale: 0.1 },
-  { name: "POURING TIME sec", device: "D1129", type: "decimal", scale: 0.1 },
-  { name: "SHOT FWD TIME sec", device: "D1130", type: "decimal", scale: 0.1 },
-  { name: "CURING TIME sec", device: "D1137", type: "decimal", scale: 0.1 },
-  { name: "DIE OPEN CORE OUT TIME sec", device: "D1132", type: "decimal", scale: 0.1 },
-  { name: "EJECTOR TIME sec", device: "D1133", type: "decimal", scale: 0.1 },
-  { name: "EXTRACT TIME sec", device: "D1134", type: "decimal", scale: 0.1 },
-  { name: "SPRAY TIME sec", device: "D1135", type: "decimal", scale: 0.1 },
-  { name: "V1 m/sec", device: "D6900", type: "decimal", scale: 0.01 },
-  { name: "V2 m/sec", device: "D6902", type: "decimal", scale: 0.01 },
-  { name: "V3 m/sec", device: "D6904", type: "decimal", scale: 0.01 },
-  { name: "V4 m/sec", device: "D6906", type: "decimal", scale: 0.01 },
-  { name: "METAL PRESS. Mpa", device: "D6912", type: "decimal", scale: 0.1 },
-  { name: "FURNACE METAL TEMP. C", device: "D6934", type: "decimal", scale: 1 },
-  { name: "COOLING WATER FLOW RATE (MOV.) L/min", device: "D6930", type: "decimal", scale: 0.1 },
-  { name: "COOLING WATER FLOW RATE (STA.) L/min", device: "D6932", type: "decimal", scale: 0.1 },
-  { name: "ACCEL. POINT mm", device: "D6908", type: "decimal", scale: 1 },
-  { name: "DEACEL. POINT mm", device: "D6910", type: "decimal", scale: 1 },
-  { name: "INTEN. TIME msec", device: "D6914", type: "decimal", scale: 1 },
-  { name: "BISCUIT THICKNESS mm", device: "D6916", type: "decimal", scale: 1 },
-  { name: "JET COOLING PRESSURE kgf/cm2", device: "D6954", type: "decimal", scale: 0.1 },
-  { name: "CLAMP TONNAGE(HE.LOW) %", device: "D6918", type: "decimal", scale: 1 },
-  { name: "CLAMP TONNAGE(HE.LOW) MN", device: "D6920", type: "decimal", scale: 0.01 },
-  { name: "CLAMP TONNAGE(OP.UP) %", device: "D6922", type: "decimal", scale: 1 },
-  { name: "CLAMP TONNAGE(OP.LOW) %", device: "D6924", type: "decimal", scale: 1 },
-  { name: "CLAMP TONNAGE(HE.UP) %", device: "D6926", type: "decimal", scale: 1 },
-  { name: "VACUUM PRESSURE mbar", device: "D6928", type: "decimal", scale: 1 },
-  { name: "Cycle Start", device: "M840", type: "int" },
-  { name: "CLAMP FORCE (%)", device: "D6918", type: "decimal", scale: 0.1 },
-  { name: "CLAMP TONNAGE (T)", device: "D6920", type: "decimal", scale: 0.01 },
-  { name: "SHOT ACC. PRESSURE", device: "D1700", type: "decimal", scale: 0.01 },
-  { name: "INTENSIFICATION ACC. PRESSURE", device: "D1701", type: "decimal", scale: 0.01 },
-  { name: "Fixed Die Temp (F-1)", device: "D1400", type: "decimal", scale: 1 },
-  { name: "Fixed Die Temp (F-2)", device: "D1401", type: "decimal", scale: 1 },
-  { name: "Moving Die Temp (M-1)", device: "D1402", type: "decimal", scale: 1 },
-  { name: "Moving Die Temp (M-2)", device: "D1403", type: "decimal", scale: 1 },
-  { name: "Slide Temp -1 (S-1)", device: "D1404", type: "decimal", scale: 1 },
-  { name: "FIX. 1 Flow (Lpm)", device: "D1410", type: "decimal", scale: 0.1 },
-  { name: "FIX. 2 Flow (Lpm)", device: "D1411", type: "decimal", scale: 0.1 },
-  { name: "FIX. 3 Flow (Lpm)", device: "D1412", type: "decimal", scale: 0.1 },
-  { name: "Mov. 1 Flow (Lpm)", device: "D1413", type: "decimal", scale: 0.1 },
-  { name: "Mov. 2 Flow (Lpm)", device: "D1414", type: "decimal", scale: 0.1 },
-  { name: "Mov. 3 Flow (Lpm)", device: "D1415", type: "decimal", scale: 0.1 },
-  { name: "Vacuum pressure (mmHg)", device: "D1416", type: "decimal", scale: 1 },
-  { name: "AVERAGE DIE CLAMP TONNAGE COUNT", device: "D7472", type: "int" },
-  { name: "Time for stroke(ms)", device: "D10470", type: "int" },
-  { name: "Stroke (mm)", device: "D10356", type: "decimal", scale: 1 },
-  { name: "Shot Status", device: "D1301", type: "int" },
-];
-
-const UBE_LIMIT_STATUS_PARAMETERS = [];
-
-const PLANT_ENVIRONMENT_PARAMETERS = [
-  { name: "plant_temperature", type: "decimal" },
-  { name: "plant_humidity", type: "decimal" },
-];
-
-const LEAK_TEST_PARAMETERS = [
-  {
-    name: "part_qr_code",
-    type: "text",
-    stringDevice: process.env.PLC_LEAK_SCAN_DEVICE || "D301",
-    stringLength: Number(process.env.PLC_LEAK_SCAN_LENGTH || 14),
-  },
-  { name: "body_leak_value", device: process.env.PLC_LEAK_BODY_VALUE_DEVICE || "D2258", type: "real32" },
-  { name: "gall_1", device: process.env.PLC_LEAK_GALL_1_DEVICE || "D2254", type: "real32" },
-  { name: "gall_2", device: process.env.PLC_LEAK_GALL_2_DEVICE || "D2256", type: "real32" },
-  {
-    name: "result",
-    type: "text",
-    stringDevice: process.env.PLC_LEAK_RESULT_DEVICE || "R2250",
-    stringLength: Number(process.env.PLC_LEAK_RESULT_LENGTH || 1),
-  },
-  {
-    name: "auto_bit",
-    device: process.env.PLC_LEAK_AUTO_MODE_DEVICE || "M101",
-    type: "int",
-    hidden: true,
-  },
-  { name: "manual", device: process.env.PLC_LEAK_MANUAL_MODE_DEVICE || "M102", type: "int" },
-  { name: "dry", device: process.env.PLC_LEAK_DRY_MODE_DEVICE || "M190", type: "int" },
-  { name: "wey", device: process.env.PLC_LEAK_WEY_MODE_DEVICE || "M191", type: "int" },
-  { name: "both", device: process.env.PLC_LEAK_BOTH_MODE_DEVICE || "M192", type: "int" },
-  {
-    name: "cycle_time",
-    device: process.env.PLC_LEAK_CYCLE_TIME_DEVICE || "D6010",
-    type: "decimal",
-    scale: Number(process.env.PLC_LEAK_CYCLE_TIME_SCALE || 1),
-  },
-];
-
-const UBE_READ_PARAMETERS = [...EXCEL_PARAMETERS, ...UBE_LIMIT_STATUS_PARAMETERS].filter((parameter) => {
-  if (parameter.computed) return true;
-  if (!parameter.device) return true;
-  if (parameter.device.startsWith("D")) return true;
-  return ["M", "X", "Y"].includes(parameter.device[0]) && UBE_ALLOWED_BIT_DEVICES.has(parameter.device);
-});
-
-const ALL_PARAMETERS = [
-  ...EXCEL_PARAMETERS,
-  ...UBE_LIMIT_STATUS_PARAMETERS,
-  ...LEAK_TEST_PARAMETERS,
-  ...PLANT_ENVIRONMENT_PARAMETERS,
-];
-const PARAMETER_BY_NAME = new Map(ALL_PARAMETERS.map((p) => [p.name, p]));
 
 const LEGACY_COLUMNS_BY_PARAMETER = {
   "SHOT NO.": "shot_number",
@@ -230,6 +93,62 @@ const LEGACY_COLUMNS_BY_PARAMETER = {
   "Cycle End": "cycle_end",
 };
 
+const INTEGER_PARAMETER_NAMES = new Set([
+  "Sr. No",
+  "SHOT NO.",
+  "HIGH SHOT COUNT",
+  "NG COUNTER",
+  "AVERAGE DIE CLAMP TONNAGE COUNT",
+  "Shot Status",
+  "Cycle End",
+  "shot_number",
+  "Counter",
+  "ok_shot",
+  "ng_counter",
+]);
+
+const TEXT_PARAMETER_NAMES = new Set([
+  "SHOT TIME",
+  "part_name",
+  "part_qr_code",
+  "scan_data",
+  "result",
+  "status",
+  "running_mode",
+  "machine",
+  "ip",
+]);
+
+const REAL32_PARAMETER_NAMES = new Set([
+  "body_leak_value",
+  "gall_1",
+  "gall_2",
+]);
+
+function parameterMetadata(name) {
+  if (TEXT_PARAMETER_NAMES.has(name)) return { name, type: "text" };
+  if (INTEGER_PARAMETER_NAMES.has(name)) return { name, type: "int" };
+  if (REAL32_PARAMETER_NAMES.has(name)) return { name, type: "real32" };
+  return { name, type: "decimal" };
+}
+
+const PARAMETER_BY_NAME = new Map(
+  Array.from(new Set([
+    ...Object.keys(LEGACY_COLUMNS_BY_PARAMETER),
+    ...Object.values(LEGACY_COLUMNS_BY_PARAMETER),
+    ...INTEGER_PARAMETER_NAMES,
+    ...TEXT_PARAMETER_NAMES,
+    ...REAL32_PARAMETER_NAMES,
+    "manual",
+    "dry",
+    "wey",
+    "both",
+    "cycle_time",
+    "plant_temperature",
+    "plant_humidity",
+  ])).map((name) => [name, parameterMetadata(name)])
+);
+
 const DUPLICATE_SOURCE_COLUMNS = new Set(Object.keys(LEGACY_COLUMNS_BY_PARAMETER));
 
 const DROPPED_READING_COLUMNS = new Set([
@@ -252,8 +171,6 @@ const DROPPED_READING_COLUMNS = new Set([
   "SHOT FWD TIME sec value",
   "AUTO/OK-step value (sec)",
   "AUTO/ROBOT/OK-step value (sec)",
-  ...EXCEL_PARAMETERS.filter((p) => ["M", "X", "Y"].includes(p.device?.[0])).map((p) => `${p.name} duration (sec)`),
-  ...LEAK_TEST_PARAMETERS.filter((p) => p.device?.startsWith("M")).map((p) => `${p.name} duration (sec)`),
 ]);
 
 const LIVE_READING_METADATA_COLUMNS = new Set([
@@ -295,8 +212,6 @@ const REPORT_COLUMNS = [
   ["shot_number", "Shot Number"],
   ["ok_shot", "OK Shot"],
   ...UBE_LEGACY_REPORT_COLUMNS,
-  ...EXCEL_PARAMETERS.filter((p) => !p.hidden && !DROPPED_READING_COLUMNS.has(p.name)).map((p) => [p.name, p.name]),
-  ...LEAK_TEST_PARAMETERS.filter((p) => !p.hidden && p.name !== "part_qr_code").map((p) => [p.name, p.name]),
 ];
 
 const LEAK_ONLY_REPORT_KEYS = new Set([
@@ -370,6 +285,7 @@ const UBE_CLIENT_READING_NAMES = new Set([
   "shot_month",
   "shot_day",
   "shot_date",
+  "shot_time",
   "shot_datetime",
   "shot_hour",
   "shot_minute",
@@ -384,7 +300,7 @@ const UBE_CLIENT_READING_NAMES = new Set([
   "cycle_end_time",
   "plant_temperature",
   "plant_humidity",
-  ...EXCEL_PARAMETERS.map((p) => p.name),
+  ...Object.keys(LEGACY_COLUMNS_BY_PARAMETER),
   ...Object.values(LEGACY_COLUMNS_BY_PARAMETER),
 ]);
 
@@ -415,11 +331,6 @@ module.exports = {
   MACHINE_READINGS_TABLE,
   MACHINE_READING_VALUES_TABLE,
   DEVICE_CODE,
-  CYCLE_START_DEVICE,
-  CYCLE_END_DEVICE,
-  SHOT_DATE_TIME_DEVICES,
-  UBE_ALLOWED_M_DEVICES,
-  UBE_ALLOWED_BIT_DEVICES,
   UBE_CYCLE_END_DELAY_MS,
   UBE_CYCLE_END_POLL_MS,
   UBE_LIVE_READ_MS,
@@ -428,7 +339,6 @@ module.exports = {
   PLC_DB_RETRY_MAX,
   PLC_DB_RETRY_BATCH_SIZE,
   PLC_PENDING_SAVE_FILE,
-  LEAK_TEST_CONTROL,
   GAUGE_CONTROL,
   LEAK_DUPLICATE_WINDOW_SEC,
   LEAK_QR_DUPLICATE_WINDOW_SEC,
@@ -436,12 +346,6 @@ module.exports = {
   LEAK_CHANGE_MIN_INTERVAL_MS,
   PLC_READ_TIMEOUT_MS,
   PLC_RECONNECT_AFTER_TIMEOUT_MS,
-  EXCEL_PARAMETERS,
-  UBE_LIMIT_STATUS_PARAMETERS,
-  PLANT_ENVIRONMENT_PARAMETERS,
-  LEAK_TEST_PARAMETERS,
-  UBE_READ_PARAMETERS,
-  ALL_PARAMETERS,
   PARAMETER_BY_NAME,
   LEGACY_COLUMNS_BY_PARAMETER,
   DUPLICATE_SOURCE_COLUMNS,
@@ -457,5 +361,3 @@ module.exports = {
   UBE_CLIENT_READING_NAMES,
   LEAK_CLIENT_READING_NAMES,
 };
-
-

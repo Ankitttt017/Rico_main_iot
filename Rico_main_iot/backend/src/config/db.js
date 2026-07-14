@@ -41,6 +41,7 @@ function getSqlServerConfig() {
     min: Number(process.env.DB_POOL_MIN || 0),
     idleTimeoutMillis: Number(process.env.DB_POOL_IDLE_TIMEOUT || 30000),
   };
+  const connectionTimeout = Number(process.env.DB_CONNECT_TIMEOUT || 5000);
   const options = {
     encrypt: parseBool(process.env.DB_ENCRYPT, false),
     trustServerCertificate: parseBool(process.env.DB_TRUST_SERVER_CERT, true),
@@ -59,11 +60,13 @@ function getSqlServerConfig() {
       "Trusted_Connection=Yes",
       `Encrypt=${options.encrypt ? "Yes" : "No"}`,
       `TrustServerCertificate=${options.trustServerCertificate ? "Yes" : "No"}`,
+      `Connection Timeout=${Math.ceil(connectionTimeout / 1000)}`,
     ].join(";");
 
     return {
       connectionString,
       pool,
+      connectionTimeout,
     };
   }
 
@@ -74,6 +77,7 @@ function getSqlServerConfig() {
     password: process.env.DB_PASSWORD || process.env.DB_PASS,
     options,
     pool,
+    connectionTimeout,
   };
 
   if (port) {

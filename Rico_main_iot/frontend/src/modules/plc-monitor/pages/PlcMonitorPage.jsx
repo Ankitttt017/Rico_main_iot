@@ -721,12 +721,9 @@ function PLCDashboard() {
   }, [normalizeConfig, pushSpark, rememberSelectedSnapshot]);
 
   const st = STATUS_CFG[cycleStatus] || STATUS_CFG.idle;
-  const shotDate = readings.shot_date?.value || buildShotDateFromRow(
-    Object.fromEntries(Object.entries(readings).map(([name, item]) => [name, item?.value ?? null]))
-  );
-  const plcShotTime = readings.shot_time?.value || shotTime || buildShotTimeFromRow(
-    Object.fromEntries(Object.entries(readings).map(([name, item]) => [name, item?.value ?? null]))
-  );
+  const currentReadingRow = Object.fromEntries(Object.entries(readings).map(([name, item]) => [name, item?.value ?? null]));
+  const shotDate = readings.shot_date?.value || buildShotDateFromRow(currentReadingRow);
+  const plcShotTime = readings.shot_time?.value || buildShotTimeFromRow(currentReadingRow) || shotTime;
   const selectedMachineKey = plcConfig.key || plcConfig.ip;
   const selectedMachine = machines.find((machine) => getMachineKey(machine) === selectedMachineKey || machine.ip === plcConfig.ip);
   const selectedMachineContext = mergeMachineContext(selectedMachine || {}, plcConfig);
@@ -848,7 +845,7 @@ function PLCDashboard() {
   ];
   const overviewItems = isUbeMachine ? ubeOverviewItems : configuredOverviewItems;
   const reportReading = {
-    ...Object.fromEntries(Object.entries(readings).map(([name, item]) => [name, item?.value ?? null])),
+    ...currentReadingRow,
     machine_name: readings.machine_name?.value || machineName,
     machine_key: readings.machine_key?.value || selectedMachineKey,
     kind: selectedMachineKind,
@@ -857,13 +854,9 @@ function PLCDashboard() {
     part_name: displayPartName,
     shot_date: readings.shot_date?.value || shotDate,
     shot_time: readings.shot_time?.value || plcShotTime,
-    shot_datetime: readings.shot_datetime?.value || buildShotDateTimeFromRow(
-      Object.fromEntries(Object.entries(readings).map(([name, item]) => [name, item?.value ?? null]))
-    ) || null,
+    shot_datetime: readings.shot_datetime?.value || buildShotDateTimeFromRow(currentReadingRow) || null,
     cycle_end_time: isLeakTestMachine ? readings.cycle_end_time?.value || lastTimestamp?.toISOString() : null,
-    recorded_at: readings.shot_datetime?.value || buildShotDateTimeFromRow(
-      Object.fromEntries(Object.entries(readings).map(([name, item]) => [name, item?.value ?? null]))
-    ) || null,
+    recorded_at: readings.shot_datetime?.value || buildShotDateTimeFromRow(currentReadingRow) || null,
   };
 
   const resetDashboardData = () => {

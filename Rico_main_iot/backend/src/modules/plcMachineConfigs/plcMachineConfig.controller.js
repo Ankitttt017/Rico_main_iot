@@ -2,18 +2,8 @@
 
 const net = require("net");
 const db = require("../../config/db");
-const {
-  EXCEL_PARAMETERS,
-  LEAK_TEST_PARAMETERS,
-} = require("../plcMonitor/config/registerConfig");
 
 let schemaReadyPromise = null;
-const UBE_MACHINE_IPS = new Set(
-  String(process.env.PLC_UBE_MACHINE_IPS || "192.168.117.200,192.168.117.201,192.168.117.202,192.168.117.203")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean)
-);
 
 function cleanText(value) {
   const text = String(value ?? "").trim();
@@ -69,7 +59,7 @@ function machineKey(value) {
 function canonicalMachineKeyFor({ ip, type, inputKey, name }) {
   const cleanIp = cleanText(ip);
   const normalizedType = normalizeMachineType(type);
-  if (cleanIp && (normalizedType === "ube" || UBE_MACHINE_IPS.has(cleanIp))) return cleanIp;
+  if (cleanIp && normalizedType === "ube") return cleanIp;
   return machineKey(inputKey || name || cleanIp);
 }
 
@@ -82,63 +72,13 @@ function normalizeMachineType(value) {
     .slice(0, 40) || "generic";
 }
 
-function normalizeRegisterName(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-}
-
-const UBE_REGISTER_OVERRIDES_BY_NAME = new Map([
-  [normalizeRegisterName("CLAMP FORCE (%)"), { device: "D6918", stringDevice: "", type: "decimal", scale: 0.1 }],
-  [normalizeRegisterName("CLAMP TONNAGE (T)"), { device: "D6920", stringDevice: "", type: "decimal", scale: 0.01 }],
-]);
-
-function normalizeUbeRegister(register = {}) {
-  const override = UBE_REGISTER_OVERRIDES_BY_NAME.get(normalizeRegisterName(register.name));
-  return override ? { ...register, ...override } : register;
-}
-
 function normalizeRegistersForMachineType(registers = [], type = "generic") {
   if (!Array.isArray(registers)) return registers;
-  if (normalizeMachineType(type) !== "ube") return registers;
-  return registers.map(normalizeUbeRegister);
+  return registers;
 }
 
 function inferMachineType(input = {}) {
   const explicit = normalizeMachineType(input.machine_type);
-  const registerConfig = Array.isArray(input.register_config)
-    ? input.register_config
-    : (() => {
-        try {
-          const parsed = input.register_config_json ? JSON.parse(input.register_config_json) : null;
-          return Array.isArray(parsed) ? parsed : [];
-        } catch {
-          return [];
-        }
-      })();
-
-  const registerText = registerConfig
-    .map((item) => `${item.name || ""} ${item.parameter || ""} ${item.device || ""} ${item.stringDevice || ""}`)
-    .join(" ");
-  const haystack = [
-    input.machine_name,
-    input.name,
-    input.machine_key,
-    input.machine_code,
-    input.asset_machine_name,
-    input.asset,
-    input.category,
-    registerText,
-  ].join(" ").toLowerCase();
-
-  if (haystack.includes("gauge") || haystack.includes("guage") || haystack.includes("part scan")) {
-    return "gauge";
-  }
-  if (haystack.includes("leak")) return "leaktest";
-  if (haystack.includes("ube") || haystack.includes("ueb")) return "ube";
-  if (["gauge", "leaktest", "ube"].includes(explicit)) return explicit;
   return explicit || "generic";
 }
 
@@ -209,34 +149,6 @@ async function ensureSchema() {
         BEGIN
           ALTER TABLE dbo.plc_machine_configs ADD plant_code NVARCHAR(40) NULL;
         END;
-
-        UPDATE pc
-        SET machine_key = pc.ip_address,
-            machine_type = 'ube',
-            updated_at = SYSUTCDATETIME()
-        FROM dbo.plc_machine_configs pc
-        WHERE pc.ip_address IN ('192.168.117.200', '192.168.117.201', '192.168.117.202', '192.168.117.203')
-          AND NOT EXISTS (
-            SELECT 1
-            FROM dbo.plc_machine_configs other
-            WHERE other.id <> pc.id
-              AND other.machine_key = pc.ip_address
-          );
-
-        IF OBJECT_ID(N'dbo.PlcCycleReadings', N'U') IS NOT NULL
-          UPDATE dbo.PlcCycleReadings
-          SET machine_key = plc_ip
-          WHERE plc_ip IN ('192.168.117.200', '192.168.117.201', '192.168.117.202', '192.168.117.203');
-
-        IF OBJECT_ID(N'dbo.PlcConnectionEvents', N'U') IS NOT NULL
-          UPDATE dbo.PlcConnectionEvents
-          SET machine_key = plc_ip
-          WHERE plc_ip IN ('192.168.117.200', '192.168.117.201', '192.168.117.202', '192.168.117.203');
-
-        IF OBJECT_ID(N'dbo.plc_machine_readings', N'U') IS NOT NULL
-          UPDATE dbo.plc_machine_readings
-          SET machine_key = plc_ip
-          WHERE plc_ip IN ('192.168.117.200', '192.168.117.201', '192.168.117.202', '192.168.117.203');
       `);
       await db.run(`
         IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
@@ -343,32 +255,7 @@ function normalizeMachine(row = {}) {
 }
 
 function registersForType(_type = "generic") {
-  const type = normalizeMachineType(_type);
-  const registers = type === "ube"
-    ? EXCEL_PARAMETERS
-    : type === "leaktest"
-      ? LEAK_TEST_PARAMETERS
-      : [];
-  return normalizeRegistersForMachineType(registers, type).map((register, index) => ({
-    id: cleanText(register.id) || `${normalizeRegisterName(register.name) || "register"}-${index}`,
-    name: cleanText(register.name),
-    device: cleanText(register.device) || "",
-    stringDevice: cleanText(register.stringDevice) || "",
-    stringLength: register.stringLength || "",
-    type: normalizeRegisterType(register.type),
-    scale: register.scale === "" || register.scale === null || register.scale === undefined ? 1 : Number(register.scale),
-    computed: cleanText(register.computed) || "",
-    enabled: register.enabled === undefined ? true : Boolean(register.enabled),
-    min: cleanNumber(register.min ?? register.minimum),
-    max: cleanNumber(register.max ?? register.maximum),
-    warning_min: cleanNumber(register.warning_min ?? register.warningMin),
-    warning_max: cleanNumber(register.warning_max ?? register.warningMax),
-    unit: cleanText(register.unit) || "",
-    show_on_monitor: register.show_on_monitor === undefined ? true : Boolean(register.show_on_monitor),
-    show_to_operator: register.show_to_operator === undefined ? false : Boolean(register.show_to_operator),
-    log_history: register.log_history === undefined ? true : Boolean(register.log_history),
-    alarm_enabled: register.alarm_enabled === undefined ? false : Boolean(register.alarm_enabled),
-  }));
+  return [];
 }
 
 function normalizeRegisters(input) {
@@ -480,7 +367,7 @@ async function saveMachineRecord(input = {}) {
     inputKey: input.machine_key,
     name,
   });
-  const key = type === "ube" || UBE_MACHINE_IPS.has(ip)
+  const key = type === "ube"
     ? stableBaseKey
     : await uniqueMachineKey(stableBaseKey, id);
   if (!key) throw new Error("Machine key is required");

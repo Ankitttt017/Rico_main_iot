@@ -13,8 +13,8 @@ const departmentRoutes = require("./src/modules/departments/department.routes");
 const authRoutes = require("./src/modules/auth/auth.routes");
 const workstationRoutes = require("./src/modules/workstation/workstation.routes");
 const plcMachineConfigRoutes = require("./src/modules/plcMachineConfigs/plcMachineConfig.routes");
-const createPlcMonitorRoutes = require("./src/modules/plcMonitor/plcMonitorRoutes");
-const { startPlcMonitor } = require("./src/modules/plcMonitor/plcMonitorService");
+const createPlcMonitorRoutes = require("./src/modules/plcMonitor/routes/plcMonitorRoutes");
+const { startPlcMonitor } = require("./src/modules/plcMonitor/services/plcMonitorService");
 
 const app = express();
 const server = http.createServer(app);

@@ -1,10 +1,8 @@
 "use strict";
 
-const net = require("net");
 const fs = require("fs");
 const path = require("path");
-const db = require("../../config/db");
-const { readPlantEnvironment } = require("./plantEnvironmentReader");
+const db = require("../../../config/db");
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // MACHINE CONFIG
@@ -13,7 +11,7 @@ const { readPlantEnvironment } = require("./plantEnvironmentReader");
 const {
   getMachines,
   getConfiguredMachines,
-} = require("./config/machineConfig");
+} = require("../config/machineConfig");
 const {
   TABLE,
   LEAK_TEST_TABLE,
@@ -21,10 +19,6 @@ const {
   CONNECTION_EVENTS_TABLE,
   MACHINE_READINGS_TABLE,
   MACHINE_READING_VALUES_TABLE,
-  DEVICE_CODE,
-  CYCLE_START_DEVICE,
-  CYCLE_END_DEVICE,
-  SHOT_DATE_TIME_DEVICES,
   UBE_CYCLE_END_DELAY_MS,
   UBE_CYCLE_END_POLL_MS,
   UBE_LIVE_READ_MS,
@@ -33,19 +27,12 @@ const {
   PLC_DB_RETRY_MAX,
   PLC_DB_RETRY_BATCH_SIZE,
   PLC_PENDING_SAVE_FILE,
-  LEAK_TEST_CONTROL,
   GAUGE_CONTROL,
   LEAK_DUPLICATE_WINDOW_SEC,
   LEAK_QR_DUPLICATE_WINDOW_SEC,
   LEAK_CHANGE_SAVE_ENABLED,
   LEAK_CHANGE_MIN_INTERVAL_MS,
-  PLC_READ_TIMEOUT_MS,
   PLC_RECONNECT_AFTER_TIMEOUT_MS,
-  EXCEL_PARAMETERS,
-  UBE_LIMIT_STATUS_PARAMETERS,
-  LEAK_TEST_PARAMETERS,
-  UBE_READ_PARAMETERS,
-  ALL_PARAMETERS,
   PARAMETER_BY_NAME,
   LEGACY_COLUMNS_BY_PARAMETER,
   DROPPED_READING_COLUMNS,
@@ -57,7 +44,20 @@ const {
   M_BIT_DURATION_COLUMNS,
   UBE_CLIENT_READING_NAMES,
   LEAK_CLIENT_READING_NAMES,
-} = require("./config/registerConfig");
+} = require("../config/registerConfig");
+const {
+  closeSocket,
+  connectPLC,
+  parseDeviceRange,
+  readBit,
+  readControlSignal,
+  readDWord,
+  readReal32,
+  readString,
+  readWord,
+  resolveStringReadTarget,
+  withTimeout,
+} = require("../protocols/slmpProtocol");
 
 let schemaReadyPromise = null;
 let schemaUsableAt = 0;
@@ -69,12 +69,32 @@ const latestReadingsCache = {
 };
 const PLC_LATEST_DB_CACHE_MS = Math.max(500, Number(process.env.PLC_LATEST_DB_CACHE_MS || 3000));
 const PLC_LATEST_DB_TIMEOUT_MS = Math.max(500, Number(process.env.PLC_LATEST_DB_TIMEOUT_MS || 2500));
-const UBE_MACHINE_IPS = new Set(
-  String(process.env.PLC_UBE_MACHINE_IPS || "192.168.117.200,192.168.117.201,192.168.117.202,192.168.117.203")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean)
+const PLANT_ENVIRONMENT_ENABLED =
+  String(process.env.PLC_PLANT_ENVIRONMENT_ENABLED || "true").toLowerCase() !== "false";
+const PLANT_ENVIRONMENT_MACHINE = {
+  ip: process.env.PLC_PLANT_ENVIRONMENT_IP || "192.168.119.206",
+  port: Number(process.env.PLC_PLANT_ENVIRONMENT_PORT || 5002),
+};
+const PLANT_ENVIRONMENT_TEMPERATURE_DEVICE =
+  String(process.env.PLC_PLANT_TEMPERATURE_DEVICE || "D210").trim().toUpperCase();
+const PLANT_ENVIRONMENT_HUMIDITY_DEVICE =
+  String(process.env.PLC_PLANT_HUMIDITY_DEVICE || "D310").trim().toUpperCase();
+const PLANT_ENVIRONMENT_CACHE_MS = Math.max(
+  1000,
+  Number(process.env.PLC_PLANT_ENVIRONMENT_CACHE_MS || 5000)
 );
+const PLANT_ENVIRONMENT_READ_TIMEOUT_MS = Math.max(
+  1000,
+  Number(process.env.PLC_PLANT_ENVIRONMENT_READ_TIMEOUT_MS || 6000)
+);
+const UBE_SHOT_TIME_HOUR_DEVICE = String(process.env.PLC_UBE_SHOT_TIME_HOUR_DEVICE || "D2103").trim().toUpperCase();
+const UBE_SHOT_TIME_MINUTE_DEVICE = String(process.env.PLC_UBE_SHOT_TIME_MINUTE_DEVICE || "D2104").trim().toUpperCase();
+const UBE_SHOT_TIME_SECOND_DEVICE = String(process.env.PLC_UBE_SHOT_TIME_SECOND_DEVICE || "D2105").trim().toUpperCase();
+const plantEnvironmentCache = {
+  at: 0,
+  data: null,
+  promise: null,
+};
 const STOPPAGE_READING_KEYS = new Set([
   "MINOR STOPPAGE sec.",
   "minor_stoppage",
@@ -101,6 +121,96 @@ function isStoppageOrBreakdownKey(key) {
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // UTILITY HELPERS
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+function normalizePlantEnvironmentValue(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Number(number.toFixed(2)) : null;
+}
+
+function normalizeClockPart(value, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return null;
+  const integer = Math.trunc(number);
+  if (integer >= 0 && integer <= max) return integer;
+
+  const bcdText = integer.toString(16);
+  const bcdNumber = Number.parseInt(bcdText, 10);
+  return Number.isFinite(bcdNumber) && bcdNumber >= 0 && bcdNumber <= max ? bcdNumber : null;
+}
+
+async function readUbeShotTimestamp(sock, fallbackDate = new Date()) {
+  try {
+    const rawHour = await readWord(sock, UBE_SHOT_TIME_HOUR_DEVICE);
+    const rawMinute = await readWord(sock, UBE_SHOT_TIME_MINUTE_DEVICE);
+    const rawSecond = await readWord(sock, UBE_SHOT_TIME_SECOND_DEVICE);
+    const hour = normalizeClockPart(rawHour, 23);
+    const minute = normalizeClockPart(rawMinute, 59);
+    const second = normalizeClockPart(rawSecond, 59);
+    if (hour === null || minute === null || second === null) return fallbackDate;
+
+    const date = new Date(fallbackDate);
+    date.setHours(hour, minute, second, 0);
+    return date;
+  } catch {
+    return fallbackDate;
+  }
+}
+
+async function readPlantEnvironmentUnlocked() {
+  if (!PLANT_ENVIRONMENT_ENABLED) return {};
+  let sock = null;
+
+  try {
+    sock = await withTimeout(
+      connectPLC(PLANT_ENVIRONMENT_MACHINE),
+      PLANT_ENVIRONMENT_READ_TIMEOUT_MS,
+      `plant environment connect ${PLANT_ENVIRONMENT_MACHINE.ip}:${PLANT_ENVIRONMENT_MACHINE.port}`
+    );
+    const temperature = await withTimeout(
+      readReal32(sock, PLANT_ENVIRONMENT_TEMPERATURE_DEVICE),
+      PLANT_ENVIRONMENT_READ_TIMEOUT_MS,
+      `plant temperature ${PLANT_ENVIRONMENT_TEMPERATURE_DEVICE}`
+    );
+    const humidity = await withTimeout(
+      readReal32(sock, PLANT_ENVIRONMENT_HUMIDITY_DEVICE),
+      PLANT_ENVIRONMENT_READ_TIMEOUT_MS,
+      `plant humidity ${PLANT_ENVIRONMENT_HUMIDITY_DEVICE}`
+    );
+
+    return {
+      plant_temperature: normalizePlantEnvironmentValue(temperature),
+      plant_humidity: normalizePlantEnvironmentValue(humidity),
+    };
+  } finally {
+    closeSocket(sock);
+  }
+}
+
+async function getPlantEnvironmentReadings() {
+  if (!PLANT_ENVIRONMENT_ENABLED) return {};
+  if (plantEnvironmentCache.data && Date.now() - plantEnvironmentCache.at < PLANT_ENVIRONMENT_CACHE_MS) {
+    return plantEnvironmentCache.data;
+  }
+  if (plantEnvironmentCache.promise) return plantEnvironmentCache.promise;
+
+  plantEnvironmentCache.promise = readPlantEnvironmentUnlocked()
+    .then((data) => {
+      plantEnvironmentCache.data = data;
+      plantEnvironmentCache.at = Date.now();
+      plantEnvironmentCache.promise = null;
+      return data;
+    })
+    .catch((error) => {
+      plantEnvironmentCache.promise = null;
+      console.error(
+        `Plant environment read failed (${PLANT_ENVIRONMENT_MACHINE.ip}:${PLANT_ENVIRONMENT_MACHINE.port}):`,
+        error.message
+      );
+      return plantEnvironmentCache.data || {};
+    });
+
+  return plantEnvironmentCache.promise;
+}
 
 function clampLimit(value, fallback = 200, max = Number(process.env.PLC_HISTORY_MAX_LIMIT || 20000)) {
   const parsed = Number.parseInt(value, 10);
@@ -196,12 +306,10 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const PLC_CONNECT_TIMEOUT_MS = Number(process.env.PLC_CONNECT_TIMEOUT_MS || 15000);
 const PLC_RECONNECT_MIN_MS = Number(process.env.PLC_RECONNECT_MIN_MS || process.env.PLC_RECONNECT_MS || 2000);
 const PLC_RECONNECT_MAX_MS = Number(process.env.PLC_RECONNECT_MAX_MS || 30000);
 const PLC_RECONNECT_BACKOFF_FACTOR = Number(process.env.PLC_RECONNECT_BACKOFF_FACTOR || 1.6);
 const PLC_RECONNECT_JITTER_MS = Number(process.env.PLC_RECONNECT_JITTER_MS || 1000);
-const UBE_PART_NAME_DEVICE = process.env.PLC_UBE_PART_NAME_DEVICE || "D100";
 const UBE_PART_NAME_LENGTH = Number(process.env.PLC_UBE_PART_NAME_LENGTH || 12);
 
 function isPlcReadTimeoutError(error) {
@@ -223,15 +331,6 @@ function reconnectDelayMs(attempt = 1) {
   const backoff = minDelay * Math.pow(factor, Math.max(0, attempt - 1));
   const jitter = PLC_RECONNECT_JITTER_MS > 0 ? Math.floor(Math.random() * PLC_RECONNECT_JITTER_MS) : 0;
   return Math.min(maxDelay, Math.floor(backoff + jitter));
-}
-
-function closeSocket(sock) {
-  if (!sock) return;
-  try {
-    sock.destroy();
-  } catch (_) {
-    // Nothing useful to do here; the monitor loop will reconnect.
-  }
 }
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -259,34 +358,16 @@ function isLeakTestMachine(machine) {
 function getCanonicalMachineKey(machine = {}) {
   const ip = String(machine.ip || machine.plc_ip || machine.ip_address || "").trim();
   const rawKey = String(machine.key || machine.machine_key || "").trim();
-  if (ip && (isUbeMachine(machine) || UBE_MACHINE_IPS.has(ip))) return ip;
   return rawKey || ip;
 }
 
 function getMachineTypeName(machine) {
-  const rawKind = String(machine?.kind || machine?.machine_type || machine?.machineType || "").trim().toLowerCase();
-  if (rawKind && rawKind !== "ube" && rawKind !== "generic") return rawKind;
-  const machineText = [
-    machine?.name,
-    machine?.machine_name,
-    machine?.machineKey,
-    machine?.machine_key,
-    machine?.key,
-  ].join(" ").toLowerCase();
-  const registerText = Array.isArray(machine?.registerConfig)
-    ? machine.registerConfig.map((item) => String(item?.name || item?.parameter || "").toLowerCase()).join(" ")
-    : "";
-  if (machineText.includes("gauge") || registerText.includes("part scan") || registerText.includes("gauge status")) {
-    return "gauge";
-  }
-  if (machineText.includes("leak")) return "leaktest";
-  return rawKind || "ube";
+  return String(machine?.kind || machine?.machine_type || machine?.machineType || "generic")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "generic";
 }
-
-const UBE_REGISTER_OVERRIDES_BY_NAME = new Map([
-  [normalizeRegisterName("CLAMP FORCE (%)"), { device: "D6918", type: "decimal", scale: 0.1 }],
-  [normalizeRegisterName("CLAMP TONNAGE (T)"), { device: "D6920", type: "decimal", scale: 0.01 }],
-]);
 
 function normalizeUbeReadParameter(parameter = {}) {
   const normalizedName = normalizeRegisterName(parameter.name || parameter.parameter || parameter.label);
@@ -296,14 +377,6 @@ function normalizeUbeReadParameter(parameter = {}) {
     normalizedName.includes("minor_stop")
   ) {
     return null;
-  }
-  const override = UBE_REGISTER_OVERRIDES_BY_NAME.get(normalizedName);
-  if (override) {
-    return {
-      ...parameter,
-      ...override,
-      stringDevice: "",
-    };
   }
   return parameter;
 }
@@ -327,7 +400,6 @@ function mergeUbeReadParameters(configuredParameters = []) {
   configuredParameters
     .filter((parameter) => parameter && parameter.enabled !== false)
     .forEach(add);
-  UBE_READ_PARAMETERS.forEach(add);
 
   return merged;
 }
@@ -354,270 +426,14 @@ function buildEmitPayload(machine, data) {
 }
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// PER-READ TIMEOUT WRAPPER
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-function withTimeout(promise, ms, label) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) =>
-      setTimeout(
-        () => reject(new Error(`PLC read timeout (${ms}ms): ${label}`)),
-        ms
-      )
-    ),
-  ]);
-}
-
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// TCP BUFFER ACCUMULATION
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-function sendReceive(sock, packet, expectedPayloadBytes = 1, label = "PLC read") {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    let totalReceived = 0;
-    const expectedBytes = 11 + Math.max(0, Number(expectedPayloadBytes) || 0);
-    let settled = false;
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(new Error(`PLC read timeout (${PLC_READ_TIMEOUT_MS}ms): ${label}`));
-    }, PLC_READ_TIMEOUT_MS);
-
-    const cleanup = () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      sock.removeListener("data", onData);
-      sock.removeListener("error", onError);
-    };
-
-    const onData = (chunk) => {
-      chunks.push(chunk);
-      totalReceived += chunk.length;
-
-      if (totalReceived < expectedBytes) return;
-
-      const data = Buffer.concat(chunks);
-      cleanup();
-
-      try {
-        const endCode = data.readUInt16LE(9);
-        if (endCode !== 0) {
-          reject(new Error(`PLC returned error code 0x${endCode.toString(16)}`));
-          return;
-        }
-        resolve(data.slice(11, expectedBytes));
-      } catch (err) {
-        reject(new Error(`PLC response parse failed: ${err.message}`));
-      }
-    };
-
-    const onError = (err) => {
-      cleanup();
-      reject(err);
-    };
-
-    sock.on("data", onData);
-    sock.once("error", onError);
-    try {
-      sock.write(packet);
-    } catch (error) {
-      cleanup();
-      reject(error);
-    }
-  });
-}
-
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// PLC PACKET BUILDER
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-function parseDevice(device) {
-  const match = String(device || "").trim().toUpperCase().match(/^([A-Z]+)([0-9A-F]+)$/);
-  if (!match) throw new Error(`Invalid PLC device: ${device}`);
-  const radix = ["X", "Y"].includes(match[1]) ? 16 : 10;
-  return { type: match[1], addr: Number.parseInt(match[2], radix) };
-}
-
-function parseDeviceRange(deviceRange) {
-  const raw = String(deviceRange || "").trim().toUpperCase();
-  const [startRaw, endRaw] = raw.split("-").map((item) => item.trim()).filter(Boolean);
-  const start = parseDevice(startRaw || raw);
-  if (!endRaw) return { startDevice: `${start.type}${start.addr}`, length: null };
-
-  let resolvedEndRaw = endRaw;
-  const endIsAddressOnly = !/^[A-Z]/i.test(endRaw) && /^[0-9A-F]+$/i.test(endRaw);
-  if (endIsAddressOnly) {
-    const startAddress = String(startRaw || raw).replace(/^[A-Z]+/i, "");
-    const shouldExpandSuffix =
-      endRaw.length < startAddress.length &&
-      !["X", "Y"].includes(start.type);
-    resolvedEndRaw = shouldExpandSuffix
-      ? `${startAddress.slice(0, startAddress.length - endRaw.length)}${endRaw}`
-      : endRaw;
-  }
-  const resolvedEndIsAddressOnly = !/^[A-Z]/i.test(resolvedEndRaw) && /^[0-9A-F]+$/i.test(resolvedEndRaw);
-  const end = parseDevice(resolvedEndIsAddressOnly ? `${start.type}${resolvedEndRaw}` : resolvedEndRaw);
-  if (start.type !== end.type || end.addr < start.addr) {
-    throw new Error(`Invalid PLC device range: ${deviceRange}`);
-  }
-
-  return {
-    startDevice: `${start.type}${start.addr}`,
-    length: (end.addr - start.addr) + 1,
-  };
-}
-
-function resolveStringReadTarget(stringDevice, stringLength) {
-  const { startDevice, length: rangeLength } = parseDeviceRange(stringDevice);
-  const configuredLength = Number.parseInt(stringLength, 10);
-  return {
-    startDevice,
-    length: rangeLength || (Number.isFinite(configuredLength) && configuredLength > 0 ? configuredLength : 1),
-  };
-}
-
-function buildPacket(device, count, isBit = false) {
-  const parsed = parseDevice(device);
-  const command = Buffer.alloc(10);
-
-  command.writeUInt16LE(0x0401, 0);
-  command.writeUInt16LE(isBit ? 1 : 0, 2);
-  command[4] = parsed.addr & 0xff;
-  command[5] = (parsed.addr >> 8) & 0xff;
-  command[6] = (parsed.addr >> 16) & 0xff;
-  command[7] = DEVICE_CODE[parsed.type];
-  command.writeUInt16LE(count, 8);
-
-  const packet = Buffer.alloc(21);
-  packet[0] = 0x50;
-  packet[1] = 0x00;
-  packet[2] = 0x00;
-  packet[3] = 0xff;
-  packet.writeUInt16LE(0x03ff, 4);
-  packet[6] = 0x00;
-  packet.writeUInt16LE(12, 7);
-  packet.writeUInt16LE(4, 9);
-  command.copy(packet, 11);
-
-  return packet;
-}
-
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// PLC READ FUNCTIONS
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-async function readWord(sock, device) {
-  const response = await sendReceive(sock, buildPacket(device, 1, false), 2, `readWord(${device})`);
-  return response.readUInt16LE(0);
-}
-
-async function readReal32(sock, device) {
-  const response = await sendReceive(sock, buildPacket(device, 2, false), 4, `readReal32(${device})`);
-  const value = response.readFloatLE(0);
-  return Number.isFinite(value) ? Number(value.toFixed(3)) : null;
-}
-
-async function readDWord(sock, device) {
-  const response = await sendReceive(sock, buildPacket(device, 2, false), 4, `readDWord(${device})`);
-  return response.readUInt32LE(0);
-}
-async function readBit(sock, device) {
-  const response = await sendReceive(sock, buildPacket(device, 1, true), 1, `readBit(${device})`);
-  return response[0] === 0 ? 0 : 1;
-}
-
-async function readControlSignal(sock, device) {
-  const normalizedDevice = String(device || "").trim().toUpperCase();
-  if (!normalizedDevice) return 0;
-  if (["M", "X", "Y"].includes(normalizedDevice[0])) {
-    return readBit(sock, normalizedDevice);
-  }
-  const value = await readWord(sock, normalizedDevice);
-  return Number(value) === 0 ? 0 : 1;
-}
-
-async function readString(sock, startDevice, length) {
-  const response = await sendReceive(
-    sock,
-    buildPacket(startDevice, length, false),
-    length * 2,
-    `readString(${startDevice}, len=${length})`
-  );
-
-  let result = "";
-  for (let i = 0; i < length; i++) {
-    const value = response.readUInt16LE(i * 2);
-    const low = value & 0xff;
-    const high = (value >> 8) & 0xff;
-    if (low >= 32 && low <= 126) result += String.fromCharCode(low);
-    if (high >= 32 && high <= 126) result += String.fromCharCode(high);
-  }
-
-  // PEHLE wala strict filter HATA DIYA:
-  // const strict = cleaned.match(/[A-Za-z0-9\-]+S\d/)?.[0];
-  // return strict || cleaned;
-
-  // SIRF basic clean karo
-  const cleaned = result.trim().replace(/[^A-Za-z0-9\-_]/g, "");
-  return cleaned;
-}
-
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// TCP CONNECTION
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-function connectPLC(machine) {
-  return new Promise((resolve, reject) => {
-    const sock = new net.Socket();
-    const timeoutMs = PLC_CONNECT_TIMEOUT_MS;
-    let settled = false;
-
-    const cleanup = () => {
-      sock.removeListener("error", onError);
-      sock.removeListener("timeout", onTimeout);
-    };
-
-    const fail = (error) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      closeSocket(sock);
-      reject(error);
-    };
-
-    const onError = (error) => fail(error);
-    const onTimeout = () => fail(new Error("PLC connection timeout"));
-
-    sock.setTimeout(timeoutMs);
-    sock.connect(machine.port, machine.ip, () => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      sock.setTimeout(0);
-      sock.setKeepAlive(true, Number(process.env.PLC_SOCKET_KEEPALIVE_MS || 10000));
-      sock.setNoDelay(true);
-      resolve(sock);
-    });
-    sock.on("error", onError);
-    sock.on("timeout", onTimeout);
-  });
-}
-
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // NORMALIZE / SCALE
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
 function scaleValue(parameter, value) {
   if (value === null || value === undefined) return null;
   if (isStringRegisterType(parameter.type)) return String(value);
   const normalizedName = String(parameter.name || "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_");
-  const normalizedDevice = String(parameter.device || "").trim().toUpperCase();
   const isBiscuitThickness =
-    normalizedDevice === "D6916" ||
     normalizedName === "biscuit_thickness_mm" ||
     normalizedName === "biscuit_thickness" ||
     (normalizedName.includes("biscuit") && normalizedName.includes("thickness"));
@@ -845,7 +661,12 @@ function canonicalGaugeReadingName(name = "") {
 function findConfiguredRegisterDevice(machine, names = []) {
   const normalizedTargets = new Set(names.map(normalizeRegisterName));
   const register = Array.isArray(machine?.registerConfig)
-    ? machine.registerConfig.find((item) => normalizedTargets.has(normalizeRegisterName(item?.name || item?.parameter)))
+    ? machine.registerConfig.find((item) =>
+        item &&
+        item.enabled !== false &&
+        normalizedTargets.has(normalizeRegisterName(item?.name || item?.parameter || item?.label)) &&
+        String(item.device || item.stringDevice || "").trim()
+      )
     : null;
   return String(register?.device || register?.stringDevice || "").trim().toUpperCase();
 }
@@ -916,24 +737,9 @@ function buildLeakSignature(readings, { includeCycleTime = false } = {}) {
   return JSON.stringify(signature);
 }
 
-function getFallbackDevices(envName, defaults = []) {
-  return String(process.env[envName] || defaults.join(","))
-    .split(",")
-    .map((item) => item.trim().toUpperCase())
-    .filter(Boolean);
-}
-
 function getLeakQrDeviceCandidates(configuredDevice = "") {
-  const primaryDevice = String(process.env.PLC_LEAK_SCAN_DEVICE || "D301").trim().toUpperCase();
   const configured = normalizeDeviceStart(configuredDevice);
-  const fallbackDevices = getFallbackDevices("PLC_LEAK_SCAN_FALLBACK_DEVICES", [
-    "D300",
-    "D301",
-    "D100",
-    "D101",
-    "D102",
-  ]);
-  return Array.from(new Set([configured, primaryDevice, ...fallbackDevices].filter(Boolean)));
+  return configured ? [configured] : [];
 }
 
 function isLikelyLeakQrCode(value, minLength = Number(process.env.PLC_LEAK_SCAN_MIN_LENGTH || 4)) {
@@ -1004,9 +810,7 @@ function addInsertValue(columns, values, column, value) {
 }
 
 function getReadingNames() {
-  return [...EXCEL_PARAMETERS, ...UBE_LIMIT_STATUS_PARAMETERS]
-    .map((p) => p.name)
-    .filter((name) => !DROPPED_READING_COLUMNS.has(name));
+  return [];
 }
 
 let fixedReadingColumnNames = null;
@@ -1223,6 +1027,8 @@ const UBE_PART_NAME_REGISTER_NAMES = new Set([
   "current_die",
   "current_die_name",
 ]);
+const UBE_PART_NAME_FALLBACK_CACHE_MS = Number(process.env.PLC_UBE_PART_NAME_FALLBACK_CACHE_MS || 60000);
+const ubePartNameFallbackCache = new Map();
 
 function isLikelyPartName(value) {
   const text = String(value || "").trim();
@@ -1253,16 +1059,7 @@ function getConfiguredUbePartNameTargets(machine = {}) {
 }
 
 function getUbePartNameTargets(machine = {}) {
-  const envDevices = String(process.env.PLC_UBE_PART_NAME_DEVICES || UBE_PART_NAME_DEVICE)
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .map((device) => {
-      const target = resolveStringReadTarget(device, UBE_PART_NAME_LENGTH);
-      return { startDevice: target.startDevice, length: target.length, source: device };
-    });
-
-  const targets = [...getConfiguredUbePartNameTargets(machine), ...envDevices];
+  const targets = getConfiguredUbePartNameTargets(machine);
   const seen = new Set();
   return targets.filter((target) => {
     const key = `${target.startDevice}:${target.length}`;
@@ -1278,6 +1075,33 @@ async function readUbePartName(sock, machine = {}) {
     if (isLikelyPartName(value)) return value.trim();
   }
   return "";
+}
+
+async function getLatestKnownUbePartName(machine = {}) {
+  const key = getCanonicalMachineKey(machine);
+  const ip = String(machine.ip || machine.plc_ip || machine.ip_address || "").trim();
+  if (!key && !ip) return "";
+
+  const cacheKey = key || ip;
+  const cached = ubePartNameFallbackCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < UBE_PART_NAME_FALLBACK_CACHE_MS) return cached.value;
+
+  try {
+    const { rows } = await db.query(
+      `SELECT TOP 1 part_name
+       FROM ${TABLE} WITH (NOLOCK)
+       WHERE NULLIF(LTRIM(RTRIM(part_name)), '') IS NOT NULL
+         AND (machine_key = ? OR plc_ip = ?)
+       ORDER BY recorded_at DESC, id DESC`,
+      [key, ip]
+    );
+    const value = String(rows[0]?.part_name || "").trim();
+    ubePartNameFallbackCache.set(cacheKey, { value, at: Date.now() });
+    return value;
+  } catch (error) {
+    console.error(`UBE part name fallback failed for ${machine.name || key || ip}:`, error.message);
+    return cached?.value || "";
+  }
 }
 
 const LEAK_PARAMETER_ALIASES = new Map(
@@ -1324,42 +1148,40 @@ function normalizeDeviceStart(device = "") {
 }
 
 function normalizeLeakReadParameters(registerConfig = []) {
-  if (!Array.isArray(registerConfig) || !registerConfig.length) return LEAK_TEST_PARAMETERS;
+  if (!Array.isArray(registerConfig) || !registerConfig.length) return [];
 
-  const defaultsByName = new Map(LEAK_TEST_PARAMETERS.map((parameter) => [parameter.name, parameter]));
   const normalized = [];
   const seen = new Set();
 
   for (const parameter of registerConfig) {
     if (!parameter || parameter.enabled === false) continue;
-    const canonicalName = canonicalLeakParameterName(parameter);
+    const canonicalName = canonicalLeakParameterName(parameter) ||
+      String(parameter.name || parameter.parameter || parameter.label || "").trim();
     if (!canonicalName || seen.has(canonicalName)) continue;
 
-    const defaults = defaultsByName.get(canonicalName) || {};
-    const isText = isStringRegisterType(defaults.type || parameter.type);
+    const isText = isStringRegisterType(parameter.type);
     const configuredDevice = String(parameter.device || "").trim();
     const configuredStringDevice = String(parameter.stringDevice || "").trim();
     const next = {
       ...parameter,
       name: canonicalName,
-      type: defaults.type || parameter.type,
-      hidden: defaults.hidden,
-      scale: parameter.scale ?? defaults.scale,
+      type: parameter.type || "int",
+      scale: parameter.scale ?? 1,
     };
 
     if (isText) {
-      const sourceDevice = configuredStringDevice || configuredDevice || defaults.stringDevice || defaults.device || "";
+      const sourceDevice = configuredStringDevice || configuredDevice;
       let target = null;
       try {
-        target = sourceDevice ? resolveStringReadTarget(sourceDevice, parameter.stringLength || defaults.stringLength || 1) : null;
+        target = sourceDevice ? resolveStringReadTarget(sourceDevice, parameter.stringLength || 1) : null;
       } catch {
         target = null;
       }
       next.stringDevice = target?.startDevice || sourceDevice;
-      next.stringLength = target?.length || parameter.stringLength || defaults.stringLength || 1;
+      next.stringLength = target?.length || parameter.stringLength || 1;
       next.device = "";
     } else {
-      const sourceDevice = configuredDevice || configuredStringDevice || defaults.device || "";
+      const sourceDevice = configuredDevice || configuredStringDevice;
       next.device = normalizeDeviceStart(sourceDevice);
       next.stringDevice = "";
       next.stringLength = "";
@@ -1369,27 +1191,17 @@ function normalizeLeakReadParameters(registerConfig = []) {
     seen.add(canonicalName);
   }
 
-  for (const parameter of LEAK_TEST_PARAMETERS) {
-    if (!seen.has(parameter.name)) normalized.push(parameter);
-  }
-
   return normalized;
 }
 
 const LEGACY_COLUMN_BY_NORMALIZED_PARAMETER = new Map(
   Object.entries(LEGACY_COLUMNS_BY_PARAMETER).map(([name, column]) => [normalizeRegisterName(name), column])
 );
-const LEGACY_COLUMN_BY_DEVICE = new Map(
-  EXCEL_PARAMETERS
-    .filter((parameter) => parameter.device && LEGACY_COLUMNS_BY_PARAMETER[parameter.name])
-    .map((parameter) => [String(parameter.device).trim().toUpperCase(), LEGACY_COLUMNS_BY_PARAMETER[parameter.name]])
-);
 
 function getLegacyColumnForParameter(parameter = {}) {
   const name = parameter.name || parameter.parameter || parameter.label;
   return LEGACY_COLUMNS_BY_PARAMETER[name] ||
     LEGACY_COLUMN_BY_NORMALIZED_PARAMETER.get(normalizeRegisterName(name)) ||
-    LEGACY_COLUMN_BY_DEVICE.get(String(parameter.device || "").trim().toUpperCase()) ||
     null;
 }
 
@@ -1406,12 +1218,12 @@ function getConfiguredRegisterDevice(machine = {}, names = [], fallback = "") {
   return String(register?.device || register?.stringDevice || fallback || "").trim().toUpperCase();
 }
 
-function formatReadingsForClient(readings, machineOrKind = "ube") {
+function formatReadingsForClient(readings, machineOrKind = "generic") {
   const machineKind =
     typeof machineOrKind === "object"
-      ? (isLeakTestMachine(machineOrKind) ? "leaktest" : isGaugeMachine(machineOrKind) ? "gauge" : "ube")
-      : machineOrKind;
-  if (machineKind === "gauge") {
+      ? getMachineTypeName(machineOrKind)
+      : String(machineOrKind || "generic").toLowerCase();
+  if (machineKind === "gauge" || machineKind === "generic") {
     return Object.fromEntries(
       Object.entries(readings)
         .filter(([name]) => !DROPPED_READING_COLUMNS.has(name))
@@ -2983,6 +2795,7 @@ function startPlcMonitor(io) {
       emit = true,
       liveOnly = false,
       cycleTiming = null,
+      shotTimeAt = null,
       persistStoppage = persist,
       skipBitParameters = false,
       skipStringParameters = false,
@@ -2992,21 +2805,22 @@ function startPlcMonitor(io) {
     const readings = {};
     const rawCache = new Map();
     const now = new Date();
+    const fallbackShotTimestamp = shotTimeAt instanceof Date && !Number.isNaN(shotTimeAt.getTime()) ? shotTimeAt : now;
     const isGauge = isGaugeMachine(machine);
     const configuredParameters = Array.isArray(machine.registerConfig) ? machine.registerConfig : [];
-    const readParameters = configuredParameters.length
-      ? (isGauge ? configuredParameters : mergeUbeReadParameters(configuredParameters))
-      : isGauge
-        ? []
-        : UBE_READ_PARAMETERS;
+    const readParameters = isGauge ? configuredParameters : mergeUbeReadParameters(configuredParameters);
+    const shotTimestamp = !isGauge && isUbeMachine(machine)
+      ? await readUbeShotTimestamp(sock, fallbackShotTimestamp)
+      : fallbackShotTimestamp;
 
-    const partName = isGauge ? "" : await readUbePartName(sock, machine);
-    const shotYearRaw = isGauge ? null : await readWord(sock, SHOT_DATE_TIME_DEVICES.year).catch(() => null);
-    const shotMonthRaw = isGauge ? null : await readWord(sock, SHOT_DATE_TIME_DEVICES.month).catch(() => null);
-    const shotDayRaw = isGauge ? null : await readWord(sock, SHOT_DATE_TIME_DEVICES.day).catch(() => null);
-    const shotHour = isGauge ? null : await readWord(sock, SHOT_DATE_TIME_DEVICES.hour).catch(() => null);
-    const shotMinute = isGauge ? null : await readWord(sock, SHOT_DATE_TIME_DEVICES.minute).catch(() => null);
-    const shotSecond = isGauge ? null : await readWord(sock, SHOT_DATE_TIME_DEVICES.second).catch(() => null);
+    const livePartName = isGauge ? "" : await readUbePartName(sock, machine);
+    const partName = livePartName || (isGauge ? "" : await getLatestKnownUbePartName(machine));
+    const shotYearRaw = shotTimestamp.getFullYear();
+    const shotMonthRaw = shotTimestamp.getMonth() + 1;
+    const shotDayRaw = shotTimestamp.getDate();
+    const shotHour = shotTimestamp.getHours();
+    const shotMinute = shotTimestamp.getMinutes();
+    const shotSecond = shotTimestamp.getSeconds();
     const shotTime = buildShotTimeValue(shotHour, shotMinute, shotSecond);
     const shotDateTime = buildShotDateTimeValue(
       shotYearRaw,
@@ -3020,6 +2834,9 @@ function startPlcMonitor(io) {
 
     reportSerial += 1;
     readings.part_name = partName;
+    if (!isGauge && isUbeMachine(machine)) {
+      Object.assign(readings, await getPlantEnvironmentReadings());
+    }
     const shotDate = buildShotDateValue(shotYearRaw, shotMonthRaw, shotDayRaw);
     readings.shot_date = getProductionDate(shotDate, shotTime);
     readings.production_date = readings.shot_date;
@@ -3068,33 +2885,23 @@ function startPlcMonitor(io) {
         readings[name] = null;
       }
     }
-
-    if (isGauge) {
-      if (readings.gauge_status === undefined || readings.gauge_status === null || readings.gauge_status === "") {
-        readings.gauge_status = await readWord(sock, process.env.PLC_GAUGE_STATUS_DEVICE || "D51")
-          .then((value) => scaleValue({ name: "gauge_status", type: "decimal" }, value))
-          .catch(() => null);
-      }
-      if (readings.gauge_judgement === undefined || readings.gauge_judgement === null || readings.gauge_judgement === "") {
-        readings.gauge_judgement = await readWord(sock, process.env.PLC_GAUGE_JUDGEMENT_DEVICE || "D50")
-          .then((value) => scaleValue({ name: "gauge_judgement", type: "decimal" }, value))
-          .catch(() => null);
-      }
-    }
-
     readings.shot_number = readings["SHOT NO."] ?? null;
     readings.ok_shot = readings["HIGH SHOT COUNT"] ?? null;
     readings.ng_counter = readings["NG COUNTER"] ?? null;
+    if (readings.clamp_tonnage_he_low_pct !== undefined && readings.clamp_tonnage_he_low_pct !== null) {
+      readings.clamp_force_pct = Number((Number(readings.clamp_tonnage_he_low_pct) / 10).toFixed(2));
+      readings["CLAMP FORCE (%)"] = readings.clamp_force_pct;
+    }
+    if (readings.clamp_tonnage_he_low_mn !== undefined && readings.clamp_tonnage_he_low_mn !== null) {
+      readings.clamp_tonnage = Number(Number(readings.clamp_tonnage_he_low_mn).toFixed(2));
+      readings["CLAMP TONNAGE (T)"] = readings.clamp_tonnage;
+    }
     delete readings.ng_shot;
 
     for (const [parameterName, legacyColumn] of Object.entries(LEGACY_COLUMNS_BY_PARAMETER)) {
       if (readings[legacyColumn] === undefined && readings[parameterName] !== undefined) {
         readings[legacyColumn] = readings[parameterName];
       }
-    }
-
-    if (!isGauge) {
-      Object.assign(readings, await readPlantEnvironment());
     }
 
     if (cycleTiming?.startedAt && cycleTiming?.endedAt) {
@@ -3678,8 +3485,18 @@ function startPlcMonitor(io) {
         // â”€ LEAK TEST LOOP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
         if (isLeakTestMachine(machine)) {
-          const cycleStartDevice = LEAK_TEST_CONTROL.cycleStartDevice;
-          const cycleEndDevice = LEAK_TEST_CONTROL.cycleEndDevice;
+          const cycleStartDevice = findConfiguredRegisterDevice(machine, [
+            "Cycle Start",
+            "cycle_start",
+            "start",
+          ]);
+          const cycleEndDevice = findConfiguredRegisterDevice(machine, [
+            "Cycle Complete",
+            "Cycle End",
+            "cycle_complete",
+            "cycle_end",
+            "complete",
+          ]);
 
           let cycleStarted = !cycleStartDevice;
           let lastCycleStartBit = cycleStartDevice
@@ -3854,14 +3671,14 @@ function startPlcMonitor(io) {
             "Cycle Start",
             "cycle_start",
             "start",
-          ]) || GAUGE_CONTROL.cycleStartDevice;
+          ]);
           const cycleEndDevice = findConfiguredRegisterDevice(machine, [
             "Cycle Complete",
             "Cycle End",
             "cycle_complete",
             "cycle_end",
             "complete",
-          ]) || GAUGE_CONTROL.cycleEndDevice;
+          ]);
           const gaugePollMs = Number(process.env.PLC_GAUGE_POLL_MS || process.env.PLC_POLL_MS || 200);
           const gaugeLiveReadMs = Math.max(
             gaugePollMs,
@@ -4109,8 +3926,18 @@ function startPlcMonitor(io) {
           continue;
         }
 
-        const cycleStartDevice = CYCLE_START_DEVICE;
-        const cycleEndDevice = CYCLE_END_DEVICE;
+        const cycleStartDevice = findConfiguredRegisterDevice(machine, [
+          "Cycle Start",
+          "cycle_start",
+          "start",
+        ]);
+        const cycleEndDevice = findConfiguredRegisterDevice(machine, [
+          "Cycle Complete",
+          "Cycle End",
+          "cycle_complete",
+          "cycle_end",
+          "complete",
+        ]);
         let lastCycleStartBit = cycleStartDevice
           ? await readBit(sock, cycleStartDevice).catch(() => 0)
           : 0;
