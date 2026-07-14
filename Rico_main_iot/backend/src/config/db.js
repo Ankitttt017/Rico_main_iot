@@ -43,6 +43,7 @@ function getSqlServerConfig() {
     acquireTimeoutMillis: Number(process.env.DB_POOL_ACQUIRE_TIMEOUT || 120000),
   };
   const connectionTimeout = Number(process.env.DB_CONNECT_TIMEOUT || 5000);
+  const requestTimeout = Number(process.env.DB_QUERY_TIMEOUT || 120000);
   const options = {
     encrypt: parseBool(process.env.DB_ENCRYPT, false),
     trustServerCertificate: parseBool(process.env.DB_TRUST_SERVER_CERT, true),
@@ -68,6 +69,7 @@ function getSqlServerConfig() {
       connectionString,
       pool,
       connectionTimeout,
+      requestTimeout,
     };
   }
 
@@ -79,6 +81,7 @@ function getSqlServerConfig() {
     options,
     pool,
     connectionTimeout,
+    requestTimeout,
   };
 
   if (port) {
