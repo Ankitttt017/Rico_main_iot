@@ -56,6 +56,27 @@ function hasReadingData(readings = {}) {
   return Object.values(readings).some((item) => hasReadableValue(item?.value));
 }
 
+function getReadingItemValue(item) {
+  return item && typeof item === "object" && "value" in item ? item.value : item;
+}
+
+function hasReadableReadingItem(item) {
+  return hasReadableValue(getReadingItemValue(item));
+}
+
+function mergeReadingsPreservingValues(previous = {}, incoming = {}) {
+  if (!hasReadingData(previous)) return incoming || {};
+  if (!hasReadingData(incoming)) return previous || {};
+
+  const merged = { ...previous, ...incoming };
+  Object.entries(previous).forEach(([key, previousItem]) => {
+    if (hasReadableReadingItem(previousItem) && !hasReadableReadingItem(incoming[key])) {
+      merged[key] = previousItem;
+    }
+  });
+  return merged;
+}
+
 const CYCLE_RUNNING_STALE_MS = Math.max(PLC_LATEST_POLL_MS * 2, 10000);
 
 function normalizeRegisterName(item = {}) {
@@ -217,8 +238,10 @@ function PLCDashboard() {
   const lastSelectedDataAtRef = useRef(0);
   const lastDbRenderSignatureRef = useRef("");
   const readingsHasDataRef = useRef(false);
+  const readingsRef = useRef({});
 
   useEffect(() => {
+    readingsRef.current = readings;
     readingsHasDataRef.current = hasReadingData(readings);
   }, [readings]);
 
@@ -355,7 +378,13 @@ function PLCDashboard() {
           if (item.plc_ip) nextStatusByKey[item.plc_ip] = nextStatusByKey[key];
         });
 
-        setReadingsByIp(prev => ({ ...prev, ...nextReadingsByKey }));
+        setReadingsByIp(prev => {
+          const merged = { ...prev };
+          Object.entries(nextReadingsByKey).forEach(([key, nextReadings]) => {
+            merged[key] = mergeReadingsPreservingValues(prev[key] || {}, nextReadings);
+          });
+          return merged;
+        });
         setMetaByIp(prev => ({ ...prev, ...nextMetaByKey }));
         setHistoryByIp(prev => ({ ...prev, ...nextHistoryByKey }));
         setMachineStatuses(prev => ({ ...prev, ...nextStatusByKey }));
@@ -386,8 +415,9 @@ function PLCDashboard() {
         if (lastDbRenderSignatureRef.current === selectedSignature) return;
         lastDbRenderSignatureRef.current = selectedSignature;
 
-        setReadings(nextReadings);
-        rememberSelectedSnapshot(nextReadings, { observedAt: timestamp, source: "db" });
+        const selectedReadings = mergeReadingsPreservingValues(readingsRef.current, nextReadings);
+        setReadings(selectedReadings);
+        rememberSelectedSnapshot(selectedReadings, { observedAt: timestamp, source: "db" });
         setLastTimestamp(toValidDate(timestamp));
         setConfigMessage("");
         setPartName(prev => firstReadableValue(selectedRow.part_name, selectedRow.part_qr_code, selectedRow.scan_data, prev));
@@ -560,7 +590,11 @@ function PLCDashboard() {
       const eventPartName = firstReadableValue(r?.part_name?.value, r?.part_qr_code?.value, r?.scan_data?.value, nextPartName);
 
       const packetHasData = hasReadingData(r);
-      setReadingsByIp(prev => packetHasData ? { ...prev, [key]: r, [ip]: r } : prev);
+      setReadingsByIp(prev => {
+        if (!packetHasData) return prev;
+        const merged = mergeReadingsPreservingValues(prev[key] || prev[ip] || {}, r);
+        return { ...prev, [key]: merged, [ip]: merged };
+      });
       setMetaByIp(prev => ({
         ...prev,
         [key]: {
@@ -617,9 +651,10 @@ function PLCDashboard() {
       setDraftConfig(prev => prev.ip === ip && prev.port === String(port) ? prev : { ip, port: String(port) });
       if (packetHasData) {
         lastSelectedDataAtRef.current = Date.now();
-        setReadings(r);
+        const selectedReadings = mergeReadingsPreservingValues(readingsRef.current, r);
+        setReadings(selectedReadings);
         setCycleStatus("running");
-        rememberSelectedSnapshot(r, { observedAt: observedTimestamp, source: "live" });
+        rememberSelectedSnapshot(selectedReadings, { observedAt: observedTimestamp, source: "live" });
       }
       setLastTimestamp(toValidDate(eventTimestamp) || toValidDate(observedTimestamp));
       setConfigMessage("");
@@ -642,7 +677,11 @@ function PLCDashboard() {
       const historyItem = { id: `${key}-${eventTimestamp}`, timestamp: toValidDate(eventTimestamp), cycleTime };
 
       const packetHasData = hasReadingData(r);
-      setReadingsByIp(prev => packetHasData ? { ...prev, [key]: r, [ip]: r } : prev);
+      setReadingsByIp(prev => {
+        if (!packetHasData) return prev;
+        const merged = mergeReadingsPreservingValues(prev[key] || prev[ip] || {}, r);
+        return { ...prev, [key]: merged, [ip]: merged };
+      });
       setMetaByIp(prev => ({
         ...prev,
         [key]: { timestamp: eventTimestamp, cycleTime, partName: eventPartName || prev[key]?.partName || "", shotTime: nextShotTime },
@@ -690,8 +729,9 @@ function PLCDashboard() {
       setCycleStatus("complete");
       if (packetHasData) {
         lastSelectedDataAtRef.current = Date.now();
-        setReadings(r);
-        rememberSelectedSnapshot(r, { observedAt: eventTimestamp, source: "live" });
+        const selectedReadings = mergeReadingsPreservingValues(readingsRef.current, r);
+        setReadings(selectedReadings);
+        rememberSelectedSnapshot(selectedReadings, { observedAt: eventTimestamp, source: "live" });
       }
       setLastTimestamp(toValidDate(eventTimestamp));
       setConfigMessage("");
