@@ -1,5 +1,7 @@
 "use strict";
 
+process.env.DB_CONNECT_TIMEOUT = process.env.DB_SCHEMA_CONNECT_TIMEOUT || process.env.DB_CONNECT_TIMEOUT || "30000";
+process.env.DB_POOL_ACQUIRE_TIMEOUT = process.env.DB_SCHEMA_POOL_ACQUIRE_TIMEOUT || process.env.DB_POOL_ACQUIRE_TIMEOUT || "120000";
 process.env.DB_QUERY_TIMEOUT = process.env.DB_SCHEMA_QUERY_TIMEOUT || process.env.DB_QUERY_TIMEOUT || "300000";
 
 const db = require("../src/config/db");

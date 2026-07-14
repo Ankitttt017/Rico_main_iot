@@ -78,7 +78,11 @@ jobs:
           DB_CONNECT_TIMEOUT: "30000"
           DB_POOL_ACQUIRE_TIMEOUT: "120000"
           DB_SCHEMA_QUERY_TIMEOUT: "300000"
-        run: npm run db:init
+        run: |
+          echo "DB_CONNECT_TIMEOUT=$DB_CONNECT_TIMEOUT"
+          echo "DB_POOL_ACQUIRE_TIMEOUT=$DB_POOL_ACQUIRE_TIMEOUT"
+          echo "DB_SCHEMA_QUERY_TIMEOUT=$DB_SCHEMA_QUERY_TIMEOUT"
+          npm run db:init
 
       - name: Publish frontend
         run: rsync -a --delete "$APP_SOURCE/frontend/dist/" "$WEB_ROOT/"
