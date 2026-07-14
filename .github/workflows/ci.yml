@@ -51,4 +51,7 @@ jobs:
           npm ci
           node --check server.js
           node --check scripts/database-schema.js
-          node --check src/modules/plcMonitor/plcMonitorService.js
+          node --check src/modules/plcMonitor/services/plcMonitorService.js
+          node --check src/modules/plcMonitor/routes/plcMonitorRoutes.js
+          node --check src/modules/plcMonitor/protocols/slmpProtocol.js
+          node --check src/modules/plcMonitor/repositories/plcRegisterConfigRepository.js
