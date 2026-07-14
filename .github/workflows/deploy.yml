@@ -74,6 +74,10 @@ jobs:
 
       - name: Apply and verify database schema
         working-directory: /home/automation/apps/Rico_main_iot/backend
+        env:
+          DB_CONNECT_TIMEOUT: "30000"
+          DB_POOL_ACQUIRE_TIMEOUT: "120000"
+          DB_SCHEMA_QUERY_TIMEOUT: "300000"
         run: npm run db:init
 
       - name: Publish frontend

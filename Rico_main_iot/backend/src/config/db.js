@@ -40,6 +40,7 @@ function getSqlServerConfig() {
     max: Number(process.env.DB_POOL_MAX || 10),
     min: Number(process.env.DB_POOL_MIN || 0),
     idleTimeoutMillis: Number(process.env.DB_POOL_IDLE_TIMEOUT || 30000),
+    acquireTimeoutMillis: Number(process.env.DB_POOL_ACQUIRE_TIMEOUT || 120000),
   };
   const connectionTimeout = Number(process.env.DB_CONNECT_TIMEOUT || 5000);
   const options = {
