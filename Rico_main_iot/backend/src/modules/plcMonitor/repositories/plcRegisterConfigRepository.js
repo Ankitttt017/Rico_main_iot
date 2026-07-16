@@ -87,10 +87,14 @@ function mergeRegisters(primary = [], fallback = []) {
 }
 
 function profileKeysForMachine(row = {}) {
-  const type = String(row.machine_type || "").trim().toLowerCase();
+  const machineText = [
+    row.machine_type,
+    row.machine_name,
+    row.machine_key,
+  ].join(" ").toLowerCase();
   const keys = [];
 
-  if (type === "ube") keys.push("UBE_850T");
+  if (machineText.includes("ube")) keys.push("UBE_850T");
   if (row.machine_key) keys.push(String(row.machine_key).trim());
   if (row.machine_type) keys.push(String(row.machine_type).trim());
 

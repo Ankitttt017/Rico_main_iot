@@ -18,15 +18,33 @@ function normalizeMachineKey(value) {
     .replace(/^-+|-+$/g, "");
 }
 
-function normalizeConfiguredMachine(machine = {}, index = 0) {
-  const ip = String(machine.ip || machine.ip_address || "").trim();
-  const rawKind = String(machine.kind || machine.machine_type || "generic")
+function inferMachineKind(machine = {}) {
+  const text = [
+    machine.kind,
+    machine.machine_type,
+    machine.machineType,
+    machine.name,
+    machine.machine_name,
+    machine.key,
+    machine.machine_key,
+    machine.machine_code,
+  ].join(" ").toLowerCase();
+
+  if (text.includes("gauge") || text.includes("guage")) return "gauge";
+  if (text.includes("leak")) return "leaktest";
+  if (text.includes("ube")) return "ube";
+
+  return String(machine.kind || machine.machine_type || "generic")
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/g, "-")
     .replace(/^-+|-+$/g, "") || "generic";
+}
+
+function normalizeConfiguredMachine(machine = {}, index = 0) {
+  const ip = String(machine.ip || machine.ip_address || "").trim();
   const registerConfig = Array.isArray(machine.register_config) ? machine.register_config : null;
-  const kind = rawKind || "generic";
+  const kind = inferMachineKind(machine);
   const defaultPrefix = kind === "generic" ? "PLC Machine" : kind.toUpperCase();
   const name = String(machine.name || machine.machine_name || ip || `${defaultPrefix}-${index + 1}`).trim();
   const key = normalizeMachineKey(machine.key || machine.machine_key || machine.machine_code || name || ip);

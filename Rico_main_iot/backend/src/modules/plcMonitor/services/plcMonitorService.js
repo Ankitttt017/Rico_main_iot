@@ -341,18 +341,19 @@ function reconnectDelayMs(attempt = 1) {
  * Returns true if machine is UBE die casting machine
  */
 function isUbeMachine(machine) {
-  return getMachineTypeName(machine) === "ube";
+  return getMachineTypeName(machine) === "ube" || getMachineIdentityText(machine).includes("ube");
 }
 
 function isGaugeMachine(machine) {
-  return getMachineTypeName(machine) === "gauge";
+  const text = getMachineIdentityText(machine);
+  return getMachineTypeName(machine) === "gauge" || text.includes("gauge") || text.includes("guage");
 }
 
 /**
  * Returns true if machine is Leak Test machine
  */
 function isLeakTestMachine(machine) {
-  return getMachineTypeName(machine) === "leaktest";
+  return getMachineTypeName(machine) === "leaktest" || getMachineIdentityText(machine).includes("leak");
 }
 
 function getCanonicalMachineKey(machine = {}) {
@@ -367,6 +368,18 @@ function getMachineTypeName(machine) {
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/g, "-")
     .replace(/^-+|-+$/g, "") || "generic";
+}
+
+function getMachineIdentityText(machine = {}) {
+  return [
+    machine.kind,
+    machine.machine_type,
+    machine.machineType,
+    machine.name,
+    machine.machine_name,
+    machine.key,
+    machine.machine_key,
+  ].join(" ").toLowerCase();
 }
 
 function normalizeUbeReadParameter(parameter = {}) {
