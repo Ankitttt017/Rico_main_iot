@@ -106,7 +106,7 @@ function normalizeRegisterUnit(item = {}) {
 
 function normalizeRegisterGroup(item = {}) {
   if (!item || typeof item !== "object") return "";
-  return String(item.group || item.category || item.section || item.tab || "").trim();
+  return String(item.group || item.group_name || item.category || item.section || item.tab || "").trim();
 }
 
 function getMachineRegisterConfig(machine = {}) {
@@ -163,6 +163,150 @@ function machineAccentColor(machineKind = "machine", index = 0) {
   return ["#22d3ee", "#f97316", "#a78bfa", "#34d399", "#f472b6", "#60a5fa"][index % 6];
 }
 
+const UI_GROUPS_BY_READING = {
+  part_name: "Production",
+  shot_date: "Production",
+  shot_time: "Production",
+  shot_number: "Production",
+  cycle_time: "Production",
+  minor_stoppage: "Production",
+  "MINOR STOPPAGE sec.": "Production",
+  "SHOT NO.": "Production",
+  "CYCLE TIME sec.": "Production",
+  "SHOT TIME": "Production",
+  "DIE-CLOSE CORE IN TIME sec": "Cycle Timings",
+  "POURING TIME sec": "Cycle Timings",
+  "SHOT FWD TIME sec": "Cycle Timings",
+  "CURING TIME sec": "Cycle Timings",
+  "DIE OPEN CORE OUT TIME sec": "Cycle Timings",
+  "EJECTOR TIME sec": "Cycle Timings",
+  "EXTRACT TIME sec": "Cycle Timings",
+  "SPRAY TIME sec": "Cycle Timings",
+  die_close_core_in_time: "Cycle Timings",
+  pouring_time: "Cycle Timings",
+  shot_fwd_time: "Cycle Timings",
+  curing_time: "Cycle Timings",
+  die_open_core_out_time: "Cycle Timings",
+  ejector_time: "Cycle Timings",
+  extract_time: "Cycle Timings",
+  spray_time: "Cycle Timings",
+  "V1 m/sec": "Shot Setup",
+  "V2 m/sec": "Shot Setup",
+  "V3 m/sec": "Shot Setup",
+  "V4 m/sec": "Shot Setup",
+  "ACCEL. POINT mm": "Shot Setup",
+  "DEACEL. POINT mm": "Shot Setup",
+  "INTEN. TIME msec": "Shot Setup",
+  "BISCUIT THICKNESS mm": "Shot Setup",
+  v1_speed: "Shot Setup",
+  v2_speed: "Shot Setup",
+  v3_speed: "Shot Setup",
+  v4_speed: "Shot Setup",
+  accel_point: "Shot Setup",
+  deaccel_point: "Shot Setup",
+  intensification_time: "Shot Setup",
+  biscuit_thickness: "Shot Setup",
+  "METAL PRESS. Mpa": "Pressure & Tonnage",
+  "CLAMP TONNAGE(HE.LOW) %": "Pressure & Tonnage",
+  "CLAMP TONNAGE(HE.LOW) MN": "Pressure & Tonnage",
+  "CLAMP TONNAGE(OP.UP) %": "Pressure & Tonnage",
+  "CLAMP TONNAGE(OP.LOW) %": "Pressure & Tonnage",
+  "CLAMP TONNAGE(HE.UP) %": "Pressure & Tonnage",
+  "CLAMP FORCE (%)": "Pressure & Tonnage",
+  "CLAMP TONNAGE (T)": "Pressure & Tonnage",
+  "SHOT ACC. PRESSURE": "Pressure & Tonnage",
+  "INTENSIFICATION ACC. PRESSURE": "Pressure & Tonnage",
+  "JET COOLING PRESSURE kgf/cm2": "Pressure & Tonnage",
+  "VACUUM PRESSURE mbar": "Pressure & Tonnage",
+  metal_pressure: "Pressure & Tonnage",
+  clamp_tonnage_he_low_pct: "Pressure & Tonnage",
+  clamp_tonnage_he_low_mn: "Pressure & Tonnage",
+  clamp_tonnage_op_up_pct: "Pressure & Tonnage",
+  clamp_tonnage_op_low_pct: "Pressure & Tonnage",
+  clamp_tonnage_he_up_pct: "Pressure & Tonnage",
+  clamp_force_pct: "Pressure & Tonnage",
+  clamp_tonnage: "Pressure & Tonnage",
+  shot_acc_pressure: "Pressure & Tonnage",
+  intensification_acc_pressure: "Pressure & Tonnage",
+  jet_cooling_pressure: "Pressure & Tonnage",
+  vacuum_pressure: "Pressure & Tonnage",
+  "COOLING WATER FLOW RATE (MOV.) L/min": "Temperature & Flow",
+  "COOLING WATER FLOW RATE (STA.) L/min": "Temperature & Flow",
+  "FURNACE METAL TEMP. C": "Temperature & Flow",
+  "Fixed Die Temp (F-1)": "Temperature & Flow",
+  "Fixed Die Temp (F-2)": "Temperature & Flow",
+  "Moving Die Temp (M-1)": "Temperature & Flow",
+  "Moving Die Temp (M-2)": "Temperature & Flow",
+  "Slide Temp -1 (S-1)": "Temperature & Flow",
+  "FIX. 1 Flow (Lpm)": "Temperature & Flow",
+  "FIX. 2 Flow (Lpm)": "Temperature & Flow",
+  "FIX. 3 Flow (Lpm)": "Temperature & Flow",
+  "Mov. 1 Flow (Lpm)": "Temperature & Flow",
+  "Mov. 2 Flow (Lpm)": "Temperature & Flow",
+  "Mov. 3 Flow (Lpm)": "Temperature & Flow",
+  "Vacuum pressure (mmHg)": "Temperature & Flow",
+  cooling_water_mov: "Temperature & Flow",
+  cooling_water_sta: "Temperature & Flow",
+  furnace_metal_temp: "Temperature & Flow",
+  fixed_die_temp_f1: "Temperature & Flow",
+  fixed_die_temp_f2: "Temperature & Flow",
+  moving_die_temp_m1: "Temperature & Flow",
+  moving_die_temp_m2: "Temperature & Flow",
+  slide_temp_s1: "Temperature & Flow",
+  fix_1_flow: "Temperature & Flow",
+  fix_2_flow: "Temperature & Flow",
+  fix_3_flow: "Temperature & Flow",
+  mov_1_flow: "Temperature & Flow",
+  mov_2_flow: "Temperature & Flow",
+  mov_3_flow: "Temperature & Flow",
+  vacuum_pressure_mmhg: "Temperature & Flow",
+};
+
+const UI_GROUP_PRESENTATION = {
+  Production: { icon: "TIME", color: "#22d3ee", order: 10 },
+  "Cycle Timings": { icon: "CYC", color: "#f97316", order: 20 },
+  "Shot Setup": { icon: "SPD", color: "#a78bfa", order: 30 },
+  "Pressure & Tonnage": { icon: "TON", color: "#34d399", order: 40 },
+  "Temperature & Flow": { icon: "TMP", color: "#f472b6", order: 50 },
+  "Machine Signals": { icon: "STS", color: "#60a5fa", order: 60 },
+  "Configured Parameters": { icon: "P1", color: "#22d3ee", order: 999 },
+};
+
+const UI_CARD_HIDDEN_NAMES = new Set([
+  "machine_key",
+  "machine_type",
+  "plc_ip",
+  "plc_port",
+  "production_date",
+  "ok_shot",
+  "ng_counter",
+  "high_shot_count",
+  "Counter",
+  "Sr. No",
+  "HIGH SHOT COUNT",
+  "NG COUNTER",
+  "Cycle Start",
+  "Cycle End",
+  "cycle_start",
+  "cycle_end",
+  "AVERAGE DIE CLAMP TONNAGE COUNT",
+  "Time for stroke(ms)",
+  "Stroke (mm)",
+  "Shot Status",
+]);
+
+function getUiGroupForReading(name) {
+  return UI_GROUPS_BY_READING[name] || UI_GROUPS_BY_READING[normalizeMonitorFieldName(name)] || "";
+}
+
+function getUiGroupPresentation(label, machineKind, index) {
+  return UI_GROUP_PRESENTATION[label] || {
+    icon: machineKind === "gauge" ? "GA" : machineKind === "leaktest" ? "LT" : `P${index + 1}`,
+    color: machineAccentColor(machineKind, index),
+    order: 500 + index,
+  };
+}
+
 function buildConfiguredGroups(machineKind, machine = {}, readings = {}) {
   const configured = getMachineRegisterConfig(machine)
     .filter((item) => !item || typeof item !== "object" || (item.enabled !== false && item.show_on_monitor !== false))
@@ -170,20 +314,26 @@ function buildConfiguredGroups(machineKind, machine = {}, readings = {}) {
       name: normalizeRegisterName(item),
       label: normalizeRegisterLabel(item),
       unit: normalizeRegisterUnit(item),
-      group: normalizeRegisterGroup(item),
+      group: normalizeRegisterGroup(item) || getUiGroupForReading(normalizeRegisterName(item)),
     }))
-    .filter((item) => item.name && !isHiddenDbField(item.name));
+    .filter((item) => item.name && !isHiddenDbField(item.name) && !UI_CARD_HIDDEN_NAMES.has(item.name));
 
+  const hiddenConfiguredNames = new Set(
+    getMachineRegisterConfig(machine)
+      .filter((item) => item && typeof item === "object" && item.show_on_monitor === false)
+      .map((item) => normalizeRegisterName(item))
+      .filter(Boolean)
+  );
   const source = configured.length
     ? configured
     : Object.keys(readings)
-      .filter((name) => name && !isHiddenDbField(name))
+      .filter((name) => name && !isHiddenDbField(name) && !hiddenConfiguredNames.has(name) && !UI_CARD_HIDDEN_NAMES.has(name))
       .filter((name) => hasReadableValue(getReadingValue(readings, name)))
       .map((name) => ({
         name,
         label: getDisplayLabel(name),
         unit: readings[name]?.unit || "",
-        group: "",
+        group: getUiGroupForReading(name),
       }));
 
   if (!source.length) return [];
@@ -195,14 +345,20 @@ function buildConfiguredGroups(machineKind, machine = {}, readings = {}) {
     byGroup.get(label).push(item);
   });
 
-  return Array.from(byGroup.entries()).map(([label, keys], index) => ({
-    id: `${machineKind || "machine"}_${label.toLowerCase().replace(/[^a-z0-9]+/g, "_") || "configured"}`,
-    label,
-    kind: machineKind || "machine",
-    icon: machineKind === "gauge" ? "GA" : machineKind === "leaktest" ? "LT" : `P${index + 1}`,
-    color: machineAccentColor(machineKind, index),
-    keys,
-  }));
+  return Array.from(byGroup.entries())
+    .map(([label, keys], index) => {
+      const presentation = getUiGroupPresentation(label, machineKind, index);
+      return {
+        id: `${machineKind || "machine"}_${label.toLowerCase().replace(/[^a-z0-9]+/g, "_") || "configured"}`,
+        label,
+        kind: machineKind || "machine",
+        icon: presentation.icon,
+        color: presentation.color,
+        order: presentation.order,
+        keys,
+      };
+    })
+    .sort((a, b) => a.order - b.order);
 }
 
 function PLCDashboard() {

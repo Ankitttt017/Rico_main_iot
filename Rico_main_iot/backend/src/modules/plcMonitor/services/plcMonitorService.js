@@ -1245,11 +1245,21 @@ function formatReadingsForClient(readings, machineOrKind = "generic") {
     );
   }
   const allowedNames = machineKind === "leaktest" ? LEAK_CLIENT_READING_NAMES : UBE_CLIENT_READING_NAMES;
+  const configuredNames = typeof machineOrKind === "object" && Array.isArray(machineOrKind.registerConfig)
+    ? new Set(
+        machineOrKind.registerConfig
+          .filter((item) => item && item.enabled !== false && item.show_on_monitor !== false)
+          .map((item) => normalizeRegisterName(item.name))
+          .filter(Boolean)
+      )
+    : new Set();
 
   return Object.fromEntries(
     Object.entries(readings)
-      .filter(([name]) => allowedNames.has(name))
-      .filter(([name]) => !DROPPED_READING_COLUMNS.has(name))
+      .filter(([name]) => allowedNames.has(name) || configuredNames.has(normalizeRegisterName(name)))
+      .filter(([name]) => machineKind === "ube" && configuredNames.has(normalizeRegisterName(name))
+        ? true
+        : !DROPPED_READING_COLUMNS.has(name))
       .filter(([name]) => !PARAMETER_BY_NAME.get(name)?.hidden)
       .map(([name, value]) => [name, { value, column: readingColumnName(name) }])
   );
