@@ -1943,7 +1943,8 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
         [Cycle_Start] AS cycle_start,
         [Cycle_Complete] AS cycle_complete
       FROM ${GAUGE_TABLE}
-      WHERE ([Machine_Key] = ? OR [PLC_IP] = ?)`;
+      WHERE ([Machine_Key] = ? OR [PLC_IP] = ?)
+        AND NULLIF(LTRIM(RTRIM([Part_Scan_Data])), '') IS NOT NULL`;
     values.push(gaugeTarget.key || gaugeTarget.ip, gaugeTarget.ip || targetId);
 
     if (from) { values.push(from); }

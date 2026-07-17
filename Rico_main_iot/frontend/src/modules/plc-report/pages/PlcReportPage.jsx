@@ -1255,6 +1255,14 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     setError("");
   }, []);
 
+  const handleDraftSearchChange = useCallback((event) => {
+    const nextValue = event.target.value;
+    setDraftShotNumberFilter(nextValue);
+    if (!nextValue.trim()) {
+      setShotNumberFilter("");
+    }
+  }, []);
+
   const loadReport = useCallback(async ({ silent = false } = {}) => {
     const selectedMachineIp = getMachineReportIp(selectedMachine);
     if (!filtersApplied || !reportMachinesReady || !selectedMachineIp || !fromDate || !toDate || !shiftFilter) {
@@ -1778,7 +1786,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                   <input
                     type="search"
                     value={draftShotNumberFilter}
-                    onChange={(event) => setDraftShotNumberFilter(event.target.value)}
+                    onChange={handleDraftSearchChange}
                     onKeyDown={(event) => {
                       if (event.key === "Enter") applyReportFilters();
                     }}
