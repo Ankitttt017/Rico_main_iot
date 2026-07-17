@@ -302,6 +302,7 @@ const RUNTIME_MONITOR_FIELDS = [
   { name: "plant_temperature", label: "Plant Temperature", group: "Production" },
   { name: "plant_humidity", label: "Plant Humidity", group: "Production" },
   { name: "shot_date", label: "Shot Date", group: "Production" },
+  { name: "shot_time", label: "Shot Time", group: "Production" },
   { name: "production_date", label: "Production Date", group: "Production" },
 ];
 
@@ -1028,6 +1029,12 @@ function PLCDashboard() {
       keys: group.keys.filter(({ name }) => !isHiddenCardField(name)),
     }))
     .filter((group) => group.keys.length > 0);
+  const getMonitorCardValue = (name) => {
+    if (normalizeMonitorFieldName(name) === "shot_time") {
+      return plcShotTime || getReadingValue(readings, name);
+    }
+    return getReadingValue(readings, name);
+  };
   const configuredOverviewItems = (availableGroups[0]?.keys || [])
     .filter(({ name }) => !isHiddenCardField(name))
     .slice(0, 5)
@@ -1037,9 +1044,7 @@ function PLCDashboard() {
       unit,
       value: isLeakTestMachine && isScanField(name)
         ? displayScanData || "-"
-        : name === "shot_time"
-          ? plcShotTime
-          : getReadingValue(readings, name),
+        : getMonitorCardValue(name),
     }));
   const overviewItems = configuredOverviewItems;
   const reportReading = {
@@ -1231,9 +1236,7 @@ function PLCDashboard() {
                       {group.keys.map(({ name, unit, label }) => {
                         const value = isLeakTestMachine && isScanField(name)
                           ? displayScanData || "-"
-                          : name === "shot_time"
-                            ? plcShotTime
-                            : getReadingValue(readings, name);
+                          : getMonitorCardValue(name);
                         return (
                           <ValueCard
                             key={name}
