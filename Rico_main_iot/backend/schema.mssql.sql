@@ -1010,6 +1010,7 @@ BEGIN
   UPDATE dbo.plc_machine_configs
   SET register_config_json = N'[]'
   WHERE ISJSON(register_config_json) = 1
+    AND ISNULL(machine_type, N'') <> N'ube'
     AND (
       JSON_VALUE(register_config_json, '$[0].id') = N'Sr. No-0'
       OR JSON_VALUE(register_config_json, '$[0].name') = N'Sr. No'

@@ -350,17 +350,28 @@ async function saveMachineRecord(input = {}) {
   const ip = cleanText(input.ip_address || input.ip);
   if (!ip || !isValidIpv4(ip)) throw new Error("Valid PLC IP address is required");
   let id = cleanInt(input.id);
-  const registerConfig = normalizeRegisters(input.register_config) || [];
+  const hasRegisterConfigInput = Object.prototype.hasOwnProperty.call(input, "register_config");
+  const registerConfig = hasRegisterConfigInput ? normalizeRegisters(input.register_config) || [] : null;
   const type = inferMachineType({ ...input, ip_address: ip, register_config: registerConfig });
-  const normalizedRegisterConfig = normalizeRegistersForMachineType(registerConfig, type);
   const existingByIp = await db.query(
-    "SELECT TOP 1 id FROM dbo.plc_machine_configs WHERE ip_address = ? AND (? IS NULL OR id <> ?) ORDER BY id",
+    "SELECT TOP 1 id, register_config_json FROM dbo.plc_machine_configs WHERE ip_address = ? AND (? IS NULL OR id <> ?) ORDER BY id",
     [ip, id, id]
   );
   if (existingByIp.rows.length) {
     if (id) throw new Error(`PLC IP ${ip} is already assigned to another machine config.`);
     id = existingByIp.rows[0].id;
   }
+  let existingRegisterConfigJson = existingByIp.rows[0]?.register_config_json || null;
+  if (!existingRegisterConfigJson && id) {
+    const existingById = await db.query(
+      "SELECT TOP 1 register_config_json FROM dbo.plc_machine_configs WHERE id = ?",
+      [id]
+    );
+    existingRegisterConfigJson = existingById.rows[0]?.register_config_json || null;
+  }
+  const normalizedRegisterConfig = hasRegisterConfigInput
+    ? normalizeRegistersForMachineType(registerConfig, type)
+    : null;
   const stableBaseKey = canonicalMachineKeyFor({
     ip,
     type,
@@ -382,7 +393,9 @@ async function saveMachineRecord(input = {}) {
     protocol: protocolType(input.protocol),
     sequence_no: cleanInt(input.sequence_no),
     is_active: input.is_active === undefined ? 1 : Number(Boolean(input.is_active)),
-    register_config_json: JSON.stringify(normalizedRegisterConfig),
+    register_config_json: hasRegisterConfigInput
+      ? JSON.stringify(normalizedRegisterConfig)
+      : existingRegisterConfigJson,
     notes: cleanText(input.notes),
   };
 
