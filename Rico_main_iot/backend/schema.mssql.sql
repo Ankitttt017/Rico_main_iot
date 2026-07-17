@@ -1042,6 +1042,39 @@ IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
   CREATE INDEX IX_plc_machine_configs_ip_address
     ON dbo.plc_machine_configs (ip_address);
 
+IF OBJECT_ID(N'dbo.plc_registers', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.plc_registers (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    profile_key NVARCHAR(80) NOT NULL,
+    parameter_name NVARCHAR(200) NOT NULL,
+    display_label NVARCHAR(200) NULL,
+    device NVARCHAR(50) NULL,
+    device_type NVARCHAR(40) NULL,
+    data_type NVARCHAR(40) NOT NULL DEFAULT N'int',
+    scale_factor DECIMAL(18,6) NOT NULL DEFAULT 1,
+    unit NVARCHAR(40) NULL,
+    group_name NVARCHAR(80) NULL,
+    sort_order INT NOT NULL DEFAULT 0,
+    string_length INT NULL,
+    computed_key NVARCHAR(80) NULL,
+    show_live BIT NOT NULL DEFAULT 1,
+    save_db BIT NOT NULL DEFAULT 1,
+    is_active BIT NOT NULL DEFAULT 1,
+    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+  );
+END;
+
+IF OBJECT_ID(N'dbo.plc_registers', N'U') IS NOT NULL
+   AND NOT EXISTS (
+     SELECT 1 FROM sys.indexes
+     WHERE [name] = N'UX_plc_registers_profile_parameter'
+       AND object_id = OBJECT_ID(N'dbo.plc_registers')
+   )
+  CREATE UNIQUE INDEX UX_plc_registers_profile_parameter
+    ON dbo.plc_registers (profile_key, parameter_name);
+
 IF OBJECT_ID(N'dbo.PlcCycleReadings', N'U') IS NOT NULL
   UPDATE dbo.PlcCycleReadings
   SET machine_key = plc_ip
