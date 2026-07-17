@@ -78,6 +78,7 @@ const LEAK_TEST_HIDDEN_COLUMNS = new Set([
   "part_name",
   "part_qr_code",
   "scan_source_device",
+  "status",
   "dry",
   "wey",
   "both",
@@ -141,7 +142,6 @@ const LEAK_TEST_PREFERRED_COLUMNS = [
   "cycle_time",
   "running_mode",
   "manual",
-  "status",
 ];
 
 const SHOT_STATUS = {
@@ -504,6 +504,30 @@ function filterGaugeReportRows(rows = [], scanSearch = "") {
   return filterExactScanRows(rows.filter(hasReportScanData), scanSearch);
 }
 
+function isGaugeReportRow(row = {}) {
+  const text = [
+    row.machine_type,
+    row.kind,
+    row.machine_name,
+    row.machine,
+  ].filter(Boolean).join(" ").toLowerCase();
+  return text.includes("gauge") || text.includes("guage") || row.gauge_status !== undefined || row.gauge_judgement !== undefined;
+}
+
+function getLocalTimePartsFromUtcTimestamp(value) {
+  if (!value) return null;
+  const text = String(value).trim();
+  const hasTimezone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(text);
+  const timestampText = hasTimezone ? text : `${text.replace(" ", "T")}Z`;
+  const date = new Date(timestampText);
+  if (Number.isNaN(date.getTime())) return null;
+  return {
+    hour: date.getHours(),
+    minute: date.getMinutes(),
+    second: date.getSeconds(),
+  };
+}
+
 function getTimeParts(value) {
   if (!value) return null;
   const text = String(value).trim();
@@ -564,6 +588,12 @@ function getShiftFromTimeParts(parts) {
 }
 
 function getRowTimeParts(row = {}) {
+  if (isGaugeReportRow(row)) {
+    const gaugeTimestamp = getRowValue(row, "recorded_at", "created_at");
+    const gaugeParts = getLocalTimePartsFromUtcTimestamp(gaugeTimestamp);
+    if (gaugeParts) return gaugeParts;
+  }
+
   const shotTime = getRowValue(row, "shot_time", "SHOT TIME", "Shot Time");
   const shotHour = getRowValue(row, "shot_hour", "SHOT HOUR", "Shot Hour");
   const shotMinute = getRowValue(row, "shot_minute", "SHOT MINUTE", "Shot Minute") || 0;
@@ -585,7 +615,26 @@ function getRowTimeParts(row = {}) {
 }
 
 function getReportResultValue(row = {}) {
-  return getRowValue(row, "shot_status", "Shot Status", "result", "Result", "status", "Status");
+  return normalizeReportResultValue(getRowValue(row, "shot_status", "Shot Status", "result", "Result", "status", "Status"));
+}
+
+function normalizeReportResultValue(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const text = String(value).trim();
+  const upper = text.toUpperCase();
+  if (["OK", "O", "PASS", "PASSED", "GOOD", "1", "TRUE"].includes(upper)) return "OK";
+  if (["NG", "N", "FAIL", "FAILED", "BAD", "0", "FALSE"].includes(upper)) return "NG";
+
+  if (/^\d+$/.test(text)) {
+    const number = Number(text);
+    if (Number.isInteger(number) && number >= 0 && number <= 65535) {
+      const decoded = String.fromCharCode(number & 0xff, (number >> 8) & 0xff).trim().toUpperCase();
+      if (decoded === "OK") return "OK";
+      if (decoded === "NG") return "NG";
+    }
+  }
+
+  return text;
 }
 
 function getRowShift(row = {}) {
@@ -692,8 +741,7 @@ function formatValue(value, key) {
     return shotStatusLabel(value);
   }
   if (normalizedKey === "result") {
-    const text = String(displayValue).trim();
-    return text || "-";
+    return normalizeReportResultValue(displayValue) || "-";
   }
   return String(displayValue);
 }
