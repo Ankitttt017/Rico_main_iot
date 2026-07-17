@@ -79,6 +79,13 @@ const LEAK_TEST_HIDDEN_COLUMNS = new Set([
   "dry",
   "wey",
   "both",
+  "auto_bit_duration_sec",
+  "both_duration_sec",
+  "cycle_end_duration_sec",
+  "cycle_start_duration_sec",
+  "dry_duration_sec",
+  "manual_duration_sec",
+  "wey_duration_sec",
 ]);
 
 const SERIAL_COLUMN = "serial_number";
