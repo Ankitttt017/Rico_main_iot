@@ -169,6 +169,8 @@ const UI_GROUPS_BY_READING = {
   shot_time: "Production",
   shot_number: "Production",
   cycle_time: "Production",
+  plant_temperature: "Production",
+  plant_humidity: "Production",
   minor_stoppage: "Production",
   "MINOR STOPPAGE sec.": "Production",
   "SHOT NO.": "Production",
@@ -295,6 +297,14 @@ const UI_CARD_HIDDEN_NAMES = new Set([
   "Shot Status",
 ]);
 
+const RUNTIME_MONITOR_FIELDS = [
+  { name: "part_name", label: "Part Name", group: "Production" },
+  { name: "plant_temperature", label: "Plant Temperature", group: "Production" },
+  { name: "plant_humidity", label: "Plant Humidity", group: "Production" },
+  { name: "shot_date", label: "Shot Date", group: "Production" },
+  { name: "production_date", label: "Production Date", group: "Production" },
+];
+
 function getUiGroupForReading(name) {
   return UI_GROUPS_BY_READING[name] || UI_GROUPS_BY_READING[normalizeMonitorFieldName(name)] || "";
 }
@@ -318,14 +328,26 @@ function buildConfiguredGroups(machineKind, machine = {}, readings = {}) {
     }))
     .filter((item) => item.name && !isHiddenDbField(item.name) && !UI_CARD_HIDDEN_NAMES.has(item.name));
 
+  const configuredNames = new Set(configured.map((item) => normalizeMonitorFieldName(item.name)));
+  const runtimeItems = RUNTIME_MONITOR_FIELDS
+    .filter((item) => !configuredNames.has(normalizeMonitorFieldName(item.name)))
+    .filter((item) => hasReadableValue(getReadingValue(readings, item.name)))
+    .map((item) => ({
+      ...item,
+      unit: item.name === "plant_temperature" ? "C" : item.name === "plant_humidity" ? "%" : "",
+    }));
+  const configuredWithRuntime = configured.length
+    ? [...runtimeItems, ...configured]
+    : configured;
+
   const hiddenConfiguredNames = new Set(
     getMachineRegisterConfig(machine)
       .filter((item) => item && typeof item === "object" && item.show_on_monitor === false)
       .map((item) => normalizeRegisterName(item))
       .filter(Boolean)
   );
-  const source = configured.length
-    ? configured
+  const source = configuredWithRuntime.length
+    ? configuredWithRuntime
     : Object.keys(readings)
       .filter((name) => name && !isHiddenDbField(name) && !hiddenConfiguredNames.has(name) && !UI_CARD_HIDDEN_NAMES.has(name))
       .filter((name) => hasReadableValue(getReadingValue(readings, name)))
