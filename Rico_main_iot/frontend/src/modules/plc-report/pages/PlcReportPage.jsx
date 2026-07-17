@@ -500,8 +500,11 @@ function filterExactScanRows(rows = [], scanSearch = "") {
   return rows.filter((row) => isExactScanDataMatch(row, searchValue));
 }
 
-function filterGaugeReportRows(rows = [], scanSearch = "") {
-  return filterExactScanRows(rows.filter(hasReportScanData), scanSearch);
+function filterGaugeReportRows(rows = [], scanSearch = "", shift = "all") {
+  return filterExactScanRows(
+    rows.filter((row) => hasReportScanData(row) && (shift === "all" || getRowShift(row) === shift)),
+    scanSearch
+  );
 }
 
 function isGaugeReportRow(row = {}) {
@@ -1352,7 +1355,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       });
       const nextRows = Array.isArray(response.data?.data) ? response.data.data : [];
       const exactRows = selectedMachineIsGauge
-        ? filterGaugeReportRows(nextRows, shotNumberFilter)
+        ? filterGaugeReportRows(nextRows, shotNumberFilter, shiftFilter)
         : selectedMachineIsLeak
           ? filterExactScanRows(nextRows, shotNumberFilter)
           : filterExactShotRows(nextRows, shotNumberFilter);
@@ -1380,11 +1383,11 @@ export default function PlcReportPage({ onLogout, currentUser }) {
 
   const filteredRows = useMemo(
     () => selectedMachineIsGauge
-      ? filterGaugeReportRows(rows, shotNumberFilter)
+      ? filterGaugeReportRows(rows, shotNumberFilter, shiftFilter)
       : selectedMachineIsLeak
         ? filterExactScanRows(rows, shotNumberFilter)
         : filterExactShotRows(rows, shotNumberFilter),
-    [rows, selectedMachineIsGauge, selectedMachineIsLeak, shotNumberFilter]
+    [rows, selectedMachineIsGauge, selectedMachineIsLeak, shiftFilter, shotNumberFilter]
   );
 
   const hideLeakTestFields = useMemo(
@@ -1522,7 +1525,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     });
     const exportRows = Array.isArray(response.data?.data) ? response.data.data : [];
     const exactRows = selectedMachineIsGauge
-      ? filterGaugeReportRows(exportRows, shotNumberFilter)
+      ? filterGaugeReportRows(exportRows, shotNumberFilter, shiftFilter)
       : selectedMachineIsLeak
         ? filterExactScanRows(exportRows, shotNumberFilter)
         : filterExactShotRows(exportRows, shotNumberFilter);

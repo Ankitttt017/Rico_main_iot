@@ -1826,8 +1826,15 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
   if (targetMachine?.kind === "leaktest") {
     const filters = ["PLC_IP = ?"];
     const values = [targetMachine.ip || targetId];
-    if (from) { filters.push("CAST(Cycle_End_Time AS DATETIME2(3)) >= ?"); values.push(from); }
-    if (to) { filters.push("CAST(Cycle_End_Time AS DATETIME2(3)) < DATEADD(day, 1, CAST(? AS date))"); values.push(to); }
+    if (shift === "C" && from && to) {
+      filters.push("CAST(Cycle_End_Time AS DATETIME2(3)) >= DATEADD(hour, 23, CAST(? AS date))");
+      values.push(from);
+      filters.push("CAST(Cycle_End_Time AS DATETIME2(3)) < DATEADD(hour, 6, DATEADD(day, 1, CAST(? AS date)))");
+      values.push(to);
+    } else {
+      if (from) { filters.push("CAST(Cycle_End_Time AS DATETIME2(3)) >= ?"); values.push(from); }
+      if (to) { filters.push("CAST(Cycle_End_Time AS DATETIME2(3)) < DATEADD(day, 1, CAST(? AS date))"); values.push(to); }
+    }
     if (shotNumber) {
       filters.push("LTRIM(RTRIM([Part_QR_Code])) = ?");
       values.push(String(shotNumber).trim());
