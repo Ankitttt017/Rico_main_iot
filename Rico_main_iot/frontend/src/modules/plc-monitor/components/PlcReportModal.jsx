@@ -1,22 +1,28 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { getPlcConnectionEvents, getPlcConnectionEventsExportUrl, getPlcHistoryExportUrl, getPlcReadingHistory } from "../../../services/api";
-import { MACHINE_NAMES, REGISTER_GROUPS } from "../constants";
-import { buildShotDateFromRow, buildShotTimeFromRow, formatDateOnly, formatDateTime, formatDuration, formatTimeOnly, getDisplayLabel, todayInput } from "../utils/plcFormatters";
+import { MACHINE_NAMES } from "../constants";
+import { buildShotDateFromRow, buildShotTimeFromRow, formatDateOnly, formatDateTime, formatDuration, formatTimeOnly, getDisplayLabel, isHiddenDbField, todayInput } from "../utils/plcFormatters";
 import { formatValue } from "./PlcWidgets";
 
-function getReportParameterRows(readings, machineKind = "ube") {
-  const machineGroups = REGISTER_GROUPS.filter((group) => group.kind === machineKind);
+function getReadingItemValue(item) {
+  return item && typeof item === "object" && "value" in item ? item.value : item;
+}
 
-  return machineGroups.flatMap((group) =>
-    group.keys.map(({ name, unit, label }) => ({
-      group: group.label,
-      groupColor: group.color,
+function getReportParameterRows(readings = {}) {
+  return Object.entries(readings)
+    .filter(([name]) => name && !isHiddenDbField(name))
+    .filter(([, item]) => {
+      const value = getReadingItemValue(item);
+      return value !== null && value !== undefined && String(value).trim() !== "";
+    })
+    .map(([name, item]) => ({
+      group: item?.group || item?.category || "Configured Parameters",
+      groupColor: "#0ea5e9",
       name,
-      label: label || getDisplayLabel(name),
-      unit,
-      value: readings[name]?.value ?? null,
-    }))
-  );
+      label: item?.label || getDisplayLabel(name),
+      unit: item?.unit || "",
+      value: getReadingItemValue(item),
+    }));
 }
 
 export default function PlcReportModal({ reading, readings, onClose }) {
@@ -28,7 +34,7 @@ export default function PlcReportModal({ reading, readings, onClose }) {
   const [historyError, setHistoryError] = useState("");
   const reportMachineId = reading.machine_key || reading.plc_ip;
   const isLeakTestReport = reading.kind === "leaktest";
-  const parameterRows = getReportParameterRows(readings, isLeakTestReport ? "leaktest" : "ube");
+  const parameterRows = getReportParameterRows(readings);
 
   const loadReportPreview = useCallback(async () => {
     if (!reportMachineId) return;

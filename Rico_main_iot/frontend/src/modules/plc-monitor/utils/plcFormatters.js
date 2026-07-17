@@ -5,7 +5,13 @@ export function isHiddenDbField(name) {
 }
 
 export function getDisplayLabel(name) {
-  return DISPLAY_LABELS[name] || name;
+  if (DISPLAY_LABELS[name]) return DISPLAY_LABELS[name];
+  return String(name || "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 export function getMachineKindFromRow(row = {}) {

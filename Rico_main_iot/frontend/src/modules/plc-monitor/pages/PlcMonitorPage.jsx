@@ -4,7 +4,7 @@ import { io } from "socket.io-client";
 import AppLayout from "../../../components/common/AppLayout";
 import { getPlcLatestReadings } from "../../../services/api";
 import { SOCKET_URL } from "../../../services/endpoints";
-import { DEFAULT_MACHINES, MACHINE_NAMES, PLC_LATEST_POLL_MS, REGISTER_GROUPS, getMachineKey, mergeMachineList, sortMachinesBySeries } from "../constants";
+import { DEFAULT_MACHINES, MACHINE_NAMES, PLC_LATEST_POLL_MS, getMachineKey, mergeMachineList, sortMachinesBySeries } from "../constants";
 import PlcMonitorStyles from "../components/PlcMonitorStyles";
 import PlcReportModal from "../components/PlcReportModal";
 import { MetricTile, STATUS_CFG, ValueCard } from "../components/PlcWidgets";
@@ -770,7 +770,6 @@ function PLCDashboard() {
   const machineName = selectedMachineContext.name || MACHINE_NAMES[plcConfig.ip] || "Unknown Machine";
   const selectedMachineKind = inferMachineKind(selectedMachineContext, readings);
   const isLeakTestMachine = selectedMachineKind === "leaktest";
-  const isUbeMachine = selectedMachineKind === "ube";
   const selectedMachineStatus = machineStatuses[selectedMachineKey] || machineStatuses[plcConfig.ip] || {};
   const selectedMachineOnline = Boolean(selectedMachineStatus.connected);
   const selectedPlcConnected = Boolean(selectedMachineStatus.connected || selectedMachineStatus.hasRecentData || readings.plc_ip?.value);
@@ -825,18 +824,7 @@ function PLCDashboard() {
     return isLeakTestMachine && leakTestCardHiddenFields.has(normalizeMonitorFieldName(name));
   };
   const configuredGroups = buildConfiguredGroups(selectedMachineKind, selectedMachineContext, readings);
-  const legacyUbeGroups = REGISTER_GROUPS
-    .filter((group) => group.kind === "ube")
-    .filter((group) => {
-      if (group.id !== "machine_bits") return true;
-      return group.keys.some(({ name }) => {
-        const value = getReadingValue(readings, name);
-        if (!hasReadableValue(value)) return false;
-        if (name === "cycle_end" && Number(value) === 0) return false;
-        return true;
-      });
-    });
-  const availableGroups = isUbeMachine ? legacyUbeGroups : configuredGroups;
+  const availableGroups = configuredGroups;
   const validActiveGroup = availableGroups.some((group) => group.id === activeGroup) ? activeGroup : null;
   const baseDisplayGroups = validActiveGroup
     ? availableGroups.filter(g => g.id === validActiveGroup)
@@ -875,15 +863,7 @@ function PLCDashboard() {
           ? plcShotTime
           : getReadingValue(readings, name),
     }));
-  const ubeOverviewItems = [
-    { name: "part_name", label: "Part Name", value: displayPartName || "-", tone: "cyan" },
-    { name: "shot_number", label: "Shot Number", value: getReadingValue(readings, "shot_number"), tone: "cyan" },
-    { name: "cycle_time", label: "Cycle Time", value: getReadingValue(readings, "cycle_time"), unit: "sec", tone: "green" },
-    { name: "shot_fwd_time", label: "Shot Forward Time", value: getReadingValue(readings, "shot_fwd_time"), unit: "sec", tone: "slate" },
-    { name: "shot_date", label: "Shot Date", value: shotDate ? formatDateOnly(shotDate) : null, tone: "slate" },
-    { name: "shot_time", label: "Shot Time", value: plcShotTime || null, tone: "slate" },
-  ];
-  const overviewItems = isUbeMachine ? ubeOverviewItems : configuredOverviewItems;
+  const overviewItems = configuredOverviewItems;
   const reportReading = {
     ...currentReadingRow,
     machine_name: readings.machine_name?.value || machineName,
