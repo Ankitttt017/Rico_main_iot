@@ -686,6 +686,27 @@ function getRowProductionDate(row = {}) {
   return productionDate || calendarDate;
 }
 
+function getRowLocalDateTime(row = {}) {
+  const calendarDate = getRowCalendarDate(row) || getRowProductionDate(row);
+  const timeParts = getRowTimeParts(row);
+  if (!calendarDate || !timeParts) return null;
+  const [year, month, day] = calendarDate.split("-").map(Number);
+  if (!year || !month || !day) return null;
+  const value = new Date(year, month - 1, day, timeParts.hour, timeParts.minute, timeParts.second || 0);
+  return Number.isNaN(value.getTime()) ? null : value;
+}
+
+function filterFutureRowsForToday(rows = [], fromDate, toDate) {
+  const today = toInputDate(new Date());
+  if (fromDate !== today || toDate !== today) return rows;
+  const now = Date.now();
+  const clockDriftMs = 60000;
+  return rows.filter((row) => {
+    const rowDateTime = getRowLocalDateTime(row);
+    return !rowDateTime || rowDateTime.getTime() <= now + clockDriftMs;
+  });
+}
+
 function formatTimeParts24Hour(parts) {
   if (!parts) return "-";
   return `${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}:${String(parts.second).padStart(2, "0")}`;
@@ -1384,7 +1405,8 @@ export default function PlcReportPage({ onLogout, currentUser }) {
         : selectedMachineIsLeak
           ? filterExactScanRows(nextRows, shotNumberFilter)
           : filterExactShotRows(nextRows, shotNumberFilter);
-      setRows(sortRowsLatestFirst(exactRows, { preferShotNumber: !selectedMachineIsGauge && !selectedMachineIsLeak }));
+      const currentRows = filterFutureRowsForToday(exactRows, fromDate, toDate);
+      setRows(sortRowsLatestFirst(currentRows, { preferShotNumber: !selectedMachineIsGauge && !selectedMachineIsLeak }));
       setServerKpis({
         ok: Number(response.data?.kpis?.ok || 0),
         warm: Number(response.data?.kpis?.warm || 0),
@@ -1554,7 +1576,8 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       : selectedMachineIsLeak
         ? filterExactScanRows(exportRows, shotNumberFilter)
         : filterExactShotRows(exportRows, shotNumberFilter);
-    return sortRowsLatestFirst(exactRows, { preferShotNumber: !selectedMachineIsGauge && !selectedMachineIsLeak });
+    const currentRows = filterFutureRowsForToday(exactRows, fromDate, toDate);
+    return sortRowsLatestFirst(currentRows, { preferShotNumber: !selectedMachineIsGauge && !selectedMachineIsLeak });
   }, [activeResultFilterValue, filtersApplied, fromDate, selectedMachine, selectedMachineIsGauge, selectedMachineIsLeak, shiftFilter, shotNumberFilter, toDate]);
 
   const downloadPdf = async () => {

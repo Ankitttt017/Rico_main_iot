@@ -306,6 +306,18 @@ const RUNTIME_MONITOR_FIELDS = [
   { name: "production_date", label: "Production Date", group: "Production" },
 ];
 
+function getMachineSpecificHiddenMonitorFields(machineKind) {
+  if (machineKind === "ube") return new Set(["production_date"]);
+  return new Set();
+}
+
+function getDetailDuplicateHiddenMonitorFields(machineKind) {
+  if (machineKind === "gauge") return new Set(["shot_date", "production_date"]);
+  if (machineKind === "leaktest") return new Set(["part_name", "cycle_time", "cycle_time_in_sec"]);
+  if (machineKind === "ube") return new Set(["production_date"]);
+  return new Set();
+}
+
 function getUiGroupForReading(name) {
   return UI_GROUPS_BY_READING[name] || UI_GROUPS_BY_READING[normalizeMonitorFieldName(name)] || "";
 }
@@ -319,6 +331,7 @@ function getUiGroupPresentation(label, machineKind, index) {
 }
 
 function buildConfiguredGroups(machineKind, machine = {}, readings = {}) {
+  const machineHiddenFields = getMachineSpecificHiddenMonitorFields(machineKind);
   const configured = getMachineRegisterConfig(machine)
     .filter((item) => !item || typeof item !== "object" || (item.enabled !== false && item.show_on_monitor !== false))
     .map((item) => ({
@@ -327,11 +340,18 @@ function buildConfiguredGroups(machineKind, machine = {}, readings = {}) {
       unit: normalizeRegisterUnit(item),
       group: normalizeRegisterGroup(item) || getUiGroupForReading(normalizeRegisterName(item)),
     }))
-    .filter((item) => item.name && !isHiddenDbField(item.name) && !UI_CARD_HIDDEN_NAMES.has(item.name));
+    .filter((item) => {
+      const normalizedName = normalizeMonitorFieldName(item.name);
+      return item.name
+        && !isHiddenDbField(item.name)
+        && !UI_CARD_HIDDEN_NAMES.has(item.name)
+        && !machineHiddenFields.has(normalizedName);
+    });
 
   const configuredNames = new Set(configured.map((item) => normalizeMonitorFieldName(item.name)));
   const runtimeItems = RUNTIME_MONITOR_FIELDS
     .filter((item) => !configuredNames.has(normalizeMonitorFieldName(item.name)))
+    .filter((item) => !machineHiddenFields.has(normalizeMonitorFieldName(item.name)))
     .filter((item) => hasReadableValue(getReadingValue(readings, item.name)))
     .map((item) => ({
       ...item,
@@ -351,6 +371,7 @@ function buildConfiguredGroups(machineKind, machine = {}, readings = {}) {
     ? configuredWithRuntime
     : Object.keys(readings)
       .filter((name) => name && !isHiddenDbField(name) && !hiddenConfiguredNames.has(name) && !UI_CARD_HIDDEN_NAMES.has(name))
+      .filter((name) => !machineHiddenFields.has(normalizeMonitorFieldName(name)))
       .filter((name) => hasReadableValue(getReadingValue(readings, name)))
       .map((name) => ({
         name,
@@ -1023,10 +1044,14 @@ function PLCDashboard() {
         : group
     ))
     .filter((group) => group.keys.length > 0);
+  const detailDuplicateHiddenFields = getDetailDuplicateHiddenMonitorFields(selectedMachineKind);
   const cardGroups = displayGroups
     .map((group) => ({
       ...group,
-      keys: group.keys.filter(({ name }) => !isHiddenCardField(name)),
+      keys: group.keys.filter(({ name }) => {
+        if (isHiddenCardField(name)) return false;
+        return !detailDuplicateHiddenFields.has(normalizeMonitorFieldName(name));
+      }),
     }))
     .filter((group) => group.keys.length > 0);
   const getMonitorCardValue = (name) => {
