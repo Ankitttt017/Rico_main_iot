@@ -4408,8 +4408,7 @@ function startPlcMonitor(io) {
     getLatestReadings: () =>
       getLatestReadingsForMachines(Array.from(machineState.values())),
     getReadingHistory: async (args = {}) => {
-      const history = await getReadingHistory(args);
-      return Array.isArray(history) ? mergeLiveReadingsIntoHistory(history, args) : history;
+      return getReadingHistory(args);
     },
     getConnectionEvents,
     buildReadingsCsv,
