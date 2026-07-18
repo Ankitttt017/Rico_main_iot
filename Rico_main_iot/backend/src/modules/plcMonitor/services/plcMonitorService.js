@@ -4011,7 +4011,10 @@ function startPlcMonitor(io) {
           "cycle_complete",
           "cycle_end",
           "complete",
-        ]);
+        ], process.env.PLC_UBE_CYCLE_END_DEVICE || "M4598");
+        console.log(
+          `PLC UBE cycle signals ${machine.ip}: start=${cycleStartDevice || "-"}, end=${cycleEndDevice || "-"}`
+        );
         let lastCycleStartBit = cycleStartDevice
           ? await readBit(sock, cycleStartDevice).catch(() => 0)
           : 0;
@@ -4023,6 +4026,9 @@ function startPlcMonitor(io) {
         let lastLiveSavedShotNumber = null;
         let lastLiveShotSnapshot = null;
         let consecutiveReadFailures = 0;
+        const savePreviousOnLiveShot =
+          String(process.env.PLC_UBE_SAVE_PREVIOUS_LIVE_SHOT_ON_CHANGE || "false").toLowerCase() !== "false";
+        const liveReadMs = savePreviousOnLiveShot ? UBE_LIVE_READ_MS : Number(process.env.PLC_UBE_CYCLE_END_MODE_LIVE_READ_MS || 10000);
         const captureUbeCycleSnapshot = async (startedAt, endedAt, durationSec) => {
           let snapshotSock = null;
           try {
@@ -4120,7 +4126,7 @@ function startPlcMonitor(io) {
               console.error(`PLC cycle snapshot task failed for ${machine.ip}:`, error.message);
             });
             cycleStartAt = null;
-          } else if (loopStartedAt - lastLiveReadAt >= UBE_LIVE_READ_MS) {
+          } else if (loopStartedAt - lastLiveReadAt >= liveReadMs) {
             lastLiveReadAt = loopStartedAt;
             let liveReadError = null;
             const livePayload = await readAll(machine, sock, {
@@ -4155,8 +4161,6 @@ function startPlcMonitor(io) {
                 Object.entries(livePayload.readings || {}).map(([name, r]) => [name, r?.value])
               );
 
-              const savePreviousOnLiveShot =
-                String(process.env.PLC_UBE_SAVE_PREVIOUS_LIVE_SHOT_ON_CHANGE || "false").toLowerCase() !== "false";
               if (
                 savePreviousOnLiveShot &&
                 lastLiveShotSnapshot &&
