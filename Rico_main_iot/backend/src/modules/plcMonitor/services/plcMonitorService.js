@@ -3058,15 +3058,16 @@ function startPlcMonitor(io) {
       });
     }
 
+    let saveResult = null;
     if (persist) {
       if (isGauge) {
-        await saveGaugeToDB(machine, partName, readings);
+        saveResult = await saveGaugeToDB(machine, partName, readings);
       } else {
-        await persistUbeReading(machine, partName, withoutStoppageEventFields(readings));
+        saveResult = await persistUbeReading(machine, partName, withoutStoppageEventFields(readings));
       }
     }
 
-    return payload;
+    return { ...payload, saveResult };
   };
 
   // â”€â”€ UBE: Stable Cycle Read â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -4027,13 +4028,29 @@ function startPlcMonitor(io) {
           try {
             await sleep(UBE_CYCLE_END_DELAY_MS);
             snapshotSock = await connectPLC(machine);
-            await readAll(machine, snapshotSock, {
+            const payload = await readAll(machine, snapshotSock, {
               persist: true,
               emit: true,
               cycleTiming: startedAt && durationSec !== null
                 ? { startedAt, endedAt, durationSec }
                 : null,
             });
+            const savedShotNumber = payload?.readings?.shot_number?.value ?? "-";
+            const saveResult = payload?.saveResult;
+            updateMachineState(machine, {
+              connected: true,
+              error: saveResult?.skipped && saveResult.reason !== "duplicate-shot-number"
+                ? `Cycle End shot ${savedShotNumber} save skipped: ${saveResult.reason}.`
+                : null,
+              shotStatus: saveResult?.skipped
+                ? `Cycle End shot ${savedShotNumber} checked: ${saveResult.reason}.`
+                : `Cycle End shot ${savedShotNumber} saved.`,
+            });
+            console.log(
+              `PLC Cycle End snapshot ${machine.ip}: shot=${savedShotNumber}, result=${
+                saveResult?.skipped ? `skipped:${saveResult.reason}` : "saved"
+              }`
+            );
           } catch (error) {
             updateMachineState(machine, {
               connected: true,
@@ -4139,7 +4156,7 @@ function startPlcMonitor(io) {
               );
 
               const savePreviousOnLiveShot =
-                String(process.env.PLC_UBE_SAVE_PREVIOUS_LIVE_SHOT_ON_CHANGE || "true").toLowerCase() !== "false";
+                String(process.env.PLC_UBE_SAVE_PREVIOUS_LIVE_SHOT_ON_CHANGE || "false").toLowerCase() !== "false";
               if (
                 savePreviousOnLiveShot &&
                 lastLiveShotSnapshot &&
