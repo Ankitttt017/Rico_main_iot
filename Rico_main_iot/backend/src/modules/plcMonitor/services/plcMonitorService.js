@@ -4020,6 +4020,7 @@ function startPlcMonitor(io) {
         let lastLiveReadAt = 0;
         let lastSeenShotNumber = null;
         let lastLiveSavedShotNumber = null;
+        let lastLiveShotSnapshot = null;
         let consecutiveReadFailures = 0;
         const captureUbeCycleSnapshot = async (startedAt, endedAt, durationSec) => {
           let snapshotSock = null;
@@ -4137,39 +4138,41 @@ function startPlcMonitor(io) {
                 Object.entries(livePayload.readings || {}).map(([name, r]) => [name, r?.value])
               );
 
-              const saveOnLiveShot =
-                String(process.env.PLC_UBE_SAVE_ON_LIVE_SHOT_CHANGE || "true").toLowerCase() !== "false";
+              const savePreviousOnLiveShot =
+                String(process.env.PLC_UBE_SAVE_PREVIOUS_LIVE_SHOT_ON_CHANGE || "true").toLowerCase() !== "false";
               if (
-                saveOnLiveShot &&
-                currentShotNumber !== lastLiveSavedShotNumber &&
-                hasStableCycleReadings(liveFlatReadings)
+                savePreviousOnLiveShot &&
+                lastLiveShotSnapshot &&
+                currentShotNumber !== lastLiveShotSnapshot.shotNumber &&
+                lastLiveShotSnapshot.shotNumber !== lastLiveSavedShotNumber &&
+                hasStableCycleReadings(lastLiveShotSnapshot.readings)
               ) {
                 try {
                   const saveResult = await persistUbeReading(
                     machine,
-                    livePayload.partName,
-                    withoutStoppageEventFields(liveFlatReadings)
+                    lastLiveShotSnapshot.partName,
+                    withoutStoppageEventFields(lastLiveShotSnapshot.readings)
                   );
-                  lastLiveSavedShotNumber = currentShotNumber;
+                  lastLiveSavedShotNumber = lastLiveShotSnapshot.shotNumber;
                   if (saveResult?.skipped && saveResult.reason !== "duplicate-shot-number") {
                     updateMachineState(machine, {
                       connected: true,
                       error: null,
-                      shotStatus: `Live shot ${currentShotNumber} checked: ${saveResult.reason}.`,
+                      shotStatus: `Previous live shot ${lastLiveShotSnapshot.shotNumber} checked: ${saveResult.reason}.`,
                     });
                   } else if (!saveResult?.skipped) {
                     updateMachineState(machine, {
                       connected: true,
                       error: null,
-                      shotStatus: `Live shot ${currentShotNumber} saved.`,
+                      shotStatus: `Previous live shot ${lastLiveShotSnapshot.shotNumber} saved on shot change.`,
                     });
                   }
                 } catch (error) {
                   updateMachineState(machine, {
                     connected: true,
-                    error: `Live shot save failed: ${error.message}`,
+                    error: `Previous live shot save failed: ${error.message}`,
                   });
-                  console.error(`PLC live shot save failed for ${machine.ip}:`, error.message);
+                  console.error(`PLC previous live shot save failed for ${machine.ip}:`, error.message);
                 }
               }
 
@@ -4183,6 +4186,12 @@ function startPlcMonitor(io) {
                   shotStatus: "Shot number changed; waiting for cycle end signal.",
                 });
               }
+
+              lastLiveShotSnapshot = {
+                shotNumber: currentShotNumber,
+                partName: livePayload.partName,
+                readings: liveFlatReadings,
+              };
             }
           }
 
