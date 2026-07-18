@@ -901,6 +901,42 @@ function sortHistoryRows(rows = []) {
   });
 }
 
+function productionHistoryDateKey(row = {}) {
+  const value = row.production_date || row.shot_date || row.shot_datetime || row.recorded_at || row.created_at;
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  const text = String(value || "").trim();
+  const ymd = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (ymd) return `${ymd[1]}-${ymd[2]}-${ymd[3]}`;
+  const dmy = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+  if (dmy) return `${dmy[3]}-${String(dmy[2]).padStart(2, "0")}-${String(dmy[1]).padStart(2, "0")}`;
+  return "";
+}
+
+function productionHistoryShotNumber(row = {}) {
+  const value = row.shot_number ?? row["SHOT NO."] ?? row["Shot Number"] ?? row.machine_shot_number;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function sortProductionHistoryRows(rows = []) {
+  return rows.sort((a, b) => {
+    const aDate = productionHistoryDateKey(a);
+    const bDate = productionHistoryDateKey(b);
+    if (aDate && bDate && aDate !== bDate) return bDate.localeCompare(aDate);
+
+    const aShot = productionHistoryShotNumber(a);
+    const bShot = productionHistoryShotNumber(b);
+    if (aShot !== null && bShot !== null && aShot !== bShot) return bShot - aShot;
+    if (aShot !== null && bShot === null) return -1;
+    if (aShot === null && bShot !== null) return 1;
+
+    const aKey = historySortKey(a);
+    const bKey = historySortKey(b);
+    if (aKey !== bKey) return bKey.localeCompare(aKey);
+    return Number(b.id || 0) - Number(a.id || 0);
+  });
+}
+
 function formatDbReading(row, machineFallback = {}) {
   if (!row) {
     return {
@@ -1759,6 +1795,12 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
     END
   `;
   const productionSelect = `*, CONVERT(VARCHAR(10), ${productionDateExpr}, 23) AS production_date`;
+  const productionOrderBy = `
+    ${productionDateExpr} DESC,
+    CASE WHEN shot_number IS NULL THEN 1 ELSE 0 END,
+    TRY_CONVERT(BIGINT, shot_number) DESC,
+    id DESC
+  `;
   const appendProductionDateFilters = (filters, values) => {
     if (from) {
       filters.push(`${productionDateExpr} >= CAST(? AS date)`);
@@ -1798,7 +1840,7 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
           `SELECT ${productionSelect}
            FROM ${TABLE}
            ${where}
-           ORDER BY recorded_at DESC, id DESC
+           ORDER BY ${productionOrderBy}
            OFFSET ${offset} ROWS FETCH NEXT ${safeLimit} ROWS ONLY`,
           values
         ),
@@ -1806,7 +1848,7 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
         db.query(buildProductionKpisSql(where), values),
       ]);
       return {
-        rows: sortHistoryRows(rows.map(formatDbRowForClient)),
+        rows: sortProductionHistoryRows(rows.map(formatDbRowForClient)),
         total: Number(countRows[0]?.total || 0),
         page: safePage,
         pageSize: safeLimit,
@@ -1817,10 +1859,10 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
       `SELECT TOP (${safeLimit}) ${productionSelect}
        FROM ${TABLE}
        ${where}
-       ORDER BY recorded_at DESC, id DESC`,
+       ORDER BY ${productionOrderBy}`,
       values
     );
-    return sortHistoryRows(rows.map(formatDbRowForClient));
+    return sortProductionHistoryRows(rows.map(formatDbRowForClient));
   }
 
   if (targetMachine?.kind === "leaktest") {
@@ -2040,7 +2082,7 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
         `SELECT ${productionSelect}
          FROM ${TABLE}
          ${where}
-         ORDER BY recorded_at DESC, id DESC
+         ORDER BY ${productionOrderBy}
          OFFSET ${offset} ROWS FETCH NEXT ${safeLimit} ROWS ONLY`,
         values
       ),
@@ -2048,7 +2090,7 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
       db.query(buildProductionKpisSql(where), values),
     ]);
     return {
-      rows: sortHistoryRows(rows.map(formatDbRowForClient)),
+      rows: sortProductionHistoryRows(rows.map(formatDbRowForClient)),
       total: Number(countRows[0]?.total || 0),
       page: safePage,
       pageSize: safeLimit,
@@ -2060,10 +2102,10 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
     `SELECT TOP (${safeLimit}) ${productionSelect}
      FROM ${TABLE}
      WHERE ${filters.join(" AND ")}
-     ORDER BY recorded_at DESC, id DESC`,
+     ORDER BY ${productionOrderBy}`,
     values
   );
-  return sortHistoryRows(rows.map(formatDbRowForClient));
+  return sortProductionHistoryRows(rows.map(formatDbRowForClient));
 }
 
 async function getConnectionEvents({ ip, limit = 200, from, to } = {}) {

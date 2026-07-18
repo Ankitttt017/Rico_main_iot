@@ -937,6 +937,18 @@ function getNumericId(row = {}) {
   return Number.isFinite(id) ? id : null;
 }
 
+function getRowSortShotNumber(row = {}) {
+  const value = getRowValue(row, "shot_number", "SHOT NO.", "Shot Number", "machine_shot_number");
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function getRowSortDateKey(row = {}) {
+  return normalizeDateInput(
+    getRowValue(row, "production_date", "shot_date", "SHOT DATE", "Shot Date", "shot_datetime", "recorded_at", "created_at")
+  ) || "";
+}
+
 function getRowSortTime(row = {}) {
   const shotParts = getRowTimeParts(row);
   const shotTime = shotParts
@@ -959,8 +971,21 @@ function getRowSortTime(row = {}) {
   return 0;
 }
 
-function sortRowsLatestFirst(nextRows) {
+function sortRowsLatestFirst(nextRows, options = {}) {
+  const preferShotNumber = Boolean(options.preferShotNumber);
   return [...nextRows].sort((a, b) => {
+    if (preferShotNumber) {
+      const aDate = getRowSortDateKey(a);
+      const bDate = getRowSortDateKey(b);
+      if (aDate && bDate && aDate !== bDate) return bDate.localeCompare(aDate);
+
+      const aShot = getRowSortShotNumber(a);
+      const bShot = getRowSortShotNumber(b);
+      if (aShot !== null && bShot !== null && aShot !== bShot) return bShot - aShot;
+      if (aShot !== null && bShot === null) return -1;
+      if (aShot === null && bShot !== null) return 1;
+    }
+
     const timeDiff = getRowSortTime(b) - getRowSortTime(a);
     if (timeDiff !== 0) return timeDiff;
     const aId = getNumericId(a);
@@ -1359,7 +1384,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
         : selectedMachineIsLeak
           ? filterExactScanRows(nextRows, shotNumberFilter)
           : filterExactShotRows(nextRows, shotNumberFilter);
-      setRows(sortRowsLatestFirst(exactRows));
+      setRows(sortRowsLatestFirst(exactRows, { preferShotNumber: !selectedMachineIsGauge && !selectedMachineIsLeak }));
       setServerKpis({
         ok: Number(response.data?.kpis?.ok || 0),
         warm: Number(response.data?.kpis?.warm || 0),
@@ -1407,8 +1432,8 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   );
 
   const reportRows = useMemo(
-    () => sortRowsLatestFirst(filteredRows),
-    [filteredRows]
+    () => sortRowsLatestFirst(filteredRows, { preferShotNumber: !isLeakReport && !isGaugeReport }),
+    [filteredRows, isGaugeReport, isLeakReport]
   );
 
   useEffect(() => {
@@ -1529,7 +1554,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       : selectedMachineIsLeak
         ? filterExactScanRows(exportRows, shotNumberFilter)
         : filterExactShotRows(exportRows, shotNumberFilter);
-    return sortRowsLatestFirst(exactRows);
+    return sortRowsLatestFirst(exactRows, { preferShotNumber: !selectedMachineIsGauge && !selectedMachineIsLeak });
   }, [activeResultFilterValue, filtersApplied, fromDate, selectedMachine, selectedMachineIsGauge, selectedMachineIsLeak, shiftFilter, shotNumberFilter, toDate]);
 
   const downloadPdf = async () => {
