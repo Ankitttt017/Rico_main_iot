@@ -9,6 +9,7 @@ import PlcMonitorStyles from "../components/PlcMonitorStyles";
 import PlcReportModal from "../components/PlcReportModal";
 import { MetricTile, STATUS_CFG, ValueCard } from "../components/PlcWidgets";
 import {
+  buildProductionDateFromRow,
   buildShotDateFromRow,
   buildShotDateTimeFromRow,
   buildShotTimeFromRow,
@@ -962,7 +963,8 @@ function PLCDashboard() {
 
   const st = STATUS_CFG[cycleStatus] || STATUS_CFG.idle;
   const currentReadingRow = Object.fromEntries(Object.entries(readings).map(([name, item]) => [name, item?.value ?? null]));
-  const shotDate = readings.shot_date?.value || buildShotDateFromRow(currentReadingRow);
+  const productionDate = readings.production_date?.value || buildProductionDateFromRow(currentReadingRow);
+  const shotDate = readings.shot_date?.value || productionDate || buildShotDateFromRow(currentReadingRow);
   const plcShotTime = readings.shot_time?.value || buildShotTimeFromRow(currentReadingRow) || shotTime;
   const selectedMachineKey = plcConfig.key || plcConfig.ip;
   const selectedMachine = machines.find((machine) => getMachineKey(machine) === selectedMachineKey || machine.ip === plcConfig.ip);
@@ -1081,6 +1083,7 @@ function PLCDashboard() {
     plc_port: readings.plc_port?.value || plcConfig.port,
     part_name: displayPartName,
     shot_date: readings.shot_date?.value || shotDate,
+    production_date: productionDate || readings.production_date?.value || shotDate,
     shot_time: readings.shot_time?.value || plcShotTime,
     shot_datetime: readings.shot_datetime?.value || buildShotDateTimeFromRow(currentReadingRow) || null,
     cycle_end_time: isLeakTestMachine ? readings.cycle_end_time?.value || lastTimestamp?.toISOString() : null,

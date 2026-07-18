@@ -302,6 +302,10 @@ function getReadingProductionDate(readings = {}) {
   return getProductionDate(shotDate, shotTime);
 }
 
+const PLANT_UTC_OFFSET_MINUTES = Number.isFinite(Number(process.env.PLC_PLANT_UTC_OFFSET_MINUTES))
+  ? Number(process.env.PLC_PLANT_UTC_OFFSET_MINUTES)
+  : 330;
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -1661,6 +1665,11 @@ async function getLatestReadingsForMachinesUnlocked(machineSnapshots = getMachin
           leak.[Id] AS id,
           CAST(leak.[Cycle_End_Time] AS DATETIME2(3)) AS recorded_at,
           CAST(leak.[Cycle_End_Time] AS DATETIME2(3)) AS cycle_end_time,
+          CONVERT(VARCHAR(10), CASE
+            WHEN DATEPART(hour, leak.[Cycle_End_Time]) < 6
+              THEN DATEADD(day, -1, CAST(leak.[Cycle_End_Time] AS date))
+            ELSE CAST(leak.[Cycle_End_Time] AS date)
+          END, 23) AS production_date,
           leak.[Machine] AS machine_name,
           leak.[PLC_IP] AS plc_ip,
           target.plc_port AS plc_port,
@@ -1698,6 +1707,11 @@ async function getLatestReadingsForMachinesUnlocked(machineSnapshots = getMachin
         `SELECT TOP 1
           [Id] AS id,
           [Recorded_At] AS recorded_at,
+          CONVERT(VARCHAR(10), CASE
+            WHEN DATEPART(hour, DATEADD(minute, ${PLANT_UTC_OFFSET_MINUTES}, [Recorded_At])) < 6
+              THEN DATEADD(day, -1, CAST(DATEADD(minute, ${PLANT_UTC_OFFSET_MINUTES}, [Recorded_At]) AS date))
+            ELSE CAST(DATEADD(minute, ${PLANT_UTC_OFFSET_MINUTES}, [Recorded_At]) AS date)
+          END, 23) AS production_date,
           [Machine_Key] AS machine_key,
           [Machine_Name] AS machine_name,
           [PLC_IP] AS plc_ip,
@@ -1868,14 +1882,20 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
   if (targetMachine?.kind === "leaktest") {
     const filters = ["PLC_IP = ?"];
     const values = [targetMachine.ip || targetId];
-    if (shift === "C" && from && to) {
-      filters.push("CAST(Cycle_End_Time AS DATETIME2(3)) >= DATEADD(hour, 23, CAST(? AS date))");
+    const leakProductionDateExpr = `
+      CASE
+        WHEN DATEPART(hour, Cycle_End_Time) < 6
+          THEN DATEADD(day, -1, CAST(Cycle_End_Time AS date))
+        ELSE CAST(Cycle_End_Time AS date)
+      END
+    `;
+    if (from) {
+      filters.push(`${leakProductionDateExpr} >= CAST(? AS date)`);
       values.push(from);
-      filters.push("CAST(Cycle_End_Time AS DATETIME2(3)) < DATEADD(hour, 6, DATEADD(day, 1, CAST(? AS date)))");
+    }
+    if (to) {
+      filters.push(`${leakProductionDateExpr} <= CAST(? AS date)`);
       values.push(to);
-    } else {
-      if (from) { filters.push("CAST(Cycle_End_Time AS DATETIME2(3)) >= ?"); values.push(from); }
-      if (to) { filters.push("CAST(Cycle_End_Time AS DATETIME2(3)) < DATEADD(day, 1, CAST(? AS date))"); values.push(to); }
     }
     if (shotNumber) {
       filters.push("LTRIM(RTRIM([Part_QR_Code])) = ?");
@@ -1899,6 +1919,7 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
           [Id],[Machine],[PLC_IP],[Status],[Cycle_End_Time],[Part_QR_Code],
           [Body_Leak_Value],[Gall_1],[Gall_2],[Result],[Running_Mode],
           [Manual],[Dry],[Wey],[Both],[Cycle_Time],
+          CONVERT(VARCHAR(10), ${leakProductionDateExpr}, 23) AS production_date,
           ROW_NUMBER() OVER (
             PARTITION BY [PLC_IP],
               CASE
@@ -1916,6 +1937,7 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
         [Id] AS id,
         CAST([Cycle_End_Time] AS DATETIME2(3)) AS recorded_at,
         CAST([Cycle_End_Time] AS DATETIME2(3)) AS cycle_end_time,
+        [production_date],
         [Machine] AS machine_name, [PLC_IP] AS plc_ip, ? AS plc_port,
         [Machine] AS machine, [PLC_IP] AS ip, [Status] AS status,
         [Part_QR_Code] AS part_name, [Part_QR_Code] AS part_qr_code,
@@ -1975,11 +1997,20 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
 
   if (gaugeTarget) {
     const values = [];
+    const gaugeRecordedLocalExpr = `DATEADD(minute, ${PLANT_UTC_OFFSET_MINUTES}, [Recorded_At])`;
+    const gaugeProductionDateExpr = `
+      CASE
+        WHEN DATEPART(hour, ${gaugeRecordedLocalExpr}) < 6
+          THEN DATEADD(day, -1, CAST(${gaugeRecordedLocalExpr} AS date))
+        ELSE CAST(${gaugeRecordedLocalExpr} AS date)
+      END
+    `;
 
     const selectSql = `
       SELECT
         [Id] AS id,
         [Recorded_At] AS recorded_at,
+        CONVERT(VARCHAR(10), ${gaugeProductionDateExpr}, 23) AS production_date,
         [Machine_Key] AS machine_key,
         [Machine_Name] AS machine_name,
         [PLC_IP] AS plc_ip,
@@ -2000,15 +2031,15 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
     if (to) { values.push(to); }
     if (shotNumber) { values.push(`%${String(shotNumber).trim()}%`); }
     const filteredSelectSql = `${selectSql}
-      ${from ? " AND [Recorded_At] >= ?" : ""}
-      ${to ? " AND [Recorded_At] < DATEADD(day, 1, CAST(? AS date))" : ""}
+      ${from ? ` AND ${gaugeProductionDateExpr} >= CAST(? AS date)` : ""}
+      ${to ? ` AND ${gaugeProductionDateExpr} <= CAST(? AS date)` : ""}
       ${shotNumber ? " AND LTRIM(RTRIM([Part_Scan_Data])) LIKE ?" : ""}`;
 
     if (isPaged) {
       const [{ rows }, { rows: countRows }] = await Promise.all([
         db.query(
           `SELECT
-             id, recorded_at, machine_key, machine_name, plc_ip, plc_port,
+             id, recorded_at, production_date, machine_key, machine_name, plc_ip, plc_port,
              part_scan_data, cycle_time_in_sec, gauge_status, gauge_judgement,
              cycle_mode_auto_manual, cycle_start, cycle_complete
            FROM (
@@ -2049,7 +2080,7 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
 
     const { rows } = await db.query(
       `SELECT TOP (${safeLimit})
-         id, recorded_at, machine_key, machine_name, plc_ip, plc_port,
+         id, recorded_at, production_date, machine_key, machine_name, plc_ip, plc_port,
          part_scan_data, cycle_time_in_sec, gauge_status, gauge_judgement,
          cycle_mode_auto_manual, cycle_start, cycle_complete
        FROM (

@@ -146,6 +146,20 @@ export function buildShotDateFromRow(row = {}) {
   return year && parts.every(Boolean) ? `${year}-${parts[0]}-${parts[1]}` : "";
 }
 
+export function buildProductionDateFromRow(row = {}) {
+  if (row.production_date) return formatDateOnly(row.production_date);
+  const shotDate = buildShotDateFromRow(row) || formatDateOnly(row.recorded_at || row.created_at);
+  const shotTime = buildShotTimeFromRow(row);
+  const timeParts = String(shotTime || "").match(/^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/);
+  if (!shotDate || !timeParts) return shotDate || "";
+  const hour = Number(timeParts[1]);
+  if (!Number.isFinite(hour) || hour >= 6) return shotDate;
+  const date = new Date(`${shotDate}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return shotDate;
+  date.setDate(date.getDate() - 1);
+  return formatDateOnly(date);
+}
+
 export function buildShotDateTimeFromRow(row = {}) {
   if (row.shot_datetime) return String(row.shot_datetime).replace("T", " ");
   const shotDate = buildShotDateFromRow(row);
@@ -179,6 +193,7 @@ export function normalizeDisplayValue(name, value) {
   }
   if (TWO_DIGIT_FIELDS.has(name)) return pad2(value);
   if (name === "shot_date") return formatDateOnly(value);
+  if (name === "production_date") return formatDateOnly(value);
   if (name === "shot_time") return formatTimeOnly(value);
   if (name === "recorded_at") return formatDateTime(value);
   if (name === "shot_datetime") return formatDateTime(value);
@@ -197,6 +212,12 @@ export function normalizeDisplayValue(name, value) {
 const READING_VALUE_ALIASES = {
   "SHOT NO.": ["shot_number"],
   "SHOT TIME": ["shot_time"],
+  "SHOT DATE": ["shot_date", "production_date"],
+  "Shot Date": ["shot_date", "production_date"],
+  shot_date: ["production_date", "SHOT DATE", "Shot Date"],
+  "PRODUCTION DATE": ["production_date", "shot_date"],
+  "Production Date": ["production_date", "shot_date"],
+  production_date: ["shot_date", "PRODUCTION DATE", "Production Date"],
   "CYCLE TIME sec.": ["cycle_time"],
   "HIGH SHOT COUNT": ["ok_shot"],
   "NG COUNTER": ["ng_counter"],
@@ -402,6 +423,8 @@ export function rowToReadings(row = {}, machineKind = getMachineKindFromRow(row)
   return Object.fromEntries(
     names.map((name) => {
       let value = getAliasedValue(expandedRow, name);
+      if (name === "shot_date") value = expandedRow.production_date ?? expandedRow.shot_date ?? buildProductionDateFromRow(expandedRow) ?? null;
+      if (name === "production_date") value = expandedRow.production_date ?? buildProductionDateFromRow(expandedRow) ?? null;
       if (name === "part_name") value = expandedRow.part_name ?? expandedRow.part_qr_code ?? expandedRow.scan_data ?? null;
       if (name === "part_qr_code") value = expandedRow.part_qr_code ?? expandedRow.scan_data ?? expandedRow.part_name ?? null;
       if (name === "part_scan_data") value = getAliasedValue(expandedRow, name);
