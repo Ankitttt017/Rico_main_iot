@@ -90,6 +90,12 @@ const PLANT_ENVIRONMENT_READ_TIMEOUT_MS = Math.max(
 const UBE_SHOT_TIME_HOUR_DEVICE = String(process.env.PLC_UBE_SHOT_TIME_HOUR_DEVICE || "D2103").trim().toUpperCase();
 const UBE_SHOT_TIME_MINUTE_DEVICE = String(process.env.PLC_UBE_SHOT_TIME_MINUTE_DEVICE || "D2104").trim().toUpperCase();
 const UBE_SHOT_TIME_SECOND_DEVICE = String(process.env.PLC_UBE_SHOT_TIME_SECOND_DEVICE || "D2105").trim().toUpperCase();
+const UBE_SHOT_CHANGE_SAVE_ENABLED =
+  String(process.env.PLC_UBE_SHOT_CHANGE_SAVE_ENABLED || "true").toLowerCase() !== "false";
+const UBE_SHOT_CHANGE_SAVE_DELAY_MS = Math.max(
+  0,
+  Number(process.env.PLC_UBE_SHOT_CHANGE_SAVE_DELAY_MS || UBE_CYCLE_END_DELAY_MS || 500)
+);
 const plantEnvironmentCache = {
   at: 0,
   data: null,
@@ -4054,7 +4060,15 @@ function startPlcMonitor(io) {
         let cycleEndHandled = false;
         let lastLiveReadAt = 0;
         let lastSeenShotNumber = null;
+        let lastShotChangeSavedNumber = null;
         let consecutiveReadFailures = 0;
+        const normalizeShotNumberForCompare = (value) => {
+          if (value === null || value === undefined) return null;
+          const text = String(value).trim();
+          if (!text) return null;
+          const numeric = Number(text);
+          return Number.isFinite(numeric) ? String(Math.trunc(numeric)) : text;
+        };
         const captureUbeCycleSnapshot = async (activeSock, startedAt, endedAt, durationSec) => {
           try {
             await sleep(UBE_CYCLE_END_DELAY_MS);
@@ -4085,6 +4099,38 @@ function startPlcMonitor(io) {
             updateMachineState(machine, {
               connected: true,
               error: `Cycle snapshot failed: ${error.message}`,
+            });
+          }
+        };
+        const captureUbeShotChangeSnapshot = async (activeSock, changedShotNumber) => {
+          try {
+            if (UBE_SHOT_CHANGE_SAVE_DELAY_MS > 0) await sleep(UBE_SHOT_CHANGE_SAVE_DELAY_MS);
+            const payload = await readAll(machine, activeSock, {
+              persist: true,
+              emit: true,
+            });
+            const savedShotNumber = payload?.readings?.shot_number?.value ?? changedShotNumber ?? "-";
+            const saveResult = payload?.saveResult;
+            const savedShotKey = normalizeShotNumberForCompare(savedShotNumber);
+            if (savedShotKey) lastShotChangeSavedNumber = savedShotKey;
+            updateMachineState(machine, {
+              connected: true,
+              error: saveResult?.skipped && saveResult.reason !== "duplicate-shot-number"
+                ? `Shot ${savedShotNumber} backup save skipped: ${saveResult.reason}.`
+                : null,
+              shotStatus: saveResult?.skipped
+                ? `Shot ${savedShotNumber} checked by shot-number backup: ${saveResult.reason}.`
+                : `Shot ${savedShotNumber} saved by shot-number backup.`,
+            });
+            console.log(
+              `PLC Shot Change snapshot ${machine.ip}: shot=${savedShotNumber}, result=${
+                saveResult?.skipped ? `skipped:${saveResult.reason}` : "saved"
+              }`
+            );
+          } catch (error) {
+            updateMachineState(machine, {
+              connected: true,
+              error: `Shot change snapshot failed: ${error.message}`,
             });
           }
         };
@@ -4175,7 +4221,9 @@ function startPlcMonitor(io) {
               throw new Error(`PLC live reads failed ${consecutiveReadFailures} times; reconnecting.`);
             }
 
-            const currentShotNumber = livePayload?.readings?.shot_number?.value ?? null;
+            const currentShotNumber = normalizeShotNumberForCompare(
+              livePayload?.readings?.shot_number?.value ?? null
+            );
             if (currentShotNumber !== null && currentShotNumber !== undefined) {
               if (lastSeenShotNumber === null) {
                 lastSeenShotNumber = currentShotNumber;
@@ -4184,8 +4232,16 @@ function startPlcMonitor(io) {
                 updateMachineState(machine, {
                   connected: true,
                   error: null,
-                  shotStatus: "Shot number changed; waiting for cycle end signal.",
+                  shotStatus: UBE_SHOT_CHANGE_SAVE_ENABLED
+                    ? "Shot number changed; saving backup snapshot."
+                    : "Shot number changed; waiting for cycle end signal.",
                 });
+                if (
+                  UBE_SHOT_CHANGE_SAVE_ENABLED &&
+                  currentShotNumber !== lastShotChangeSavedNumber
+                ) {
+                  await captureUbeShotChangeSnapshot(sock, currentShotNumber);
+                }
               }
             }
           }
