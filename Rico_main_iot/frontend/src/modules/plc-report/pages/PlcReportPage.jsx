@@ -771,7 +771,7 @@ function formatValue(value, key) {
 }
 
 function formatReportCell(row, key, rowIndex = 0, rowCount = 0, rows = []) {
-  if (key === SERIAL_COLUMN) return Math.max(1, rowCount - rowIndex);
+  if (key === SERIAL_COLUMN) return row[SERIAL_COLUMN] || Math.max(1, rowCount - rowIndex);
   if (key === SHIFT_COLUMN) return getRowShift(row);
   if (key === TESTING_MODE_COLUMN) return getTestingModeValue(row);
   if (key === "scan_time") return formatTimeParts24Hour(getRowTimeParts(row));
@@ -1494,6 +1494,15 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   const lastRecordNumber = totalRecords && reportRows.length
     ? Math.min(totalRecords, firstRecordNumber + reportRows.length - 1)
     : 0;
+  const pagedReportRows = useMemo(
+    () => reportRows.map((row, index) => ({
+      ...row,
+      [SERIAL_COLUMN]: totalRecords
+        ? Math.max(1, totalRecords - ((currentPage - 1) * pageSize) - index)
+        : Math.max(1, reportRows.length - index),
+    })),
+    [currentPage, pageSize, reportRows, totalRecords]
+  );
 
   useEffect(() => {
     if (reportPage > totalPages) setReportPage(totalPages);
@@ -2000,7 +2009,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                 </tr>
               </thead>
               <tbody>
-                {reportRows.map((row, index) => (
+                {pagedReportRows.map((row, index) => (
                   <tr key={row.id || `${row.recorded_at}-${index}`} className="border-b border-slate-100 hover:bg-slate-50">
                     {columns.map((key) => (
                       <td
@@ -2013,7 +2022,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                             : "border-slate-100 text-slate-800"
                         }`}
                       >
-                        {formatReportCell(row, key, index, reportRows.length, reportRows)}
+                        {formatReportCell(row, key, index, pagedReportRows.length, pagedReportRows)}
                       </td>
                     ))}
                   </tr>
