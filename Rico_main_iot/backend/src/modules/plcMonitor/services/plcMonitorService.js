@@ -2036,10 +2036,25 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
     if (from) { values.push(from); }
     if (to) { values.push(to); }
     if (shotNumber) { values.push(`%${String(shotNumber).trim()}%`); }
+    let gaugeShiftFilterSql = "";
+    if (shift && shift !== "all") {
+      const gaugeHourExpr = `DATEPART(hour, ${gaugeRecordedLocalExpr})`;
+      const gaugeMinuteExpr = `DATEPART(minute, ${gaugeRecordedLocalExpr})`;
+      if (shift === "A") {
+        gaugeShiftFilterSql = ` AND (${gaugeHourExpr} >= 6 AND (${gaugeHourExpr} < 14 OR (${gaugeHourExpr} = 14 AND ${gaugeMinuteExpr} < 30)))`;
+      }
+      if (shift === "B") {
+        gaugeShiftFilterSql = ` AND ((${gaugeHourExpr} > 14 OR (${gaugeHourExpr} = 14 AND ${gaugeMinuteExpr} >= 30)) AND ${gaugeHourExpr} < 23)`;
+      }
+      if (shift === "C") {
+        gaugeShiftFilterSql = ` AND (${gaugeHourExpr} < 6 OR ${gaugeHourExpr} >= 23)`;
+      }
+    }
     const filteredSelectSql = `${selectSql}
       ${from ? ` AND ${gaugeProductionDateExpr} >= CAST(? AS date)` : ""}
       ${to ? ` AND ${gaugeProductionDateExpr} <= CAST(? AS date)` : ""}
-      ${shotNumber ? " AND LTRIM(RTRIM([Part_Scan_Data])) LIKE ?" : ""}`;
+      ${shotNumber ? " AND LTRIM(RTRIM([Part_Scan_Data])) LIKE ?" : ""}
+      ${gaugeShiftFilterSql}`;
 
     if (isPaged) {
       const [{ rows }, { rows: countRows }] = await Promise.all([

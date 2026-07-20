@@ -968,6 +968,16 @@ IF OBJECT_ID(N'dbo.Gauge', N'U') IS NOT NULL
   CREATE INDEX [IX_Gauge_machine_recorded_desc]
     ON dbo.Gauge ([PLC_IP], [Machine_Key], [Recorded_At] DESC, [Id] DESC);
 
+IF OBJECT_ID(N'dbo.Gauge', N'U') IS NOT NULL
+   AND NOT EXISTS (
+     SELECT 1 FROM sys.indexes
+     WHERE [name] = N'IX_Gauge_report_filters'
+       AND object_id = OBJECT_ID(N'dbo.Gauge')
+   )
+  CREATE INDEX [IX_Gauge_report_filters]
+    ON dbo.Gauge ([PLC_IP], [Recorded_At] DESC, [Id] DESC)
+    INCLUDE ([Machine_Key], [Part_Scan_Data], [Cycle_Time_In_Sec], [Gauge_Status], [Gauge_Judgement], [Cycle_Mode_Auto_Manual]);
+
 IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NULL
 BEGIN
   CREATE TABLE dbo.plc_machine_configs (
@@ -1257,6 +1267,28 @@ END;
 
 IF NOT EXISTS (
   SELECT 1 FROM sys.indexes
+  WHERE [name] = N'IX_PlcCycleReadings_machine_report_filters'
+    AND [object_id] = OBJECT_ID(N'dbo.PlcCycleReadings')
+)
+BEGIN
+  EXEC(N'CREATE INDEX [IX_PlcCycleReadings_machine_report_filters]
+    ON dbo.PlcCycleReadings ([machine_key], [shot_date] DESC, [recorded_at] DESC, [id] DESC)
+    INCLUDE ([plc_ip], [shot_number], [shot_status], [shot_hour], [shot_minute])');
+END;
+
+IF NOT EXISTS (
+  SELECT 1 FROM sys.indexes
+  WHERE [name] = N'IX_PlcCycleReadings_ip_report_filters'
+    AND [object_id] = OBJECT_ID(N'dbo.PlcCycleReadings')
+)
+BEGIN
+  EXEC(N'CREATE INDEX [IX_PlcCycleReadings_ip_report_filters]
+    ON dbo.PlcCycleReadings ([plc_ip], [shot_date] DESC, [recorded_at] DESC, [id] DESC)
+    INCLUDE ([machine_key], [shot_number], [shot_status], [shot_hour], [shot_minute])');
+END;
+
+IF NOT EXISTS (
+  SELECT 1 FROM sys.indexes
   WHERE [name] = N'IX_PlcConnectionEvents_started_at_desc'
     AND [object_id] = OBJECT_ID(N'dbo.PlcConnectionEvents')
 )
@@ -1273,6 +1305,17 @@ IF NOT EXISTS (
 BEGIN
   CREATE INDEX [IX_Leaktest_ip_cycle_end_desc]
     ON dbo.Leaktest ([PLC_IP], [Cycle_End_Time] DESC, [Id] DESC);
+END;
+
+IF NOT EXISTS (
+  SELECT 1 FROM sys.indexes
+  WHERE [name] = N'IX_Leaktest_report_filters'
+    AND [object_id] = OBJECT_ID(N'dbo.Leaktest')
+)
+BEGIN
+  CREATE INDEX [IX_Leaktest_report_filters]
+    ON dbo.Leaktest ([PLC_IP], [Cycle_End_Time] DESC, [Id] DESC)
+    INCLUDE ([Part_QR_Code], [Result], [Cycle_Time], [Running_Mode]);
 END;
 
 IF OBJECT_ID(N'dbo.plc_machine_readings', N'U') IS NULL

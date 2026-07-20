@@ -20,7 +20,7 @@ const DEFAULT_MACHINE = {
 };
 
 const REPORT_AUTO_REFRESH_MS = Number(import.meta.env.VITE_PLC_REPORT_REFRESH_MS || 5000);
-const REPORT_RESULT_LIMIT = Number(import.meta.env.VITE_PLC_REPORT_LIMIT || 20000);
+const REPORT_RESULT_LIMIT = Number(import.meta.env.VITE_PLC_REPORT_LIMIT || 200);
 const REPORT_EXPORT_PAGE_SIZE = Number(import.meta.env.VITE_PLC_REPORT_EXPORT_PAGE_SIZE || 20000);
 
 const HIDDEN_COLUMNS = new Set([
@@ -1132,11 +1132,19 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   const [draftShotResultFilter, setDraftShotResultFilter] = useState(shotResultFilter);
   const [draftShotNumberFilter, setDraftShotNumberFilter] = useState("");
   const [rows, setRows] = useState([]);
+  const [reportPage, setReportPage] = useState(1);
+  const [pagination, setPagination] = useState({
+    page: 1,
+    pageSize: REPORT_RESULT_LIMIT,
+    total: 0,
+    totalPages: 1,
+  });
   const [serverKpis, setServerKpis] = useState({
     ok: 0,
     warm: 0,
     off: 0,
   });
+  const [serverKpisReady, setServerKpisReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
@@ -1328,7 +1336,10 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     const needsResult = selectedDraftMachine && !isDraftGauge;
     if (!draftLineId || !draftMachineId || !draftQuickFilter || !draftFromDate || !draftToDate || !draftShiftFilter || (needsResult && !draftResultFilterValue)) {
       setRows([]);
+      setReportPage(1);
+      setPagination({ page: 1, pageSize: REPORT_RESULT_LIMIT, total: 0, totalPages: 1 });
       setServerKpis({ ok: 0, warm: 0, off: 0 });
+      setServerKpisReady(false);
       setFiltersApplied(false);
       setError("Please select line, machine, date range, shift, and result before applying.");
       return;
@@ -1342,6 +1353,8 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     setShiftFilter(draftShiftFilter);
     setShotResultFilter(draftResultFilterValue);
     setShotNumberFilter(draftShotNumberFilter.trim());
+    setReportPage(1);
+    setPagination({ page: 1, pageSize: REPORT_RESULT_LIMIT, total: 0, totalPages: 1 });
     setFiltersApplied(true);
   }, [draftFromDate, draftLineId, draftMachineId, draftMachineOptions, draftQuickFilter, draftResultFilterValue, draftShiftFilter, draftShotNumberFilter, draftToDate]);
 
@@ -1363,7 +1376,10 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     setDraftShotNumberFilter("");
     setShotNumberFilter("");
     setRows([]);
+    setReportPage(1);
+    setPagination({ page: 1, pageSize: REPORT_RESULT_LIMIT, total: 0, totalPages: 1 });
     setServerKpis({ ok: 0, warm: 0, off: 0 });
+    setServerKpisReady(false);
     setFiltersApplied(false);
     setError("");
   }, []);
@@ -1381,7 +1397,9 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     if (!filtersApplied || !reportMachinesReady || !selectedMachineIp || !fromDate || !toDate || !shiftFilter) {
       if (!silent) {
         setRows([]);
+        setPagination({ page: 1, pageSize: REPORT_RESULT_LIMIT, total: 0, totalPages: 1 });
         setServerKpis({ ok: 0, warm: 0, off: 0 });
+        setServerKpisReady(false);
         setLoading(false);
       }
       return;
@@ -1395,10 +1413,13 @@ export default function PlcReportPage({ onLogout, currentUser }) {
         from: fromDate,
         to: toDate,
         limit: REPORT_RESULT_LIMIT,
+        page: reportPage,
+        pageSize: REPORT_RESULT_LIMIT,
         shift: shiftFilter,
         shotResult: activeResultFilterValue,
         shotNumber: shotNumberFilter,
       });
+      const nextPagination = response.data?.pagination || {};
       const nextRows = Array.isArray(response.data?.data) ? response.data.data : [];
       const exactRows = selectedMachineIsGauge
         ? filterGaugeReportRows(nextRows, shotNumberFilter, shiftFilter)
@@ -1407,26 +1428,34 @@ export default function PlcReportPage({ onLogout, currentUser }) {
           : filterExactShotRows(nextRows, shotNumberFilter);
       const currentRows = filterFutureRowsForToday(exactRows, fromDate, toDate);
       setRows(sortRowsLatestFirst(currentRows, { preferShotNumber: !selectedMachineIsGauge && !selectedMachineIsLeak }));
+      setPagination({
+        page: Number(nextPagination.page || reportPage || 1),
+        pageSize: Number(nextPagination.pageSize || REPORT_RESULT_LIMIT),
+        total: Number(nextPagination.total || currentRows.length || 0),
+        totalPages: Math.max(1, Number(nextPagination.totalPages || 1)),
+      });
       setServerKpis({
         ok: Number(response.data?.kpis?.ok || 0),
         warm: Number(response.data?.kpis?.warm || 0),
         off: Number(response.data?.kpis?.off || 0),
       });
+      setServerKpisReady(Boolean(response.data?.kpis));
     } catch (err) {
       if (!silent) setRows([]);
       setError(err.response?.data?.error || err.response?.data?.message || "Unable to load PLC report.");
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [activeResultFilterValue, filtersApplied, fromDate, reportMachinesReady, selectedMachine, selectedMachineIsGauge, selectedMachineIsLeak, shiftFilter, shotNumberFilter, toDate]);
+  }, [activeResultFilterValue, filtersApplied, fromDate, reportMachinesReady, reportPage, selectedMachine, selectedMachineIsGauge, selectedMachineIsLeak, shiftFilter, shotNumberFilter, toDate]);
 
   useEffect(() => {
     loadReport();
+    if (fromDate !== todayInput() || toDate !== todayInput()) return undefined;
     const timer = window.setInterval(() => {
       loadReport({ silent: true });
     }, REPORT_AUTO_REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [loadReport]);
+  }, [fromDate, loadReport, toDate]);
 
   const filteredRows = useMemo(
     () => selectedMachineIsGauge
@@ -1457,40 +1486,54 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     () => sortRowsLatestFirst(filteredRows, { preferShotNumber: !isLeakReport && !isGaugeReport }),
     [filteredRows, isGaugeReport, isLeakReport]
   );
+  const currentPage = Math.max(1, Number(pagination.page || reportPage || 1));
+  const totalPages = Math.max(1, Number(pagination.totalPages || 1));
+  const totalRecords = Math.max(0, Number(pagination.total || 0));
+  const pageSize = Math.max(1, Number(pagination.pageSize || REPORT_RESULT_LIMIT));
+  const firstRecordNumber = totalRecords && reportRows.length ? ((currentPage - 1) * pageSize) + 1 : 0;
+  const lastRecordNumber = totalRecords && reportRows.length
+    ? Math.min(totalRecords, firstRecordNumber + reportRows.length - 1)
+    : 0;
+
+  useEffect(() => {
+    if (reportPage > totalPages) setReportPage(totalPages);
+  }, [reportPage, totalPages]);
 
   useEffect(() => {
     if (tableScrollRef.current) {
       tableScrollRef.current.scrollLeft = 0;
       tableScrollRef.current.scrollTop = 0;
     }
-  }, [columns.length, fromDate, selectedMachineId, shiftFilter, shotNumberFilter, activeResultFilterValue, toDate]);
+  }, [columns.length, fromDate, reportPage, selectedMachineId, shiftFilter, shotNumberFilter, activeResultFilterValue, toDate]);
   const kpis = useMemo(() => {
     const counts = {
       ok: serverKpis.ok,
       warm: serverKpis.warm,
       off: serverKpis.off,
-      totalProduction: reportRows.length,
+      totalProduction: pagination.total || reportRows.length,
       shift: filtersApplied ? (shiftFilter === "all" ? "All" : shiftFilter) : "-",
     };
-    reportRows.forEach((row) => {
-      const rawValue = getReportResultValue(row);
-      const normalizedText = String(rawValue || "").trim().toLowerCase();
-      if (normalizedText === "ok") {
-        counts.ok += 1;
-        return;
-      }
-      if (normalizedText === "ng") {
-        counts.off += 1;
-        return;
-      }
-      const value = Number(rawValue);
-      if (value === 1) counts.ok += 1;
-      if (value === 3) counts.warm += 1;
-      if (value === 5) counts.off += 1;
-    });
+    if (!serverKpisReady) {
+      reportRows.forEach((row) => {
+        const rawValue = getReportResultValue(row);
+        const normalizedText = String(rawValue || "").trim().toLowerCase();
+        if (normalizedText === "ok") {
+          counts.ok += 1;
+          return;
+        }
+        if (normalizedText === "ng") {
+          counts.off += 1;
+          return;
+        }
+        const value = Number(rawValue);
+        if (value === 1) counts.ok += 1;
+        if (value === 3) counts.warm += 1;
+        if (value === 5) counts.off += 1;
+      });
+    }
     if (!reportRows.length && filtersApplied) counts.shift = shiftFilter === "all" ? "All" : shiftFilter;
     return counts;
-  }, [filtersApplied, reportRows, serverKpis, shiftFilter]);
+  }, [filtersApplied, pagination.total, reportRows, serverKpis, serverKpisReady, shiftFilter]);
 
   const reportRangeLabel = fromDate && toDate ? `${formatDisplayDate(fromDate)} to ${formatDisplayDate(toDate)}` : "Select date range";
   const reportFilterLabel = activeQuickFilter ? getQuickFilterLabel(activeQuickFilter) : "Select date range";
@@ -1933,7 +1976,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
             <div>
               <h2 className="text-sm font-black uppercase tracking-[0.14em] text-slate-800">Overall Machine Report</h2>
               <p className="text-xs font-semibold text-slate-500">
-                Latest records first | {reportRows.length} records
+                Latest records first | {totalRecords || reportRows.length} records
                 {shotNumberFilter && ` | ${reportSearchSummaryLabel}: ${shotNumberFilter}`}
               </p>
             </div>
@@ -1993,8 +2036,31 @@ export default function PlcReportPage({ onLogout, currentUser }) {
           </div>
           <div className="flex flex-col gap-3 border-t border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-xs font-bold text-slate-500">
-              Showing {reportRows.length} latest records
+              {totalRecords
+                ? `Showing ${firstRecordNumber}-${lastRecordNumber} of ${totalRecords} records`
+                : `Showing ${reportRows.length} latest records`}
             </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setReportPage((page) => Math.max(1, page - 1))}
+                disabled={loading || currentPage <= 1}
+                className="h-9 rounded-lg border border-slate-300 bg-white px-3 text-xs font-black text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Previous
+              </button>
+              <span className="min-w-[96px] text-center text-xs font-black text-slate-600">
+                Page {currentPage} / {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setReportPage((page) => Math.min(totalPages, page + 1))}
+                disabled={loading || currentPage >= totalPages}
+                className="h-9 rounded-lg border border-slate-300 bg-white px-3 text-xs font-black text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
           </div>
         </section>
       </div>
