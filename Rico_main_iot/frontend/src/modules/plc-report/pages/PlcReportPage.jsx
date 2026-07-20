@@ -1110,20 +1110,21 @@ function KpiCard({ title, value, tone }) {
 
 export default function PlcReportPage({ onLogout, currentUser }) {
   const [searchParams] = useSearchParams();
+  const defaultReportDate = todayInput();
   const [machines, setMachines] = useState([DEFAULT_MACHINE]);
   const [lines, setLines] = useState([]);
   const [machinesByLine, setMachinesByLine] = useState({});
   const [reportMachinesReady, setReportMachinesReady] = useState(false);
   const [filtersApplied, setFiltersApplied] = useState(false);
-  const [selectedLineId, setSelectedLineId] = useState("");
+  const [selectedLineId, setSelectedLineId] = useState("all");
   const [selectedMachineId, setSelectedMachineId] = useState("");
-  const [draftLineId, setDraftLineId] = useState("");
+  const [draftLineId, setDraftLineId] = useState("all");
   const [draftMachineId, setDraftMachineId] = useState("");
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
-  const [activeQuickFilter, setActiveQuickFilter] = useState("");
-  const [shiftFilter, setShiftFilter] = useState("");
-  const [shotResultFilter, setShotResultFilter] = useState("");
+  const [fromDate, setFromDate] = useState(defaultReportDate);
+  const [toDate, setToDate] = useState(defaultReportDate);
+  const [activeQuickFilter, setActiveQuickFilter] = useState("today");
+  const [shiftFilter, setShiftFilter] = useState("all");
+  const [shotResultFilter, setShotResultFilter] = useState("all");
   const [shotNumberFilter, setShotNumberFilter] = useState("");
   const [draftFromDate, setDraftFromDate] = useState(fromDate);
   const [draftToDate, setDraftToDate] = useState(toDate);
@@ -1309,9 +1310,10 @@ export default function PlcReportPage({ onLogout, currentUser }) {
 
   const applyQuickDateFilter = useCallback((key) => {
     if (!key) {
-      setDraftQuickFilter("");
-      setDraftFromDate("");
-      setDraftToDate("");
+      const today = todayInput();
+      setDraftQuickFilter("today");
+      setDraftFromDate(today);
+      setDraftToDate(today);
       return;
     }
     const range = getQuickDateRange(key);
@@ -1341,7 +1343,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       setServerKpis({ ok: 0, warm: 0, off: 0 });
       setServerKpisReady(false);
       setFiltersApplied(false);
-      setError("Please select line, machine, date range, shift, and result before applying.");
+      setError("Please select line and machine before applying.");
       return;
     }
     setError("");
@@ -1359,20 +1361,21 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   }, [draftFromDate, draftLineId, draftMachineId, draftMachineOptions, draftQuickFilter, draftResultFilterValue, draftShiftFilter, draftShotNumberFilter, draftToDate]);
 
   const clearReportFilters = useCallback(() => {
-    setDraftLineId("");
-    setSelectedLineId("");
+    const today = todayInput();
+    setDraftLineId("all");
+    setSelectedLineId("all");
     setDraftMachineId("");
     setSelectedMachineId("");
-    setDraftQuickFilter("");
-    setActiveQuickFilter("");
-    setDraftFromDate("");
-    setFromDate("");
-    setDraftToDate("");
-    setToDate("");
-    setDraftShiftFilter("");
-    setShiftFilter("");
-    setDraftShotResultFilter("");
-    setShotResultFilter("");
+    setDraftQuickFilter("today");
+    setActiveQuickFilter("today");
+    setDraftFromDate(today);
+    setFromDate(today);
+    setDraftToDate(today);
+    setToDate(today);
+    setDraftShiftFilter("all");
+    setShiftFilter("all");
+    setDraftShotResultFilter("all");
+    setShotResultFilter("all");
     setDraftShotNumberFilter("");
     setShotNumberFilter("");
     setRows([]);
@@ -1857,7 +1860,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                       const nextLine = event.target.value;
                       setDraftLineId(nextLine);
                       setDraftMachineId("");
-                      setDraftShotResultFilter("");
+                      setDraftShotResultFilter("all");
                     }}
                     className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
                   >
@@ -1876,7 +1879,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                     value={draftMachineId}
                     onChange={(event) => {
                       setDraftMachineId(event.target.value);
-                      setDraftShotResultFilter("");
+                      setDraftShotResultFilter("all");
                     }}
                     className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
                   >
