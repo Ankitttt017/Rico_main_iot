@@ -12,7 +12,7 @@ const MACHINE_READING_VALUES_TABLE = "dbo.plc_machine_reading_values";
 const DEVICE_CODE = { M: 0x90, X: 0x9c, Y: 0x9d, D: 0xa8, R: 0xaf };
 const UBE_CYCLE_END_DELAY_MS = Math.min(
   5000,
-  Math.max(500, Number(process.env.PLC_CYCLE_END_DELAY_MS || 1000))
+  Math.max(500, Number(process.env.PLC_UBE_CYCLE_END_DELAY_MS || process.env.PLC_CYCLE_END_DELAY_MS || 2000))
 );
 const UBE_CYCLE_END_POLL_MS = Number(process.env.PLC_UBE_CYCLE_END_POLL_MS || 50);
 const UBE_LIVE_READ_MS = Number(process.env.PLC_UBE_LIVE_READ_MS || 1000);

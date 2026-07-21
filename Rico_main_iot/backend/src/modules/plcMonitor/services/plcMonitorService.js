@@ -91,7 +91,11 @@ const UBE_SHOT_TIME_HOUR_DEVICE = String(process.env.PLC_UBE_SHOT_TIME_HOUR_DEVI
 const UBE_SHOT_TIME_MINUTE_DEVICE = String(process.env.PLC_UBE_SHOT_TIME_MINUTE_DEVICE || "D2104").trim().toUpperCase();
 const UBE_SHOT_TIME_SECOND_DEVICE = String(process.env.PLC_UBE_SHOT_TIME_SECOND_DEVICE || "D2105").trim().toUpperCase();
 const UBE_SHOT_CHANGE_SAVE_ENABLED =
-  String(process.env.PLC_UBE_SHOT_CHANGE_SAVE_ENABLED || "true").toLowerCase() !== "false";
+  String(
+    process.env.PLC_UBE_SHOT_CHANGE_SAVE_ENABLED ??
+    process.env.PLC_UBE_SAVE_ON_LIVE_SHOT_CHANGE ??
+    "false"
+  ).toLowerCase() === "true";
 const UBE_SHOT_CHANGE_SAVE_DELAY_MS = Math.max(
   0,
   Number(process.env.PLC_UBE_SHOT_CHANGE_SAVE_DELAY_MS || UBE_CYCLE_END_DELAY_MS || 500)
