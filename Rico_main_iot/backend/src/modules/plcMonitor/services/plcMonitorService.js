@@ -4191,6 +4191,7 @@ function startPlcMonitor(io) {
           const cycleStartedNow = cycleStart === 1 && lastCycleStartBit !== 1;
           const cycleEndedNow = cycleEnd === 1 && lastCycleEndBit !== 1;
           const shouldCaptureCycle = cycleEnd === 1 && !cycleEndHandled;
+          const cycleSnapshotPending = Boolean(cycleStartAt) || cycleStart === 1 || cycleEnd === 1;
 
           if (cycleStartedNow) {
             cycleStartAt = new Date(loopStartedAt);
@@ -4218,7 +4219,7 @@ function startPlcMonitor(io) {
 
             await captureUbeCycleSnapshot(sock, cycleStartAt, cycleEndAt, durationSec);
             cycleStartAt = null;
-          } else if (loopStartedAt - lastLiveReadAt >= UBE_LIVE_READ_MS) {
+          } else if (!cycleSnapshotPending && loopStartedAt - lastLiveReadAt >= UBE_LIVE_READ_MS) {
             lastLiveReadAt = loopStartedAt;
             let liveReadError = null;
             const livePayload = await readAll(machine, sock, {

@@ -14,7 +14,7 @@ const UBE_CYCLE_END_DELAY_MS = Math.min(
   5000,
   Math.max(500, Number(process.env.PLC_UBE_CYCLE_END_DELAY_MS || process.env.PLC_CYCLE_END_DELAY_MS || 2000))
 );
-const UBE_CYCLE_END_POLL_MS = Number(process.env.PLC_UBE_CYCLE_END_POLL_MS || 50);
+const UBE_CYCLE_END_POLL_MS = Number(process.env.PLC_UBE_CYCLE_END_POLL_MS || 20);
 const UBE_LIVE_READ_MS = Number(process.env.PLC_UBE_LIVE_READ_MS || 1000);
 const PLC_MAX_CONSECUTIVE_READ_FAILURES = Number(process.env.PLC_MAX_CONSECUTIVE_READ_FAILURES || 5);
 const PLC_DB_RETRY_MS = Number(process.env.PLC_DB_RETRY_MS || 30000);
