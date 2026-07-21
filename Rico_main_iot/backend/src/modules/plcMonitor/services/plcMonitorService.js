@@ -1819,7 +1819,6 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
     ${productionDateExpr} DESC,
     COALESCE(
       TRY_CONVERT(datetime2, shot_datetime),
-      TRY_CONVERT(datetime2, CONCAT(CONVERT(VARCHAR(10), ${productionDateExpr}, 23), ' ', NULLIF(LTRIM(RTRIM(shot_time)), ''))),
       recorded_at,
       created_at
     ) DESC,
