@@ -1817,9 +1817,15 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
   const productionSelect = `*, CONVERT(VARCHAR(10), ${productionDateExpr}, 23) AS production_date`;
   const productionOrderBy = `
     ${productionDateExpr} DESC,
+    COALESCE(
+      TRY_CONVERT(datetime2, shot_datetime),
+      TRY_CONVERT(datetime2, CONCAT(CONVERT(VARCHAR(10), ${productionDateExpr}, 23), ' ', NULLIF(LTRIM(RTRIM(shot_time)), ''))),
+      recorded_at,
+      created_at
+    ) DESC,
+    id DESC,
     CASE WHEN shot_number IS NULL THEN 1 ELSE 0 END,
-    TRY_CONVERT(BIGINT, shot_number) DESC,
-    id DESC
+    TRY_CONVERT(BIGINT, shot_number) DESC
   `;
   const appendProductionDateFilters = (filters, values) => {
     if (from) {
@@ -2862,7 +2868,7 @@ function startPlcMonitor(io) {
     });
   }, PLC_DB_RETRY_MS).unref?.();
 
-  let reportSerial = 0;
+  const reportSerialByMachine = new Map();
 
   const updateBitDuration = (machine, name, value, now) => {
     const key = `${getCanonicalMachineKey(machine)}:${name}`;
@@ -2957,7 +2963,9 @@ function startPlcMonitor(io) {
     );
     const cycleTimestamp = shotDateTime;
 
-    reportSerial += 1;
+    const serialKey = getCanonicalMachineKey(machine);
+    const reportSerial = reportSerialByMachine.get(serialKey) || 0;
+    reportSerialByMachine.set(serialKey, reportSerial + 1);
     readings.part_name = partName;
     if (!isGauge && isUbeMachine(machine)) {
       Object.assign(readings, await getPlantEnvironmentReadings());
