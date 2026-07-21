@@ -100,6 +100,14 @@ const UBE_SHOT_CHANGE_SAVE_DELAY_MS = Math.max(
   0,
   Number(process.env.PLC_UBE_SHOT_CHANGE_SAVE_DELAY_MS || UBE_CYCLE_END_DELAY_MS || 500)
 );
+const UBE_CYCLE_END_SAVE_ATTEMPTS = Math.max(
+  1,
+  Number(process.env.PLC_UBE_CYCLE_END_SAVE_ATTEMPTS || 3)
+);
+const UBE_CYCLE_END_SAVE_RETRY_MS = Math.max(
+  100,
+  Number(process.env.PLC_UBE_CYCLE_END_SAVE_RETRY_MS || 300)
+);
 const plantEnvironmentCache = {
   at: 0,
   data: null,
@@ -4096,37 +4104,67 @@ function startPlcMonitor(io) {
           return Number.isFinite(numeric) ? String(Math.trunc(numeric)) : text;
         };
         const captureUbeCycleSnapshot = async (activeSock, startedAt, endedAt, durationSec) => {
-          try {
-            await sleep(UBE_CYCLE_END_DELAY_MS);
-            const payload = await readAll(machine, activeSock, {
-              persist: true,
-              emit: true,
-              cycleTiming: startedAt && durationSec !== null
-                ? { startedAt, endedAt, durationSec }
-                : null,
-            });
-            const savedShotNumber = payload?.readings?.shot_number?.value ?? "-";
-            const saveResult = payload?.saveResult;
-            updateMachineState(machine, {
-              connected: true,
-              error: saveResult?.skipped && saveResult.reason !== "duplicate-shot-number"
-                ? `Cycle End shot ${savedShotNumber} save skipped: ${saveResult.reason}.`
-                : null,
-              shotStatus: saveResult?.skipped
-                ? `Cycle End shot ${savedShotNumber} checked: ${saveResult.reason}.`
-                : `Cycle End shot ${savedShotNumber} saved.`,
-            });
-            console.log(
-              `PLC Cycle End snapshot ${machine.ip}: shot=${savedShotNumber}, result=${
-                saveResult?.skipped ? `skipped:${saveResult.reason}` : "saved"
-              }`
-            );
-          } catch (error) {
-            updateMachineState(machine, {
-              connected: true,
-              error: `Cycle snapshot failed: ${error.message}`,
-            });
+          await sleep(UBE_CYCLE_END_DELAY_MS);
+
+          let lastError = null;
+          let lastPayload = null;
+          for (let attempt = 1; attempt <= UBE_CYCLE_END_SAVE_ATTEMPTS; attempt += 1) {
+            try {
+              const payload = await readAll(machine, activeSock, {
+                persist: true,
+                emit: true,
+                continueOnReadError: true,
+                cycleTiming: startedAt && durationSec !== null
+                  ? { startedAt, endedAt, durationSec }
+                  : null,
+              });
+              lastPayload = payload;
+              const savedShotNumber = payload?.readings?.shot_number?.value ?? "-";
+              const saveResult = payload?.saveResult;
+              const saveFinished =
+                !saveResult?.skipped ||
+                saveResult.reason === "duplicate-shot-number" ||
+                saveResult.queued;
+
+              if (saveFinished || attempt === UBE_CYCLE_END_SAVE_ATTEMPTS) {
+                updateMachineState(machine, {
+                  connected: true,
+                  error: saveResult?.skipped && saveResult.reason !== "duplicate-shot-number" && !saveResult.queued
+                    ? `Cycle End shot ${savedShotNumber} save skipped: ${saveResult.reason}.`
+                    : null,
+                  shotStatus: saveResult?.skipped
+                    ? `Cycle End shot ${savedShotNumber} checked: ${saveResult.reason}.`
+                    : `Cycle End shot ${savedShotNumber} saved.`,
+                });
+                console.log(
+                  `PLC Cycle End snapshot ${machine.ip}: shot=${savedShotNumber}, attempt=${attempt}, result=${
+                    saveResult?.skipped ? `skipped:${saveResult.reason}` : "saved"
+                  }`
+                );
+                return payload;
+              }
+
+              console.warn(
+                `PLC Cycle End snapshot retry ${machine.ip}: shot=${savedShotNumber}, attempt=${attempt}, reason=${saveResult?.reason || "unknown"}`
+              );
+            } catch (error) {
+              lastError = error;
+              if (attempt === UBE_CYCLE_END_SAVE_ATTEMPTS) break;
+              console.warn(
+                `PLC Cycle End snapshot retry ${machine.ip}: attempt=${attempt}, error=${error.message}`
+              );
+            }
+
+            await sleep(UBE_CYCLE_END_SAVE_RETRY_MS);
           }
+
+          updateMachineState(machine, {
+            connected: true,
+            error: lastError
+              ? `Cycle snapshot failed: ${lastError.message}`
+              : `Cycle snapshot did not save after ${UBE_CYCLE_END_SAVE_ATTEMPTS} attempts.`,
+          });
+          return lastPayload;
         };
         const captureUbeShotChangeSnapshot = async (activeSock, changedShotNumber) => {
           try {
