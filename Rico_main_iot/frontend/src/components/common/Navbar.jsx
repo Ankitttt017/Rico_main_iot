@@ -14,11 +14,11 @@ const pageMeta = {
   "/machines": { title: "Machine Manager", subtitle: "Machine assets and production setup", searchPlaceholder: "Search machine...", searchPath: "/machines" },
   "/operator-workstation": { title: "Digital Workstation", subtitle: "Operator production screen and downtime entry", searchPlaceholder: "Search workstation...", searchPath: "/operator-workstation" },
   "/downtime-tracker": { title: "Downtime Tracker", subtitle: "Downtime events and loss tracking", hideSearch: true },
-  "/plc-monitor": { title: "Real Time Monitor", subtitle: "", searchPlaceholder: "Search live PLC...", searchPath: "/plc-monitor" },
+  "/plc-monitor": { title: "Real Time Monitor", subtitle: "", hideSearch: true },
   "/machine-plc-setup": { title: "PLC Config / Tags", subtitle: "PLC connection, register mapping and limits", searchPlaceholder: "Search PLC tag...", searchPath: "/machine-plc-setup" },
   "/ube-machine-setup": { title: "PLC Config / Tags", subtitle: "PLC connection, register mapping and limits", searchPlaceholder: "Search UBE tag...", searchPath: "/ube-machine-setup" },
-  "/plc-report": { title: "Production Reports", subtitle: "Machine production history and exports", searchPlaceholder: "Search report...", searchPath: "/plc-report" },
-  "/access-control": { title: "User & Role Access", subtitle: "Role wise screen access and traceability permissions", searchPlaceholder: "Search user / role...", searchPath: "/access-control" },
+  "/plc-report": { title: "Production Reports", subtitle: "Machine production history and exports", hideSearch: true },
+  "/access-control": { title: "User & Role Access", subtitle: "Role wise screen access and traceability permissions", hideSearch: true },
   "/system-settings": { title: "System Settings", subtitle: "Application configuration and preferences", hideSearch: true },
 };
 
