@@ -90,16 +90,6 @@ const PLANT_ENVIRONMENT_READ_TIMEOUT_MS = Math.max(
 const UBE_SHOT_TIME_HOUR_DEVICE = String(process.env.PLC_UBE_SHOT_TIME_HOUR_DEVICE || "D2103").trim().toUpperCase();
 const UBE_SHOT_TIME_MINUTE_DEVICE = String(process.env.PLC_UBE_SHOT_TIME_MINUTE_DEVICE || "D2104").trim().toUpperCase();
 const UBE_SHOT_TIME_SECOND_DEVICE = String(process.env.PLC_UBE_SHOT_TIME_SECOND_DEVICE || "D2105").trim().toUpperCase();
-const UBE_SHOT_CHANGE_SAVE_ENABLED =
-  String(
-    process.env.PLC_UBE_SHOT_CHANGE_SAVE_ENABLED ??
-    process.env.PLC_UBE_SAVE_ON_LIVE_SHOT_CHANGE ??
-    "false"
-  ).toLowerCase() === "true";
-const UBE_SHOT_CHANGE_SAVE_DELAY_MS = Math.max(
-  0,
-  Number(process.env.PLC_UBE_SHOT_CHANGE_SAVE_DELAY_MS || UBE_CYCLE_END_DELAY_MS || 500)
-);
 const UBE_CYCLE_END_SAVE_ATTEMPTS = Math.max(
   1,
   Number(process.env.PLC_UBE_CYCLE_END_SAVE_ATTEMPTS || 3)
@@ -107,16 +97,6 @@ const UBE_CYCLE_END_SAVE_ATTEMPTS = Math.max(
 const UBE_CYCLE_END_SAVE_RETRY_MS = Math.max(
   100,
   Number(process.env.PLC_UBE_CYCLE_END_SAVE_RETRY_MS || 300)
-);
-const UBE_LIVE_CATCHUP_SAVE_ENABLED =
-  String(process.env.PLC_UBE_LIVE_CATCHUP_SAVE_ENABLED || "true").toLowerCase() !== "false";
-const UBE_LIVE_CATCHUP_STABLE_MS = Math.max(
-  0,
-  Number(process.env.PLC_UBE_LIVE_CATCHUP_STABLE_MS || 1200)
-);
-const UBE_LIVE_CATCHUP_MAX_TRACKED_SHOTS = Math.max(
-  5,
-  Number(process.env.PLC_UBE_LIVE_CATCHUP_MAX_TRACKED_SHOTS || 20)
 );
 const plantEnvironmentCache = {
   at: 0,
@@ -2355,19 +2335,6 @@ async function saveToDBUnlocked(machine, partName, readings) {
     return { skipped: true, reason: "missing-plc-shot-datetime" };
   }
 
-  if (shotNumber !== null && shotNumber !== undefined && shotDate) {
-    const machineKey = getCanonicalMachineKey(machine);
-    const { rows: duplicateShotRows } = await db.query(
-      `SELECT TOP 1 id FROM ${TABLE}
-       WHERE (machine_key = ? OR plc_ip = ?)
-         AND shot_date = ?
-         AND shot_number = ?
-       ORDER BY recorded_at DESC, id DESC`,
-      [machineKey, machine.ip, shotDate, shotNumber]
-    );
-    if (duplicateShotRows.length) return { skipped: true, reason: "duplicate-shot-number" };
-  }
-
   if (hasPlcRecordedAt && (shotNumber === null || shotNumber === undefined || !shotDate)) {
     const machineKey = getCanonicalMachineKey(machine);
     const duplicateFilters = [
@@ -4103,97 +4070,7 @@ function startPlcMonitor(io) {
         let lastCycleEndBit = 0;
         let cycleEndHandled = false;
         let lastLiveReadAt = 0;
-        let lastSeenShotNumber = null;
-        let lastShotChangeSavedNumber = null;
-        let lastCycleEndSavedShotNumber = null;
         let consecutiveReadFailures = 0;
-        const liveCatchupCandidates = new Map();
-        const liveCatchupSavedShots = new Set();
-        const normalizeShotNumberForCompare = (value) => {
-          if (value === null || value === undefined) return null;
-          const text = String(value).trim();
-          if (!text) return null;
-          const numeric = Number(text);
-          return Number.isFinite(numeric) ? String(Math.trunc(numeric)) : text;
-        };
-        const getPayloadShotNumber = (payload) => normalizeShotNumberForCompare(
-          payload?.readings?.shot_number?.value ??
-          payload?.readings?.["SHOT NO."]?.value ??
-          payload?.readings?.["Shot Number"]?.value ??
-          null
-        );
-        const pruneLiveCatchupCandidates = () => {
-          while (liveCatchupCandidates.size > UBE_LIVE_CATCHUP_MAX_TRACKED_SHOTS) {
-            const oldestKey = liveCatchupCandidates.keys().next().value;
-            if (!oldestKey) break;
-            liveCatchupCandidates.delete(oldestKey);
-          }
-          while (liveCatchupSavedShots.size > UBE_LIVE_CATCHUP_MAX_TRACKED_SHOTS) {
-            const oldestKey = liveCatchupSavedShots.values().next().value;
-            if (!oldestKey) break;
-            liveCatchupSavedShots.delete(oldestKey);
-          }
-        };
-        const maybePersistLiveCatchupSnapshot = async (payload) => {
-          if (!UBE_LIVE_CATCHUP_SAVE_ENABLED || !payload?.readings) return;
-
-          const shotKey = getPayloadShotNumber(payload);
-          if (!shotKey || shotKey === lastCycleEndSavedShotNumber || liveCatchupSavedShots.has(shotKey)) {
-            return;
-          }
-
-          const readings = withoutStoppageEventFields(flattenClientReadings(payload.readings));
-          const cycleTime = Number(readings.cycle_time ?? readings["CYCLE TIME sec."]);
-          if (!Number.isFinite(cycleTime) || cycleTime <= 0) return;
-          if (!readings.shot_datetime && !readings.cycle_end_time) return;
-
-          const nowMs = Date.now();
-          const existing = liveCatchupCandidates.get(shotKey);
-          if (!existing) {
-            liveCatchupCandidates.set(shotKey, {
-              firstSeenAt: nowMs,
-              payload,
-              readings,
-            });
-            pruneLiveCatchupCandidates();
-            return;
-          }
-
-          liveCatchupCandidates.set(shotKey, {
-            ...existing,
-            payload,
-            readings,
-          });
-          if (nowMs - existing.firstSeenAt < UBE_LIVE_CATCHUP_STABLE_MS) return;
-
-          const saveResult = await persistUbeReading(machine, payload.partName || readings.part_name || "", readings);
-          const saveFinished =
-            !saveResult?.skipped ||
-            saveResult.reason === "duplicate-shot-number" ||
-            saveResult.queued;
-          if (saveFinished) {
-            liveCatchupCandidates.delete(shotKey);
-            liveCatchupSavedShots.add(shotKey);
-            pruneLiveCatchupCandidates();
-            updateMachineState(machine, {
-              connected: true,
-              error: null,
-              shotStatus: saveResult?.skipped
-                ? `Live catch-up shot ${shotKey} checked: ${saveResult.reason}.`
-                : `Live catch-up shot ${shotKey} saved.`,
-            });
-            console.log(
-              `PLC UBE live catch-up ${machine.ip}: shot=${shotKey}, result=${
-                saveResult?.skipped ? `skipped:${saveResult.reason}` : "saved"
-              }`
-            );
-            return;
-          }
-
-          console.warn(
-            `PLC UBE live catch-up skipped ${machine.ip}: shot=${shotKey}, reason=${saveResult?.reason || "unknown"}`
-          );
-        };
         const captureUbeCycleSnapshot = async (activeSock, startedAt, endedAt, durationSec) => {
           await sleep(UBE_CYCLE_END_DELAY_MS);
 
@@ -4214,23 +4091,13 @@ function startPlcMonitor(io) {
                 payload?.readings?.shot_number?.value ??
                 payload?.readings?.["SHOT NO."]?.value ??
                 "-";
-              const savedShotKey = normalizeShotNumberForCompare(savedShotNumber);
               const saveResult = payload?.saveResult;
-              const saveFinished =
-                !saveResult?.skipped ||
-                saveResult.reason === "duplicate-shot-number" ||
-                saveResult.queued;
+              const saveFinished = !saveResult?.skipped || saveResult.queued;
 
               if (saveFinished || attempt === UBE_CYCLE_END_SAVE_ATTEMPTS) {
-                if (savedShotKey && saveFinished) {
-                  lastCycleEndSavedShotNumber = savedShotKey;
-                  liveCatchupCandidates.delete(savedShotKey);
-                  liveCatchupSavedShots.add(savedShotKey);
-                  pruneLiveCatchupCandidates();
-                }
                 updateMachineState(machine, {
                   connected: true,
-                  error: saveResult?.skipped && saveResult.reason !== "duplicate-shot-number" && !saveResult.queued
+                  error: saveResult?.skipped && !saveResult.queued
                     ? `Cycle End shot ${savedShotNumber} save skipped: ${saveResult.reason}.`
                     : null,
                   shotStatus: saveResult?.skipped
@@ -4267,39 +4134,6 @@ function startPlcMonitor(io) {
           });
           return lastPayload;
         };
-        const captureUbeShotChangeSnapshot = async (activeSock, changedShotNumber) => {
-          try {
-            if (UBE_SHOT_CHANGE_SAVE_DELAY_MS > 0) await sleep(UBE_SHOT_CHANGE_SAVE_DELAY_MS);
-            const payload = await readAll(machine, activeSock, {
-              persist: true,
-              emit: true,
-            });
-            const savedShotNumber = payload?.readings?.shot_number?.value ?? changedShotNumber ?? "-";
-            const saveResult = payload?.saveResult;
-            const savedShotKey = normalizeShotNumberForCompare(savedShotNumber);
-            if (savedShotKey) lastShotChangeSavedNumber = savedShotKey;
-            updateMachineState(machine, {
-              connected: true,
-              error: saveResult?.skipped && saveResult.reason !== "duplicate-shot-number"
-                ? `Shot ${savedShotNumber} backup save skipped: ${saveResult.reason}.`
-                : null,
-              shotStatus: saveResult?.skipped
-                ? `Shot ${savedShotNumber} checked by shot-number backup: ${saveResult.reason}.`
-                : `Shot ${savedShotNumber} saved by shot-number backup.`,
-            });
-            console.log(
-              `PLC Shot Change snapshot ${machine.ip}: shot=${savedShotNumber}, result=${
-                saveResult?.skipped ? `skipped:${saveResult.reason}` : "saved"
-              }`
-            );
-          } catch (error) {
-            updateMachineState(machine, {
-              connected: true,
-              error: `Shot change snapshot failed: ${error.message}`,
-            });
-          }
-        };
-
         while (isMonitorCurrent()) {
           if (!monitoringRunning) { await sleep(UBE_CYCLE_END_POLL_MS); continue; }
 
@@ -4385,30 +4219,6 @@ function startPlcMonitor(io) {
             if (livePayload) consecutiveReadFailures = 0;
             if (!livePayload && consecutiveReadFailures >= PLC_MAX_CONSECUTIVE_READ_FAILURES) {
               throw new Error(`PLC live reads failed ${consecutiveReadFailures} times; reconnecting.`);
-            }
-
-            if (livePayload) await maybePersistLiveCatchupSnapshot(livePayload);
-
-            const currentShotNumber = getPayloadShotNumber(livePayload);
-            if (currentShotNumber !== null && currentShotNumber !== undefined) {
-              if (lastSeenShotNumber === null) {
-                lastSeenShotNumber = currentShotNumber;
-              } else if (currentShotNumber !== lastSeenShotNumber) {
-                lastSeenShotNumber = currentShotNumber;
-                updateMachineState(machine, {
-                  connected: true,
-                  error: null,
-                  shotStatus: UBE_SHOT_CHANGE_SAVE_ENABLED
-                    ? "Shot number changed; saving backup snapshot."
-                    : "Shot number changed; waiting for cycle end signal.",
-                });
-                if (
-                  UBE_SHOT_CHANGE_SAVE_ENABLED &&
-                  currentShotNumber !== lastShotChangeSavedNumber
-                ) {
-                  await captureUbeShotChangeSnapshot(sock, currentShotNumber);
-                }
-              }
             }
           }
 
