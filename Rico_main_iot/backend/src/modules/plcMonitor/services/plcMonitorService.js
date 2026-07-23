@@ -1326,6 +1326,16 @@ function formatReadingsForClient(readings, machineOrKind = "generic") {
   );
 }
 
+function getFormattedShotNumber(payload = {}) {
+  const value =
+    payload?.readings?.shot_number?.value ??
+    payload?.readings?.["SHOT NO."]?.value ??
+    payload?.readings?.["Shot Number"]?.value ??
+    null;
+  const text = String(value ?? "").trim();
+  return text ? text : null;
+}
+
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // REPORT HELPERS
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -4119,10 +4129,7 @@ function startPlcMonitor(io) {
                   : null,
               }));
               lastPayload = payload;
-              const savedShotNumber =
-                payload?.readings?.shot_number?.value ??
-                payload?.readings?.["SHOT NO."]?.value ??
-                "-";
+              const savedShotNumber = getFormattedShotNumber(payload) || "-";
               const saveResult = payload?.saveResult;
               const saveFinished = !saveResult?.skipped || saveResult.queued;
 
@@ -4140,6 +4147,9 @@ function startPlcMonitor(io) {
                 }
                 if (!saveResult?.skipped && Number.isFinite(numericShot)) {
                   lastSavedCycleShot = numericShot;
+                }
+                if (savedShotNumber !== "-") {
+                  lastObservedLiveShot = savedShotNumber;
                 }
                 updateMachineState(machine, {
                   connected: true,
@@ -4220,12 +4230,34 @@ function startPlcMonitor(io) {
           liveReadRunning = true;
           (async () => {
             try {
-              await runPlcOperation(() => readAll(machine, sock, {
+              const payload = await runPlcOperation(() => readAll(machine, sock, {
                 persist: false,
                 persistStoppage: true,
                 emit: true,
                 liveOnly: true,
               }));
+              const liveShot = getFormattedShotNumber(payload);
+              if (liveShot) {
+                const shotChanged = lastObservedLiveShot !== null && liveShot !== lastObservedLiveShot;
+                lastObservedLiveShot = liveShot;
+                if (
+                  UBE_SHOT_CHANGE_FALLBACK_ENABLED &&
+                  shotChanged &&
+                  liveShot !== lastFallbackQueuedShot
+                ) {
+                  lastFallbackQueuedShot = liveShot;
+                  const fallbackAt = new Date();
+                  console.warn(
+                    `PLC UBE shot-change fallback queued ${machine.ip}: shot=${liveShot}`
+                  );
+                  enqueueUbeCycleEnd({
+                    startedAt: null,
+                    endedAt: fallbackAt,
+                    durationSec: null,
+                    trigger: "shot-change-fallback",
+                  });
+                }
+              }
               consecutiveReadFailures = 0;
             } catch (error) {
               if (isPlcReadTimeoutError(error)) {
