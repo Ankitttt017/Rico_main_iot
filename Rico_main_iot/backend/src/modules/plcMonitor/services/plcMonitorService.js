@@ -98,6 +98,10 @@ const UBE_CYCLE_END_SAVE_RETRY_MS = Math.max(
   100,
   Number(process.env.PLC_UBE_CYCLE_END_SAVE_RETRY_MS || 300)
 );
+const UBE_CYCLE_END_DEBOUNCE_MS = Math.max(
+  500,
+  Number(process.env.PLC_UBE_CYCLE_END_DEBOUNCE_MS || 3000)
+);
 const plantEnvironmentCache = {
   at: 0,
   data: null,
@@ -2200,19 +2204,15 @@ async function updatePreviousMinorStoppageMachine() {
 function buildUbeTimestampSaveKey(machine, readings = {}) {
   const machineKey = getCanonicalMachineKey(machine);
   const shotNumber = normalizeReadingForDB("shot_number", readings.shot_number ?? readings["SHOT NO."]);
-  const shotDate = getReadingProductionDate(readings) || normalizeReadingForDB("shot_date", readings.shot_date);
-  if (shotNumber !== null && shotNumber !== undefined && shotDate) {
-    return `${machineKey}:shot:${shotDate}:${shotNumber}`;
-  }
-
-  const shotTime = normalizeReadingForDB("shot_time", readings.shot_time);
-  if (shotDate && shotTime) return `${machineKey}:${shotDate}:${shotTime}`;
-
   const cycleEndTime = normalizeReadingForDB("cycle_end_time", readings.cycle_end_time);
-  if (cycleEndTime) return `${machineKey}:cycle-end:${cycleEndTime}`;
+  if (cycleEndTime) return `${machineKey}:cycle-end:${cycleEndTime}:shot:${shotNumber ?? "-"}`;
+
+  const shotDate = getReadingProductionDate(readings) || normalizeReadingForDB("shot_date", readings.shot_date);
+  const shotTime = normalizeReadingForDB("shot_time", readings.shot_time);
+  if (shotDate && shotTime) return `${machineKey}:shot-time:${shotDate}:${shotTime}:shot:${shotNumber ?? "-"}`;
 
   const shotDateTime = normalizeReadingForDB("shot_datetime", readings.shot_datetime);
-  return shotDateTime ? `${machineKey}:${shotDateTime}` : null;
+  return shotDateTime ? `${machineKey}:shot-datetime:${shotDateTime}:shot:${shotNumber ?? "-"}` : null;
 }
 
 async function applyCycleMinorStoppage() {}
@@ -2327,7 +2327,6 @@ async function saveToDBUnlocked(machine, partName, readings) {
   const plcRecordedAt =
     normalizeReadingForDB("cycle_end_time", readings.cycle_end_time) ||
     normalizeReadingForDB("shot_datetime", readings.shot_datetime);
-  const shotDate = normalizeReadingForDB("shot_date", readings.shot_date);
   const shotNumber = normalizeReadingForDB("shot_number", readings.shot_number ?? readings["SHOT NO."]);
   const hasPlcRecordedAt = Boolean(plcRecordedAt);
 
@@ -2335,7 +2334,7 @@ async function saveToDBUnlocked(machine, partName, readings) {
     return { skipped: true, reason: "missing-plc-shot-datetime" };
   }
 
-  if (hasPlcRecordedAt && (shotNumber === null || shotNumber === undefined || !shotDate)) {
+  if (hasPlcRecordedAt) {
     const machineKey = getCanonicalMachineKey(machine);
     const duplicateFilters = [
       "(machine_key = ? OR plc_ip = ?)",
@@ -2344,6 +2343,15 @@ async function saveToDBUnlocked(machine, partName, readings) {
 
     duplicateFilters.push("ABS(DATEDIFF(second, recorded_at, ?)) <= ?");
     duplicateValues.push(plcRecordedAt, Number(process.env.PLC_DUPLICATE_SHOT_WINDOW_SEC || 15));
+
+    if (shotNumber !== null && shotNumber !== undefined) {
+      duplicateFilters.push(`(
+        (TRY_CONVERT(BIGINT, ?) IS NOT NULL AND TRY_CONVERT(BIGINT, shot_number) = TRY_CONVERT(BIGINT, ?))
+        OR
+        (TRY_CONVERT(BIGINT, ?) IS NULL AND LTRIM(RTRIM(CAST(shot_number AS NVARCHAR(80)))) = ?)
+      )`);
+      duplicateValues.push(shotNumber, shotNumber, shotNumber, String(shotNumber).trim());
+    }
 
     const { rows: duplicateRows } = await db.query(
       `SELECT TOP 1 id FROM ${TABLE}
@@ -4070,15 +4078,23 @@ function startPlcMonitor(io) {
         let lastCycleEndBit = 0;
         let cycleEndHandled = false;
         let lastLiveReadAt = 0;
+        let liveReadRunning = false;
         let consecutiveReadFailures = 0;
-        const captureUbeCycleSnapshot = async (activeSock, startedAt, endedAt, durationSec) => {
+        let lastCycleEndQueuedAt = 0;
+        let lastSavedCycleShot = null;
+        const cycleEndQueue = [];
+        let cycleEndQueueRunning = false;
+
+        const captureUbeCycleSnapshot = async ({ startedAt, endedAt, durationSec }) => {
           await sleep(UBE_CYCLE_END_DELAY_MS);
 
           let lastError = null;
           let lastPayload = null;
           for (let attempt = 1; attempt <= UBE_CYCLE_END_SAVE_ATTEMPTS; attempt += 1) {
+            let snapshotSock = null;
             try {
-              const payload = await readAll(machine, activeSock, {
+              snapshotSock = await connectPLC(machine);
+              const payload = await readAll(machine, snapshotSock, {
                 persist: true,
                 emit: true,
                 continueOnReadError: true,
@@ -4095,6 +4111,20 @@ function startPlcMonitor(io) {
               const saveFinished = !saveResult?.skipped || saveResult.queued;
 
               if (saveFinished || attempt === UBE_CYCLE_END_SAVE_ATTEMPTS) {
+                const numericShot = Number(savedShotNumber);
+                if (
+                  !saveResult?.skipped &&
+                  Number.isFinite(numericShot) &&
+                  Number.isFinite(lastSavedCycleShot) &&
+                  numericShot > lastSavedCycleShot + 1
+                ) {
+                  console.warn(
+                    `PLC Cycle End missed shot warning ${machine.ip}: last=${lastSavedCycleShot}, current=${numericShot}, missing=${lastSavedCycleShot + 1}..${numericShot - 1}`
+                  );
+                }
+                if (!saveResult?.skipped && Number.isFinite(numericShot)) {
+                  lastSavedCycleShot = numericShot;
+                }
                 updateMachineState(machine, {
                   connected: true,
                   error: saveResult?.skipped && !saveResult.queued
@@ -4121,6 +4151,8 @@ function startPlcMonitor(io) {
               console.warn(
                 `PLC Cycle End snapshot retry ${machine.ip}: attempt=${attempt}, error=${error.message}`
               );
+            } finally {
+              if (snapshotSock) closeSocket(snapshotSock);
             }
 
             await sleep(UBE_CYCLE_END_SAVE_RETRY_MS);
@@ -4134,6 +4166,78 @@ function startPlcMonitor(io) {
           });
           return lastPayload;
         };
+
+        const processCycleEndQueue = () => {
+          if (cycleEndQueueRunning) return;
+          cycleEndQueueRunning = true;
+          (async () => {
+            while (cycleEndQueue.length && isMonitorCurrent()) {
+              const event = cycleEndQueue.shift();
+              await captureUbeCycleSnapshot(event);
+            }
+          })()
+            .catch((error) => {
+              console.error(`PLC Cycle End queue ${machine.ip}: ${error.message}`);
+              updateMachineState(machine, {
+                connected: true,
+                error: `Cycle End queue failed: ${error.message}`,
+              });
+            })
+            .finally(() => {
+              cycleEndQueueRunning = false;
+              if (cycleEndQueue.length && isMonitorCurrent()) processCycleEndQueue();
+            });
+        };
+
+        const enqueueUbeCycleEnd = (event) => {
+          const eventTime = event.endedAt instanceof Date ? event.endedAt.getTime() : Date.now();
+          if (eventTime - lastCycleEndQueuedAt < UBE_CYCLE_END_DEBOUNCE_MS) {
+            console.warn(`PLC Cycle End duplicate pulse ignored ${machine.ip}: debounce=${UBE_CYCLE_END_DEBOUNCE_MS}ms`);
+            return false;
+          }
+          lastCycleEndQueuedAt = eventTime;
+          cycleEndQueue.push(event);
+          processCycleEndQueue();
+          return true;
+        };
+
+        const startLiveSnapshotRead = () => {
+          if (liveReadRunning) return;
+          liveReadRunning = true;
+          (async () => {
+            let liveSock = null;
+            try {
+              liveSock = await connectPLC(machine);
+              await readAll(machine, liveSock, {
+                persist: false,
+                persistStoppage: true,
+                emit: true,
+                liveOnly: true,
+              });
+              consecutiveReadFailures = 0;
+            } catch (error) {
+              if (isPlcReadTimeoutError(error)) {
+                updateMachineState(machine, {
+                  connected: true,
+                  error: `Live read timed out: ${error.message}`,
+                });
+                return;
+              }
+              consecutiveReadFailures += 1;
+              updateMachineState(machine, {
+                connected: true,
+                error: `Live read failed (${consecutiveReadFailures}/${PLC_MAX_CONSECUTIVE_READ_FAILURES}): ${error.message}`,
+              });
+            } finally {
+              if (liveSock) closeSocket(liveSock);
+              liveReadRunning = false;
+            }
+          })().catch((error) => {
+            liveReadRunning = false;
+            console.error(`PLC live snapshot ${machine.ip}: ${error.message}`);
+          });
+        };
+
         while (isMonitorCurrent()) {
           if (!monitoringRunning) { await sleep(UBE_CYCLE_END_POLL_MS); continue; }
 
@@ -4190,36 +4294,11 @@ function startPlcMonitor(io) {
                 : `Cycle end is ON; duration ${durationSec ?? "-"} sec. Waiting before PLC snapshot.`,
             });
 
-            await captureUbeCycleSnapshot(sock, cycleStartAt, cycleEndAt, durationSec);
+            enqueueUbeCycleEnd({ startedAt: cycleStartAt, endedAt: cycleEndAt, durationSec });
             cycleStartAt = null;
           } else if (!cycleSnapshotPending && loopStartedAt - lastLiveReadAt >= UBE_LIVE_READ_MS) {
             lastLiveReadAt = loopStartedAt;
-            let liveReadError = null;
-            const livePayload = await readAll(machine, sock, {
-              persist: false,
-              persistStoppage: true,
-              emit: true,
-              liveOnly: true,
-            }).catch((error) => {
-              liveReadError = error;
-              if (isPlcReadTimeoutError(error)) return null;
-              consecutiveReadFailures += 1;
-              updateMachineState(machine, {
-                connected: true,
-                error: `Live read failed (${consecutiveReadFailures}/${PLC_MAX_CONSECUTIVE_READ_FAILURES}): ${error.message}`,
-              });
-              return null;
-            });
-            if (!livePayload && isPlcReadTimeoutError(liveReadError)) {
-              await refreshSocketAfterTimeout("live snapshot");
-              consecutiveReadFailures = 0;
-              await sleep(UBE_CYCLE_END_POLL_MS);
-              continue;
-            }
-            if (livePayload) consecutiveReadFailures = 0;
-            if (!livePayload && consecutiveReadFailures >= PLC_MAX_CONSECUTIVE_READ_FAILURES) {
-              throw new Error(`PLC live reads failed ${consecutiveReadFailures} times; reconnecting.`);
-            }
+            startLiveSnapshotRead();
           }
 
           if (cycleEnd === 0) cycleEndHandled = false;
