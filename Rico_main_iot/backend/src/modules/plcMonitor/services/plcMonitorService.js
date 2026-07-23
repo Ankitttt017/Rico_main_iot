@@ -4090,6 +4090,13 @@ function startPlcMonitor(io) {
         let lastSavedCycleShot = null;
         const cycleEndQueue = [];
         let cycleEndQueueRunning = false;
+        let plcOperation = Promise.resolve();
+
+        const runPlcOperation = (operation) => {
+          const run = plcOperation.catch(() => {}).then(operation);
+          plcOperation = run.catch(() => {});
+          return run;
+        };
 
         const captureUbeCycleSnapshot = async ({ startedAt, endedAt, durationSec }) => {
           await sleep(UBE_CYCLE_END_DELAY_MS);
@@ -4097,17 +4104,15 @@ function startPlcMonitor(io) {
           let lastError = null;
           let lastPayload = null;
           for (let attempt = 1; attempt <= UBE_CYCLE_END_SAVE_ATTEMPTS; attempt += 1) {
-            let snapshotSock = null;
             try {
-              snapshotSock = await connectPLC(machine);
-              const payload = await readAll(machine, snapshotSock, {
+              const payload = await runPlcOperation(() => readAll(machine, sock, {
                 persist: true,
                 emit: true,
                 continueOnReadError: true,
                 cycleTiming: startedAt && durationSec !== null
                   ? { startedAt, endedAt, durationSec }
                   : null,
-              });
+              }));
               lastPayload = payload;
               const savedShotNumber =
                 payload?.readings?.shot_number?.value ??
@@ -4157,8 +4162,6 @@ function startPlcMonitor(io) {
               console.warn(
                 `PLC Cycle End snapshot retry ${machine.ip}: attempt=${attempt}, error=${error.message}`
               );
-            } finally {
-              if (snapshotSock) closeSocket(snapshotSock);
             }
 
             await sleep(UBE_CYCLE_END_SAVE_RETRY_MS);
@@ -4211,15 +4214,13 @@ function startPlcMonitor(io) {
           if (liveReadRunning) return;
           liveReadRunning = true;
           (async () => {
-            let liveSock = null;
             try {
-              liveSock = await connectPLC(machine);
-              await readAll(machine, liveSock, {
+              await runPlcOperation(() => readAll(machine, sock, {
                 persist: false,
                 persistStoppage: true,
                 emit: true,
                 liveOnly: true,
-              });
+              }));
               consecutiveReadFailures = 0;
             } catch (error) {
               if (isPlcReadTimeoutError(error)) {
@@ -4235,7 +4236,6 @@ function startPlcMonitor(io) {
                 error: `Live read failed (${consecutiveReadFailures}/${PLC_MAX_CONSECUTIVE_READ_FAILURES}): ${error.message}`,
               });
             } finally {
-              if (liveSock) closeSocket(liveSock);
               liveReadRunning = false;
             }
           })().catch((error) => {
@@ -4251,8 +4251,10 @@ function startPlcMonitor(io) {
           let cycleStart = lastCycleStartBit;
           let cycleEnd = lastCycleEndBit;
           try {
-            cycleStart = cycleStartDevice ? await readBit(sock, cycleStartDevice) : 0;
-            cycleEnd = cycleEndDevice ? await readBit(sock, cycleEndDevice) : 0;
+            [cycleStart, cycleEnd] = await runPlcOperation(async () => [
+              cycleStartDevice ? await readBit(sock, cycleStartDevice) : 0,
+              cycleEndDevice ? await readBit(sock, cycleEndDevice) : 0,
+            ]);
             consecutiveReadFailures = 0;
           } catch (error) {
             if (isPlcReadTimeoutError(error)) {
