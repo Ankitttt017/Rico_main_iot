@@ -102,6 +102,9 @@ const UBE_CYCLE_END_DEBOUNCE_MS = Math.max(
   500,
   Number(process.env.PLC_UBE_CYCLE_END_DEBOUNCE_MS || 3000)
 );
+const UBE_SHOT_CHANGE_FALLBACK_ENABLED = String(
+  process.env.PLC_UBE_SHOT_CHANGE_FALLBACK_ENABLED || "true"
+).trim().toLowerCase() !== "false";
 const plantEnvironmentCache = {
   at: 0,
   data: null,
@@ -4088,6 +4091,8 @@ function startPlcMonitor(io) {
         let consecutiveReadFailures = 0;
         let lastCycleEndQueuedAt = 0;
         let lastSavedCycleShot = null;
+        let lastObservedLiveShot = null;
+        let lastFallbackQueuedShot = null;
         const cycleEndQueue = [];
         let cycleEndQueueRunning = false;
         let plcOperation = Promise.resolve();
@@ -4098,7 +4103,7 @@ function startPlcMonitor(io) {
           return run;
         };
 
-        const captureUbeCycleSnapshot = async ({ startedAt, endedAt, durationSec }) => {
+        const captureUbeCycleSnapshot = async ({ startedAt, endedAt, durationSec, trigger = "cycle-end" }) => {
           await sleep(UBE_CYCLE_END_DELAY_MS);
 
           let lastError = null;
@@ -4139,14 +4144,14 @@ function startPlcMonitor(io) {
                 updateMachineState(machine, {
                   connected: true,
                   error: saveResult?.skipped && !saveResult.queued
-                    ? `Cycle End shot ${savedShotNumber} save skipped: ${saveResult.reason}.`
+                    ? `${trigger} shot ${savedShotNumber} save skipped: ${saveResult.reason}.`
                     : null,
                   shotStatus: saveResult?.skipped
-                    ? `Cycle End shot ${savedShotNumber} checked: ${saveResult.reason}.`
-                    : `Cycle End shot ${savedShotNumber} saved.`,
+                    ? `${trigger} shot ${savedShotNumber} checked: ${saveResult.reason}.`
+                    : `${trigger} shot ${savedShotNumber} saved.`,
                 });
                 console.log(
-                  `PLC Cycle End snapshot ${machine.ip}: shot=${savedShotNumber}, attempt=${attempt}, result=${
+                  `PLC Cycle End snapshot ${machine.ip}: trigger=${trigger}, shot=${savedShotNumber}, attempt=${attempt}, result=${
                     saveResult?.skipped ? `skipped:${saveResult.reason}` : "saved"
                   }`
                 );
@@ -4154,13 +4159,13 @@ function startPlcMonitor(io) {
               }
 
               console.warn(
-                `PLC Cycle End snapshot retry ${machine.ip}: shot=${savedShotNumber}, attempt=${attempt}, reason=${saveResult?.reason || "unknown"}`
+                `PLC Cycle End snapshot retry ${machine.ip}: trigger=${trigger}, shot=${savedShotNumber}, attempt=${attempt}, reason=${saveResult?.reason || "unknown"}`
               );
             } catch (error) {
               lastError = error;
               if (attempt === UBE_CYCLE_END_SAVE_ATTEMPTS) break;
               console.warn(
-                `PLC Cycle End snapshot retry ${machine.ip}: attempt=${attempt}, error=${error.message}`
+                `PLC Cycle End snapshot retry ${machine.ip}: trigger=${trigger}, attempt=${attempt}, error=${error.message}`
               );
             }
 
@@ -4200,11 +4205,11 @@ function startPlcMonitor(io) {
 
         const enqueueUbeCycleEnd = (event) => {
           const eventTime = event.endedAt instanceof Date ? event.endedAt.getTime() : Date.now();
-          if (eventTime - lastCycleEndQueuedAt < UBE_CYCLE_END_DEBOUNCE_MS) {
+          if (event.trigger !== "shot-change-fallback" && eventTime - lastCycleEndQueuedAt < UBE_CYCLE_END_DEBOUNCE_MS) {
             console.warn(`PLC Cycle End duplicate pulse ignored ${machine.ip}: debounce=${UBE_CYCLE_END_DEBOUNCE_MS}ms`);
             return false;
           }
-          lastCycleEndQueuedAt = eventTime;
+          if (event.trigger !== "shot-change-fallback") lastCycleEndQueuedAt = eventTime;
           cycleEndQueue.push(event);
           processCycleEndQueue();
           return true;
