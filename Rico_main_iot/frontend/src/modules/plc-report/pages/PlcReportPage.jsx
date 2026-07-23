@@ -937,12 +937,6 @@ function formatReportCell(row, key, rowIndex = 0, rowCount = 0, rows = []) {
   return formatValue(row[key], key);
 }
 
-function numberFromReportValue(value) {
-  if (value === null || value === undefined || value === "") return null;
-  const number = Number(String(value).replace(/,/g, "").trim());
-  return Number.isFinite(number) ? number : null;
-}
-
 function getLimitBaseKey(key) {
   const normalizedKey = normalizeColumnKey(key);
   if (normalizedKey.endsWith("_lower_limit")) return normalizedKey.slice(0, -"_lower_limit".length);
@@ -950,28 +944,17 @@ function getLimitBaseKey(key) {
   return normalizedKey;
 }
 
-function getLimitTone(row = {}, key) {
+function getLimitTone(key) {
   const normalizedKey = normalizeColumnKey(key);
   const baseKey = getLimitBaseKey(normalizedKey);
   if (!UBE_LIMIT_BASE_SET.has(baseKey)) return null;
-  const actual = numberFromReportValue(getRowValue(row, baseKey));
-  const lower = numberFromReportValue(getRowValue(row, `${baseKey}_lower_limit`));
-  const upper = numberFromReportValue(getRowValue(row, `${baseKey}_upper_limit`));
-  if (actual === null) return null;
-
-  const lowerFailed = lower !== null && actual < lower;
-  const upperFailed = upper !== null && actual > upper;
-  if (normalizedKey === `${baseKey}_lower_limit`) return lowerFailed ? "lower" : null;
-  if (normalizedKey === `${baseKey}_upper_limit`) return upperFailed ? "upper" : null;
-  if (normalizedKey === baseKey) {
-    if (lowerFailed) return "lower";
-    if (upperFailed) return "upper";
-  }
+  if (normalizedKey === `${baseKey}_lower_limit`) return "lower";
+  if (normalizedKey === `${baseKey}_upper_limit`) return "upper";
   return null;
 }
 
 function getReportCellTone(row = {}, key) {
-  return getLimitTone(row, key);
+  return getLimitTone(key);
 }
 
 function reportCellClassName(row = {}, key) {
