@@ -645,6 +645,8 @@ BEGIN
     [cooling_water_mov] DECIMAL(18,2) NULL,
     [cooling_water_sta] DECIMAL(18,2) NULL,
     [accel_point] DECIMAL(18,2) NULL,
+    [accel_point_upper_limit] DECIMAL(18,2) NULL,
+    [accel_point_lower_limit] DECIMAL(18,2) NULL,
     [deaccel_point] DECIMAL(18,2) NULL,
     [intensification_time] DECIMAL(18,2) NULL,
     [biscuit_thickness] DECIMAL(18,2) NULL,
@@ -805,6 +807,10 @@ IF COL_LENGTH('dbo.PlcCycleReadings', 'cooling_water_sta') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [cooling_water_sta] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'accel_point') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [accel_point] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'accel_point_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [accel_point_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'accel_point_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [accel_point_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'deaccel_point') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [deaccel_point] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'intensification_time') IS NULL

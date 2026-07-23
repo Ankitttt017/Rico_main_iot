@@ -59,6 +59,8 @@ const LEGACY_COLUMNS_BY_PARAMETER = {
   "COOLING WATER FLOW RATE (MOV.) L/min": "cooling_water_mov",
   "COOLING WATER FLOW RATE (STA.) L/min": "cooling_water_sta",
   "ACCEL. POINT mm": "accel_point",
+  "ACCEL. POINT Upper Limit mm": "accel_point_upper_limit",
+  "ACCEL. POINT Lower Limit mm": "accel_point_lower_limit",
   "DEACEL. POINT mm": "deaccel_point",
   "INTEN. TIME msec": "intensification_time",
   "BISCUIT THICKNESS mm": "biscuit_thickness",
@@ -267,6 +269,8 @@ const EXTRA_READING_COLUMNS = [
   ["cycle_end_time", "DATETIME2(3)"],
   ["plant_temperature", "DECIMAL(18,2)"],
   ["plant_humidity", "DECIMAL(18,2)"],
+  ["accel_point_upper_limit", "DECIMAL(18,2)"],
+  ["accel_point_lower_limit", "DECIMAL(18,2)"],
 ];
 
 const TWO_DIGIT_READING_COLUMNS = new Set([

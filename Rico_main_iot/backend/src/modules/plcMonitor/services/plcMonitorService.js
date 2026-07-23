@@ -410,6 +410,11 @@ function normalizeUbeReadParameter(parameter = {}) {
   return parameter;
 }
 
+const UBE_LIMIT_READ_PARAMETERS = [
+  { name: "ACCEL. POINT Upper Limit mm", device: "D4254", type: "decimal" },
+  { name: "ACCEL. POINT Lower Limit mm", device: "D4304", type: "decimal" },
+];
+
 function mergeUbeReadParameters(configuredParameters = []) {
   const merged = [];
   const seen = new Set();
@@ -429,6 +434,7 @@ function mergeUbeReadParameters(configuredParameters = []) {
   configuredParameters
     .filter((parameter) => parameter && parameter.enabled !== false)
     .forEach(add);
+  UBE_LIMIT_READ_PARAMETERS.forEach(add);
 
   return merged;
 }
