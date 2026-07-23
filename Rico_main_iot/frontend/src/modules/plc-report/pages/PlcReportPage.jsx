@@ -178,6 +178,37 @@ const LEAK_RESULT_FILTERS = [
 
 const PLANT_ENVIRONMENT_COLUMNS = ["plant_temperature", "plant_humidity"];
 
+const UBE_LIMIT_BASE_COLUMNS = [
+  "die_close_core_in_time",
+  "pouring_time",
+  "shot_fwd_time",
+  "curing_time",
+  "die_open_core_out_time",
+  "ejector_time",
+  "extract_time",
+  "spray_time",
+  "v1_speed",
+  "v2_speed",
+  "v3_speed",
+  "v4_speed",
+  "metal_pressure",
+  "furnace_metal_temp",
+  "cooling_water_mov",
+  "cooling_water_sta",
+  "accel_point",
+  "deaccel_point",
+  "intensification_time",
+  "biscuit_thickness",
+  "jet_cooling_pressure",
+  "clamp_tonnage_he_low_pct",
+  "clamp_tonnage_he_low_mn",
+  "clamp_tonnage_op_up_pct",
+  "clamp_tonnage_op_low_pct",
+  "clamp_tonnage_he_up_pct",
+  "vacuum_pressure",
+];
+const UBE_LIMIT_BASE_SET = new Set(UBE_LIMIT_BASE_COLUMNS);
+
 const REPORT_LABELS = {
   ...DISPLAY_LABELS,
   shot_status: "Shot Result",
@@ -269,11 +300,7 @@ const REPORT_LABELS = {
   plant_temperature: "Plant Temperature",
   plant_humidity: "Plant Humidity",
   clamp_force_pct: "Clamp Force",
-  clamp_force_pct_upper_limit: "Clamp Force Upper Limit",
-  clamp_force_pct_lower_limit: "Clamp Force Lower Limit",
   clamp_tonnage: "Clamp Tonnage",
-  clamp_tonnage_upper_limit: "Clamp Tonnage Upper Limit",
-  clamp_tonnage_lower_limit: "Clamp Tonnage Lower Limit",
   shot_acc_pressure: "Shot Acc. Pressure",
   intensification_acc_pressure: "Intensification Acc. Pressure",
   fixed_die_temp_f1: "Fixed Die Temp (F-1)",
@@ -379,11 +406,7 @@ const REPORT_UNITS = {
   plant_temperature: "C",
   plant_humidity: "%",
   clamp_force_pct: "%",
-  clamp_force_pct_upper_limit: "%",
-  clamp_force_pct_lower_limit: "%",
   clamp_tonnage: "T",
-  clamp_tonnage_upper_limit: "T",
-  clamp_tonnage_lower_limit: "T",
   shot_acc_pressure: "MPa",
   intensification_acc_pressure: "MPa",
   fixed_die_temp_f1: "°C",
@@ -914,12 +937,59 @@ function formatReportCell(row, key, rowIndex = 0, rowCount = 0, rows = []) {
   return formatValue(row[key], key);
 }
 
+function numberFromReportValue(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(String(value).replace(/,/g, "").trim());
+  return Number.isFinite(number) ? number : null;
+}
+
+function getLimitBaseKey(key) {
+  const normalizedKey = normalizeColumnKey(key);
+  if (normalizedKey.endsWith("_lower_limit")) return normalizedKey.slice(0, -"_lower_limit".length);
+  if (normalizedKey.endsWith("_upper_limit")) return normalizedKey.slice(0, -"_upper_limit".length);
+  return normalizedKey;
+}
+
+function getLimitTone(row = {}, key) {
+  const normalizedKey = normalizeColumnKey(key);
+  const baseKey = getLimitBaseKey(normalizedKey);
+  if (!UBE_LIMIT_BASE_SET.has(baseKey)) return null;
+  const actual = numberFromReportValue(getRowValue(row, baseKey));
+  const lower = numberFromReportValue(getRowValue(row, `${baseKey}_lower_limit`));
+  const upper = numberFromReportValue(getRowValue(row, `${baseKey}_upper_limit`));
+  if (actual === null) return null;
+
+  const lowerFailed = lower !== null && actual < lower;
+  const upperFailed = upper !== null && actual > upper;
+  if (normalizedKey === `${baseKey}_lower_limit`) return lowerFailed ? "lower" : null;
+  if (normalizedKey === `${baseKey}_upper_limit`) return upperFailed ? "upper" : null;
+  if (normalizedKey === baseKey) {
+    if (lowerFailed) return "lower";
+    if (upperFailed) return "upper";
+  }
+  return null;
+}
+
+function getReportCellTone(row = {}, key) {
+  return getLimitTone(row, key);
+}
+
+function reportCellClassName(row = {}, key) {
+  const tone = getReportCellTone(row, key);
+  if (tone === "lower") return "border-yellow-200 bg-yellow-100 text-yellow-900";
+  if (tone === "upper") return "border-red-200 bg-red-100 text-red-800";
+  return "border-slate-100 text-slate-800";
+}
+
 function isHighlightedReportCell(row = {}, key) {
-  return false;
+  return Boolean(getReportCellTone(row, key));
 }
 
 function reportCellHtmlAttrs(row, key) {
-  return isHighlightedReportCell(row, key) ? ' class="alarm-cell"' : "";
+  const tone = getReportCellTone(row, key);
+  if (tone === "lower") return ' class="lower-limit-cell"';
+  if (tone === "upper") return ' class="upper-limit-cell"';
+  return "";
 }
 
 function escapeHtml(value) {
@@ -1149,6 +1219,33 @@ function isHiddenForReport(key, hideLeakTestFields = false, isGauge = false) {
   );
 }
 
+function orderUbeLimitColumns(columns = []) {
+  const available = new Set(columns);
+  const used = new Set();
+  const ordered = [];
+
+  const push = (key) => {
+    if (available.has(key) && !used.has(key)) {
+      ordered.push(key);
+      used.add(key);
+    }
+  };
+
+  columns.forEach((key) => {
+    const normalizedKey = normalizeColumnKey(key);
+    const baseKey = getLimitBaseKey(normalizedKey);
+    if (UBE_LIMIT_BASE_SET.has(baseKey)) {
+      push(baseKey);
+      push(`${baseKey}_lower_limit`);
+      push(`${baseKey}_upper_limit`);
+      return;
+    }
+    push(key);
+  });
+
+  return ordered;
+}
+
 function buildColumns(rows, options = {}) {
   const hideLeakTestFields = Boolean(options.hideLeakTestFields);
   const isGauge = Boolean(options.isGauge);
@@ -1182,10 +1279,10 @@ function buildColumns(rows, options = {}) {
       remainingColumns.splice(vacuumIndex >= 0 ? vacuumIndex + 1 : remainingColumns.length, 0, ...plantColumns);
     }
   }
-  return [
+  return orderUbeLimitColumns([
     ...preferredColumns.filter((key) => keys.has(key) && !isHiddenForReport(key, hideLeakTestFields, isGauge)),
     ...remainingColumns,
-  ];
+  ]);
 }
 
 function getColumnWidth(key) {
@@ -1743,7 +1840,8 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     table{width:100%;border-collapse:collapse;font-size:9px}
     th,td{border:1px solid #cbd5e1;padding:5px 6px;text-align:left;vertical-align:top;white-space:nowrap}
     th{background:#dbeafe;color:#1e3a5f;font-weight:800;text-transform:uppercase;letter-spacing:.04em}
-    .alarm-cell{background:#fee2e2!important;color:#991b1b!important;font-weight:900}
+    .lower-limit-cell{background:#fef3c7!important;color:#92400e!important;font-weight:900}
+    .upper-limit-cell{background:#fee2e2!important;color:#991b1b!important;font-weight:900}
     tbody tr:nth-child(even){background:#f8fafc}
     .table-title{background:#f8fafc;border-bottom:1px solid #cbd5e1;padding:9px 14px;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:#334155}
     .footer{display:flex;justify-content:space-between;border-top:1px solid #cbd5e1;padding:8px 12px;font-size:10px;font-weight:700;color:#64748b}
@@ -1825,7 +1923,8 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     th{background:#173f78;color:#ffffff;font-weight:800;text-transform:uppercase;text-align:center}
     tbody td{mso-number-format:"\\@";font-weight:600}
     tbody tr:nth-child(even) td{background:#f8fbff}
-    .alarm-cell{background:#fee2e2!important;color:#991b1b!important;font-weight:900}
+    .lower-limit-cell{background:#fef3c7!important;color:#92400e!important;font-weight:900}
+    .upper-limit-cell{background:#fee2e2!important;color:#991b1b!important;font-weight:900}
   </style>
 </head>
 <body>
@@ -2058,9 +2157,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                         className={`border-r px-4 py-2.5 text-center align-middle font-semibold leading-tight last:border-r-0 ${
                           ["part_name", "part_qr_code", "scan_data", "part_scan_data"].includes(normalizeColumnKey(key)) ? "break-all" : ""
                         } ${
-                          isHighlightedReportCell(row, key)
-                            ? "border-red-200 bg-red-100 text-red-800"
-                            : "border-slate-100 text-slate-800"
+                          reportCellClassName(row, key)
                         }`}
                       >
                         {formatReportCell(row, key, index, pagedReportRows.length, pagedReportRows)}

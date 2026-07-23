@@ -124,11 +124,7 @@ const LEGACY_COLUMNS_BY_PARAMETER = {
   "VACUUM PRESSURE Upper Limit mbar": "vacuum_pressure_upper_limit",
   "VACUUM PRESSURE Lower Limit mbar": "vacuum_pressure_lower_limit",
   "CLAMP FORCE (%)": "clamp_force_pct",
-  "CLAMP FORCE Upper Limit (%)": "clamp_force_pct_upper_limit",
-  "CLAMP FORCE Lower Limit (%)": "clamp_force_pct_lower_limit",
   "CLAMP TONNAGE (T)": "clamp_tonnage",
-  "CLAMP TONNAGE Upper Limit (T)": "clamp_tonnage_upper_limit",
-  "CLAMP TONNAGE Lower Limit (T)": "clamp_tonnage_lower_limit",
   "SHOT ACC. PRESSURE": "shot_acc_pressure",
   "INTENSIFICATION ACC. PRESSURE": "intensification_acc_pressure",
   "Fixed Die Temp (F-1)": "fixed_die_temp_f1",
@@ -379,10 +375,6 @@ const EXTRA_READING_COLUMNS = [
   ["clamp_tonnage_he_up_pct_lower_limit", "DECIMAL(18,2)"],
   ["vacuum_pressure_upper_limit", "DECIMAL(18,2)"],
   ["vacuum_pressure_lower_limit", "DECIMAL(18,2)"],
-  ["clamp_force_pct_upper_limit", "DECIMAL(18,2)"],
-  ["clamp_force_pct_lower_limit", "DECIMAL(18,2)"],
-  ["clamp_tonnage_upper_limit", "DECIMAL(18,2)"],
-  ["clamp_tonnage_lower_limit", "DECIMAL(18,2)"],
 ];
 
 const TWO_DIGIT_READING_COLUMNS = new Set([

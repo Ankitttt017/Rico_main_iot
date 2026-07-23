@@ -468,10 +468,6 @@ const UBE_LIMIT_READ_PARAMETERS = [
   { name: "CLAMP TONNAGE(HE.UP) Lower Limit %", device: "D4313", type: "decimal" },
   { name: "VACUUM PRESSURE Upper Limit mbar", device: "D4264", type: "decimal" },
   { name: "VACUUM PRESSURE Lower Limit mbar", device: "D4314", type: "decimal" },
-  { name: "CLAMP FORCE Upper Limit (%)", device: "D4259", type: "decimal" },
-  { name: "CLAMP FORCE Lower Limit (%)", device: "D4309", type: "decimal" },
-  { name: "CLAMP TONNAGE Upper Limit (T)", device: "D4260", type: "decimal" },
-  { name: "CLAMP TONNAGE Lower Limit (T)", device: "D4310", type: "decimal" },
 ];
 
 function mergeUbeReadParameters(configuredParameters = []) {

@@ -712,11 +712,7 @@ BEGIN
     [plant_temperature] DECIMAL(18,2) NULL,
     [plant_humidity] DECIMAL(18,2) NULL,
     [clamp_force_pct] DECIMAL(18,2) NULL,
-    [clamp_force_pct_upper_limit] DECIMAL(18,2) NULL,
-    [clamp_force_pct_lower_limit] DECIMAL(18,2) NULL,
     [clamp_tonnage] DECIMAL(18,2) NULL,
-    [clamp_tonnage_upper_limit] DECIMAL(18,2) NULL,
-    [clamp_tonnage_lower_limit] DECIMAL(18,2) NULL,
     [shot_acc_pressure] DECIMAL(18,2) NULL,
     [intensification_acc_pressure] DECIMAL(18,2) NULL,
     [fixed_die_temp_f1] DECIMAL(18,2) NULL,
@@ -997,16 +993,8 @@ IF COL_LENGTH('dbo.PlcCycleReadings', 'plant_humidity') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [plant_humidity] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_force_pct') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [clamp_force_pct] DECIMAL(18,2) NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_force_pct_upper_limit') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_force_pct_upper_limit] DECIMAL(18,2) NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_force_pct_lower_limit') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_force_pct_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage] DECIMAL(18,2) NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_upper_limit') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_upper_limit] DECIMAL(18,2) NULL;
-IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_lower_limit') IS NULL
-  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_acc_pressure') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [shot_acc_pressure] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'intensification_acc_pressure') IS NULL
