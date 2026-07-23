@@ -629,38 +629,94 @@ BEGIN
     [cycle_end] INT NULL,
     [Cycle Start] INT NULL,
     [die_close_core_in_time] DECIMAL(18,2) NULL,
+    [die_close_core_in_time_upper_limit] DECIMAL(18,2) NULL,
+    [die_close_core_in_time_lower_limit] DECIMAL(18,2) NULL,
     [pouring_time] DECIMAL(18,2) NULL,
+    [pouring_time_upper_limit] DECIMAL(18,2) NULL,
+    [pouring_time_lower_limit] DECIMAL(18,2) NULL,
     [shot_fwd_time] DECIMAL(18,2) NULL,
+    [shot_fwd_time_upper_limit] DECIMAL(18,2) NULL,
+    [shot_fwd_time_lower_limit] DECIMAL(18,2) NULL,
     [curing_time] DECIMAL(18,2) NULL,
+    [curing_time_upper_limit] DECIMAL(18,2) NULL,
+    [curing_time_lower_limit] DECIMAL(18,2) NULL,
     [die_open_core_out_time] DECIMAL(18,2) NULL,
+    [die_open_core_out_time_upper_limit] DECIMAL(18,2) NULL,
+    [die_open_core_out_time_lower_limit] DECIMAL(18,2) NULL,
     [ejector_time] DECIMAL(18,2) NULL,
+    [ejector_time_upper_limit] DECIMAL(18,2) NULL,
+    [ejector_time_lower_limit] DECIMAL(18,2) NULL,
     [extract_time] DECIMAL(18,2) NULL,
+    [extract_time_upper_limit] DECIMAL(18,2) NULL,
+    [extract_time_lower_limit] DECIMAL(18,2) NULL,
     [spray_time] DECIMAL(18,2) NULL,
+    [spray_time_upper_limit] DECIMAL(18,2) NULL,
+    [spray_time_lower_limit] DECIMAL(18,2) NULL,
     [v1_speed] DECIMAL(18,2) NULL,
+    [v1_speed_upper_limit] DECIMAL(18,2) NULL,
+    [v1_speed_lower_limit] DECIMAL(18,2) NULL,
     [v2_speed] DECIMAL(18,2) NULL,
+    [v2_speed_upper_limit] DECIMAL(18,2) NULL,
+    [v2_speed_lower_limit] DECIMAL(18,2) NULL,
     [v3_speed] DECIMAL(18,2) NULL,
+    [v3_speed_upper_limit] DECIMAL(18,2) NULL,
+    [v3_speed_lower_limit] DECIMAL(18,2) NULL,
     [v4_speed] DECIMAL(18,2) NULL,
+    [v4_speed_upper_limit] DECIMAL(18,2) NULL,
+    [v4_speed_lower_limit] DECIMAL(18,2) NULL,
     [metal_pressure] DECIMAL(18,2) NULL,
+    [metal_pressure_upper_limit] DECIMAL(18,2) NULL,
+    [metal_pressure_lower_limit] DECIMAL(18,2) NULL,
     [furnace_metal_temp] DECIMAL(18,2) NULL,
+    [furnace_metal_temp_upper_limit] DECIMAL(18,2) NULL,
+    [furnace_metal_temp_lower_limit] DECIMAL(18,2) NULL,
     [cooling_water_mov] DECIMAL(18,2) NULL,
+    [cooling_water_mov_upper_limit] DECIMAL(18,2) NULL,
+    [cooling_water_mov_lower_limit] DECIMAL(18,2) NULL,
     [cooling_water_sta] DECIMAL(18,2) NULL,
+    [cooling_water_sta_upper_limit] DECIMAL(18,2) NULL,
+    [cooling_water_sta_lower_limit] DECIMAL(18,2) NULL,
     [accel_point] DECIMAL(18,2) NULL,
     [accel_point_upper_limit] DECIMAL(18,2) NULL,
     [accel_point_lower_limit] DECIMAL(18,2) NULL,
     [deaccel_point] DECIMAL(18,2) NULL,
+    [deaccel_point_upper_limit] DECIMAL(18,2) NULL,
+    [deaccel_point_lower_limit] DECIMAL(18,2) NULL,
     [intensification_time] DECIMAL(18,2) NULL,
+    [intensification_time_upper_limit] DECIMAL(18,2) NULL,
+    [intensification_time_lower_limit] DECIMAL(18,2) NULL,
     [biscuit_thickness] DECIMAL(18,2) NULL,
+    [biscuit_thickness_upper_limit] DECIMAL(18,2) NULL,
+    [biscuit_thickness_lower_limit] DECIMAL(18,2) NULL,
     [jet_cooling_pressure] DECIMAL(18,2) NULL,
+    [jet_cooling_pressure_upper_limit] DECIMAL(18,2) NULL,
+    [jet_cooling_pressure_lower_limit] DECIMAL(18,2) NULL,
     [clamp_tonnage_he_low_pct] DECIMAL(18,2) NULL,
+    [clamp_tonnage_he_low_pct_upper_limit] DECIMAL(18,2) NULL,
+    [clamp_tonnage_he_low_pct_lower_limit] DECIMAL(18,2) NULL,
     [clamp_tonnage_he_low_mn] DECIMAL(18,2) NULL,
+    [clamp_tonnage_he_low_mn_upper_limit] DECIMAL(18,2) NULL,
+    [clamp_tonnage_he_low_mn_lower_limit] DECIMAL(18,2) NULL,
     [clamp_tonnage_op_up_pct] DECIMAL(18,2) NULL,
+    [clamp_tonnage_op_up_pct_upper_limit] DECIMAL(18,2) NULL,
+    [clamp_tonnage_op_up_pct_lower_limit] DECIMAL(18,2) NULL,
     [clamp_tonnage_op_low_pct] DECIMAL(18,2) NULL,
+    [clamp_tonnage_op_low_pct_upper_limit] DECIMAL(18,2) NULL,
+    [clamp_tonnage_op_low_pct_lower_limit] DECIMAL(18,2) NULL,
     [clamp_tonnage_he_up_pct] DECIMAL(18,2) NULL,
+    [clamp_tonnage_he_up_pct_upper_limit] DECIMAL(18,2) NULL,
+    [clamp_tonnage_he_up_pct_lower_limit] DECIMAL(18,2) NULL,
     [vacuum_pressure] DECIMAL(18,2) NULL,
+    [vacuum_pressure_upper_limit] DECIMAL(18,2) NULL,
+    [vacuum_pressure_lower_limit] DECIMAL(18,2) NULL,
     [plant_temperature] DECIMAL(18,2) NULL,
     [plant_humidity] DECIMAL(18,2) NULL,
     [clamp_force_pct] DECIMAL(18,2) NULL,
+    [clamp_force_pct_upper_limit] DECIMAL(18,2) NULL,
+    [clamp_force_pct_lower_limit] DECIMAL(18,2) NULL,
     [clamp_tonnage] DECIMAL(18,2) NULL,
+    [clamp_tonnage_upper_limit] DECIMAL(18,2) NULL,
+    [clamp_tonnage_lower_limit] DECIMAL(18,2) NULL,
     [shot_acc_pressure] DECIMAL(18,2) NULL,
     [intensification_acc_pressure] DECIMAL(18,2) NULL,
     [fixed_die_temp_f1] DECIMAL(18,2) NULL,
@@ -775,36 +831,100 @@ IF @dropPlcLimitStatusColumns <> N'' EXEC sp_executesql @dropPlcLimitStatusColum
 
 IF COL_LENGTH('dbo.PlcCycleReadings', 'die_close_core_in_time') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [die_close_core_in_time] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'die_close_core_in_time_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [die_close_core_in_time_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'die_close_core_in_time_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [die_close_core_in_time_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'pouring_time') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [pouring_time] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'pouring_time_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [pouring_time_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'pouring_time_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [pouring_time_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_fwd_time') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [shot_fwd_time] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_fwd_time_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [shot_fwd_time_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_fwd_time_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [shot_fwd_time_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'curing_time') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [curing_time] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'curing_time_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [curing_time_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'curing_time_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [curing_time_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'die_open_core_out_time') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [die_open_core_out_time] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'die_open_core_out_time_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [die_open_core_out_time_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'die_open_core_out_time_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [die_open_core_out_time_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'ejector_time') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [ejector_time] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'ejector_time_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [ejector_time_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'ejector_time_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [ejector_time_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'extract_time') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [extract_time] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'extract_time_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [extract_time_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'extract_time_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [extract_time_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'spray_time') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [spray_time] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'spray_time_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [spray_time_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'spray_time_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [spray_time_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'v1_speed') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [v1_speed] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'v1_speed_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [v1_speed_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'v1_speed_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [v1_speed_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'v2_speed') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [v2_speed] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'v2_speed_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [v2_speed_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'v2_speed_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [v2_speed_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'v3_speed') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [v3_speed] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'v3_speed_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [v3_speed_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'v3_speed_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [v3_speed_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'v4_speed') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [v4_speed] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'v4_speed_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [v4_speed_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'v4_speed_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [v4_speed_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'metal_pressure') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [metal_pressure] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'metal_pressure_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [metal_pressure_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'metal_pressure_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [metal_pressure_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'furnace_metal_temp') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [furnace_metal_temp] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'furnace_metal_temp_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [furnace_metal_temp_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'furnace_metal_temp_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [furnace_metal_temp_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'cooling_water_mov') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [cooling_water_mov] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'cooling_water_mov_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [cooling_water_mov_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'cooling_water_mov_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [cooling_water_mov_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'cooling_water_sta') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [cooling_water_sta] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'cooling_water_sta_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [cooling_water_sta_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'cooling_water_sta_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [cooling_water_sta_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'accel_point') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [accel_point] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'accel_point_upper_limit') IS NULL
@@ -813,32 +933,80 @@ IF COL_LENGTH('dbo.PlcCycleReadings', 'accel_point_lower_limit') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [accel_point_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'deaccel_point') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [deaccel_point] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'deaccel_point_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [deaccel_point_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'deaccel_point_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [deaccel_point_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'intensification_time') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [intensification_time] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'intensification_time_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [intensification_time_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'intensification_time_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [intensification_time_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'biscuit_thickness') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [biscuit_thickness] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'biscuit_thickness_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [biscuit_thickness_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'biscuit_thickness_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [biscuit_thickness_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'jet_cooling_pressure') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [jet_cooling_pressure] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'jet_cooling_pressure_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [jet_cooling_pressure_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'jet_cooling_pressure_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [jet_cooling_pressure_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_he_low_pct') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_he_low_pct] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_he_low_pct_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_he_low_pct_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_he_low_pct_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_he_low_pct_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_he_low_mn') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_he_low_mn] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_he_low_mn_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_he_low_mn_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_he_low_mn_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_he_low_mn_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_op_up_pct') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_op_up_pct] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_op_up_pct_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_op_up_pct_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_op_up_pct_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_op_up_pct_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_op_low_pct') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_op_low_pct] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_op_low_pct_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_op_low_pct_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_op_low_pct_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_op_low_pct_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_he_up_pct') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_he_up_pct] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_he_up_pct_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_he_up_pct_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_he_up_pct_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_he_up_pct_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'vacuum_pressure') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [vacuum_pressure] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'vacuum_pressure_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [vacuum_pressure_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'vacuum_pressure_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [vacuum_pressure_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'plant_temperature') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [plant_temperature] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'plant_humidity') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [plant_humidity] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_force_pct') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [clamp_force_pct] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_force_pct_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_force_pct_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_force_pct_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_force_pct_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_upper_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_upper_limit] DECIMAL(18,2) NULL;
+IF COL_LENGTH('dbo.PlcCycleReadings', 'clamp_tonnage_lower_limit') IS NULL
+  ALTER TABLE dbo.PlcCycleReadings ADD [clamp_tonnage_lower_limit] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'shot_acc_pressure') IS NULL
   ALTER TABLE dbo.PlcCycleReadings ADD [shot_acc_pressure] DECIMAL(18,2) NULL;
 IF COL_LENGTH('dbo.PlcCycleReadings', 'intensification_acc_pressure') IS NULL
