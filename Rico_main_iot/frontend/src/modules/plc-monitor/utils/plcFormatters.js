@@ -58,6 +58,53 @@ const TWO_DIGIT_FIELDS = new Set([
   "shot_second",
 ]);
 
+const DISPLAY_DIVIDE_BY_TEN_FIELDS = new Set([
+  "clamp_tonnage_he_low_mn",
+  "clamp_tonnage_he_up_pct",
+  "clamp_tonnage_op_low_pct",
+  "clamp_tonnage_op_up_pct",
+  "cooling_water_mov",
+  "cooling_water_sta",
+  "furnace_metal_temp",
+  "jet_cooling_pressure",
+  "pouring_time",
+  "shot_fwd_time",
+  "curing_time",
+  "die_open_core_out_time",
+  "ejector_time",
+  "extract_time",
+  "spray_time",
+]);
+
+const DISPLAY_DIVIDE_BY_HUNDRED_LIMITS = new Set([
+  "v1_speed_upper_limit",
+  "v1_speed_lower_limit",
+  "v2_speed_upper_limit",
+  "v2_speed_lower_limit",
+  "v3_speed_upper_limit",
+  "v3_speed_lower_limit",
+  "v4_speed_upper_limit",
+  "v4_speed_lower_limit",
+]);
+
+function getNumericDisplayValue(value) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : null;
+}
+
+function getScaledDisplayValue(normalizedName, value) {
+  const numericValue = getNumericDisplayValue(value);
+  if (numericValue === null) return value;
+  if (DISPLAY_DIVIDE_BY_HUNDRED_LIMITS.has(normalizedName)) return numericValue / 100;
+  if (DISPLAY_DIVIDE_BY_TEN_FIELDS.has(normalizedName)) return numericValue / 10;
+  for (const baseName of DISPLAY_DIVIDE_BY_TEN_FIELDS) {
+    if (normalizedName === `${baseName}_upper_limit` || normalizedName === `${baseName}_lower_limit`) {
+      return numericValue / 10;
+    }
+  }
+  return value;
+}
+
 export function pad2(value) {
   if (value === null || value === undefined || value === "") return value;
   const numericValue = Number(value);
@@ -192,6 +239,8 @@ export function normalizeDisplayValue(name, value) {
     if (raw.toLowerCase() === "auto") return "Auto";
   }
   if (TWO_DIGIT_FIELDS.has(name)) return pad2(value);
+  const scaledValue = getScaledDisplayValue(normalizedName, value);
+  if (scaledValue !== value) return scaledValue;
   if (name === "shot_date") return formatDateOnly(value);
   if (name === "production_date") return formatDateOnly(value);
   if (name === "shot_time") return formatTimeOnly(value);
