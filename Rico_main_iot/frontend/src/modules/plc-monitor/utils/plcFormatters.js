@@ -96,7 +96,6 @@ function getScaledDisplayValue(normalizedName, value) {
   const numericValue = getNumericDisplayValue(value);
   if (numericValue === null) return value;
   if (DISPLAY_DIVIDE_BY_HUNDRED_LIMITS.has(normalizedName)) return numericValue / 100;
-  if (DISPLAY_DIVIDE_BY_TEN_FIELDS.has(normalizedName)) return numericValue / 10;
   for (const baseName of DISPLAY_DIVIDE_BY_TEN_FIELDS) {
     if (normalizedName === `${baseName}_upper_limit` || normalizedName === `${baseName}_lower_limit`) {
       return numericValue / 10;
