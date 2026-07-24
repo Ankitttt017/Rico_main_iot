@@ -1629,8 +1629,8 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   );
 
   const reportRows = useMemo(
-    () => sortRowsLatestFirst(filteredRows, { preferShotNumber: false }),
-    [filteredRows]
+    () => sortRowsLatestFirst(filteredRows, { preferShotNumber: !selectedMachineIsGauge && !selectedMachineIsLeak }),
+    [filteredRows, selectedMachineIsGauge, selectedMachineIsLeak]
   );
   const currentPage = Math.max(1, Number(pagination.page || reportPage || 1));
   const totalPages = Math.max(1, Number(pagination.totalPages || 1));
