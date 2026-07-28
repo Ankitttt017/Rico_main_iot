@@ -213,6 +213,22 @@ const UBE_LIMIT_BASE_COLUMNS = [
 ];
 const UBE_LIMIT_BASE_SET = new Set(UBE_LIMIT_BASE_COLUMNS);
 
+const CLAMP_TONNAGE_PERCENT_TO_MN = 0.085;
+const CLAMP_TONNAGE_PCT_AS_MN_COLUMNS = new Set([
+  "clamp_tonnage_he_low_pct",
+  "clamp_tonnage_he_low_pct_upper_limit",
+  "clamp_tonnage_he_low_pct_lower_limit",
+  "clamp_tonnage_op_up_pct",
+  "clamp_tonnage_op_up_pct_upper_limit",
+  "clamp_tonnage_op_up_pct_lower_limit",
+  "clamp_tonnage_op_low_pct",
+  "clamp_tonnage_op_low_pct_upper_limit",
+  "clamp_tonnage_op_low_pct_lower_limit",
+  "clamp_tonnage_he_up_pct",
+  "clamp_tonnage_he_up_pct_upper_limit",
+  "clamp_tonnage_he_up_pct_lower_limit",
+]);
+
 const REPORT_LABELS = {
   ...DISPLAY_LABELS,
   shot_status: "Shot Result",
@@ -389,21 +405,21 @@ const REPORT_UNITS = {
   jet_cooling_pressure: "kgf/cm2",
   jet_cooling_pressure_upper_limit: "kgf/cm2",
   jet_cooling_pressure_lower_limit: "kgf/cm2",
-  clamp_tonnage_he_low_pct: "%",
-  clamp_tonnage_he_low_pct_upper_limit: "%",
-  clamp_tonnage_he_low_pct_lower_limit: "%",
+  clamp_tonnage_he_low_pct: "MN",
+  clamp_tonnage_he_low_pct_upper_limit: "MN",
+  clamp_tonnage_he_low_pct_lower_limit: "MN",
   clamp_tonnage_he_low_mn: "MN",
   clamp_tonnage_he_low_mn_upper_limit: "MN",
   clamp_tonnage_he_low_mn_lower_limit: "MN",
-  clamp_tonnage_op_up_pct: "%",
-  clamp_tonnage_op_up_pct_upper_limit: "%",
-  clamp_tonnage_op_up_pct_lower_limit: "%",
-  clamp_tonnage_op_low_pct: "%",
-  clamp_tonnage_op_low_pct_upper_limit: "%",
-  clamp_tonnage_op_low_pct_lower_limit: "%",
-  clamp_tonnage_he_up_pct: "%",
-  clamp_tonnage_he_up_pct_upper_limit: "%",
-  clamp_tonnage_he_up_pct_lower_limit: "%",
+  clamp_tonnage_op_up_pct: "MN",
+  clamp_tonnage_op_up_pct_upper_limit: "MN",
+  clamp_tonnage_op_up_pct_lower_limit: "MN",
+  clamp_tonnage_op_low_pct: "MN",
+  clamp_tonnage_op_low_pct_upper_limit: "MN",
+  clamp_tonnage_op_low_pct_lower_limit: "MN",
+  clamp_tonnage_he_up_pct: "MN",
+  clamp_tonnage_he_up_pct_upper_limit: "MN",
+  clamp_tonnage_he_up_pct_lower_limit: "MN",
   vacuum_pressure: "mbar",
   vacuum_pressure_upper_limit: "mbar",
   vacuum_pressure_lower_limit: "mbar",
@@ -894,10 +910,20 @@ function getTestingModeValue(row = {}) {
   ].filter(Boolean).join(" / ");
 }
 
+function formatClampTonnagePercentAsMn(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return null;
+  const converted = number * CLAMP_TONNAGE_PERCENT_TO_MN;
+  return Number(converted.toFixed(2)).toString();
+}
+
 function formatValue(value, key) {
   if (NOT_AVAILABLE_COLUMNS.has(normalizeColumnKey(key))) return "N/A";
   if (value === null || value === undefined || value === "") return "-";
   const normalizedKey = normalizeColumnKey(key);
+  if (CLAMP_TONNAGE_PCT_AS_MN_COLUMNS.has(normalizedKey)) {
+    return formatClampTonnagePercentAsMn(value) || "-";
+  }
   const displayValue = normalizeDisplayValue(key, value);
   if (normalizedKey === "biscuit_thickness") return String(displayValue);
   if (key === "recorded_at" || key === "cycle_end_time") return formatDateTime(value);

@@ -8,6 +8,7 @@
 
 DECLARE @ube_register_config NVARCHAR(MAX) = N'[
   {"name":"Sr. No","type":"int","computed":"serial","enabled":true,"show_on_monitor":false,"log_history":true,"group":"Production","unit":""},
+  {"name":"Part Name","stringDevice":"D100-D110","stringLength":11,"type":"text","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Production","unit":""},
   {"name":"SHOT TIME","type":"text","computed":"shotTime","enabled":true,"show_on_monitor":true,"log_history":true,"group":"Production","unit":""},
   {"name":"SHOT NO.","device":"D1120","type":"int","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Production","unit":""},
   {"name":"CYCLE TIME sec.","device":"D1127","type":"decimal","scale":0.1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Production","unit":"sec"},

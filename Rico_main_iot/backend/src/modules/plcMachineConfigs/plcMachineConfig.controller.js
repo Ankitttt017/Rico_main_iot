@@ -72,8 +72,61 @@ function normalizeMachineType(value) {
     .slice(0, 40) || "generic";
 }
 
+const UBE_PART_NAME_REGISTER = {
+  id: "part-name-d100",
+  name: "Part Name",
+  device: "",
+  stringDevice: "D100-D110",
+  stringLength: 11,
+  type: "text",
+  scale: 1,
+  computed: "",
+  enabled: true,
+  min: null,
+  max: null,
+  warning_min: null,
+  warning_max: null,
+  unit: "",
+  show_on_monitor: true,
+  show_to_operator: false,
+  log_history: true,
+  alarm_enabled: false,
+};
+
+function isUbePartNameRegister(register = {}) {
+  const name = String(register.name || register.parameter || register.label || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return [
+    "part_name",
+    "part",
+    "part_no",
+    "part_number",
+    "part_code",
+    "model_name",
+    "model_code",
+    "die_name",
+    "die_no",
+    "die_number",
+    "die_code",
+    "current_part",
+    "current_part_name",
+    "current_die",
+    "current_die_name",
+  ].includes(name);
+}
+
+function withUbePartNameRegister(registers = []) {
+  const list = Array.isArray(registers) ? registers : [];
+  if (list.some(isUbePartNameRegister)) return list;
+  return [UBE_PART_NAME_REGISTER, ...list];
+}
+
 function normalizeRegistersForMachineType(registers = [], type = "generic") {
   if (!Array.isArray(registers)) return registers;
+  if (normalizeMachineType(type) === "ube") return withUbePartNameRegister(registers);
   return registers;
 }
 
@@ -255,6 +308,7 @@ function normalizeMachine(row = {}) {
 }
 
 function registersForType(_type = "generic") {
+  if (normalizeMachineType(_type) === "ube") return [UBE_PART_NAME_REGISTER];
   return [];
 }
 

@@ -2,6 +2,21 @@
 
 const db = require("../../../config/db");
 
+const UBE_PART_NAME_REGISTER = {
+  id: "part-name-d100",
+  name: "Part Name",
+  device: "",
+  stringDevice: "D100-D110",
+  stringLength: 11,
+  type: "text",
+  scale: 1,
+  enabled: true,
+  unit: "",
+  group: "Production",
+  show_on_monitor: true,
+  log_history: true,
+};
+
 function parseRegisterConfig(value) {
   if (!value) return [];
   if (Array.isArray(value)) return value;
@@ -86,6 +101,33 @@ function mergeRegisters(primary = [], fallback = []) {
   return merged;
 }
 
+function hasUbePartNameRegister(registers = []) {
+  return registers.some((register) => {
+    const name = String(register.name || register.parameter || register.label || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+    return [
+      "part_name",
+      "part",
+      "part_no",
+      "part_number",
+      "part_code",
+      "model_name",
+      "model_code",
+      "die_name",
+      "die_no",
+      "die_number",
+      "die_code",
+      "current_part",
+      "current_part_name",
+      "current_die",
+      "current_die_name",
+    ].includes(name);
+  });
+}
+
 function profileKeysForMachine(row = {}) {
   const machineText = [
     row.machine_type,
@@ -108,6 +150,9 @@ function normalizeMachineRegisterConfig(row = {}, profileRegistersByKey = new Ma
   const profileRegisters = profileKeysForMachine(row)
     .flatMap((key) => profileRegistersByKey.get(String(key).trim().toUpperCase()) || []);
   const registers = mergeRegisters(configuredRegisters, profileRegisters);
+  const finalRegisters = String(row.machine_type || "").trim().toLowerCase() === "ube" && !hasUbePartNameRegister(registers)
+    ? [normalizeRegister(UBE_PART_NAME_REGISTER), ...registers]
+    : registers;
 
   return {
     id: row.id || null,
@@ -118,7 +163,7 @@ function normalizeMachineRegisterConfig(row = {}, profileRegistersByKey = new Ma
     ipAddress: row.ip_address || null,
     port: row.port || null,
     protocol: row.protocol || "SLMP",
-    registers,
+    registers: finalRegisters,
   };
 }
 
