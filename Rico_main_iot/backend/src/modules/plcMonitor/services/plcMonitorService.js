@@ -1556,7 +1556,7 @@ function buildReadingsExcelXml(rows, meta = {}) {
     row([
       cell(`OK SHOT\n${kpiCounts.ok}`, "KpiOk", ` ss:MergeAcross="${kpiMerge}"`),
       cell(`WARM UP SHOT\n${kpiCounts.warm}`, "KpiWarm", ` ss:Index="${kpiSpan + 1}" ss:MergeAcross="${kpiMerge}"`),
-      cell(`OFF SHOT\n${kpiCounts.off}`, "KpiOff", ` ss:Index="${(kpiSpan * 2) + 1}" ss:MergeAcross="${kpiMerge}"`),
+      cell(`NG SHOT\n${kpiCounts.off}`, "KpiOff", ` ss:Index="${(kpiSpan * 2) + 1}" ss:MergeAcross="${kpiMerge}"`),
       cell(`TOTAL SHOT\n${rows.length}`, "KpiTotal", ` ss:Index="${(kpiSpan * 3) + 1}" ss:MergeAcross="${Math.max(0, reportColumns.length - (kpiSpan * 3) - 1)}"`),
     ], ' ss:Height="48"'),
     row([]),

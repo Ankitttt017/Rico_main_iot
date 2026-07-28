@@ -1747,7 +1747,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   const reportSubtitle = isLeakReport ? "Leak test scan history" : "Machine production history";
   const okKpiTitle = isLeakReport ? "OK Scan" : "OK Shot";
   const warmKpiTitle = isLeakReport ? "Warm Up Scan" : "Warm Up Shot";
-  const offKpiTitle = isLeakReport ? "NG Scan" : "Off Shot";
+  const offKpiTitle = isLeakReport ? "NG Scan" : "NG Shot";
   const reportKpiItems = useMemo(() => {
     const total = { title: "Total Production", value: kpis.totalProduction, tone: "blue", className: "summary-total" };
     const shift = { title: "Shift", value: kpis.shift, tone: "indigo", className: "summary-shift" };
