@@ -314,7 +314,7 @@ function getMachineSpecificHiddenMonitorFields(machineKind) {
 
 function getDetailDuplicateHiddenMonitorFields(machineKind) {
   if (machineKind === "gauge") return new Set(["shot_date", "production_date"]);
-  if (machineKind === "leaktest") return new Set(["part_name", "cycle_time", "cycle_time_in_sec"]);
+  if (machineKind === "leaktest") return new Set(["part_name", "shot_date", "production_date", "cycle_time", "cycle_time_in_sec"]);
   if (machineKind === "ube") return new Set(["production_date"]);
   return new Set();
 }
