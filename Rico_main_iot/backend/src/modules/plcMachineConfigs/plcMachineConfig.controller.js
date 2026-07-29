@@ -28,6 +28,29 @@ function cleanBool(value, fallback = false) {
   return !["0", "false", "no", "n", "off"].includes(String(value).trim().toLowerCase());
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isDeadlockError(error = {}) {
+  const message = String(error.message || error.originalError?.message || "").toLowerCase();
+  return error.number === 1205 || (error.code === "EREQUEST" && message.includes("deadlock")) || message.includes("deadlocked");
+}
+
+async function withDeadlockRetry(operation, attempts = 3) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (!isDeadlockError(error) || attempt === attempts) throw error;
+      await sleep(150 * attempt);
+    }
+  }
+  throw lastError;
+}
+
 function normalizeRegisterType(value) {
   const normalized = String(value || "int").trim().toLowerCase().replace(/[\s/_-]+/g, "");
   if (["text", "string", "ascii", "stringascii", "char", "chars"].includes(normalized)) return "text";
@@ -394,7 +417,11 @@ async function syncMachineNameReferences({ ip, machineKey, machineName }) {
 
   for (const update of updates) {
     if (!update.enabled || !(await tableExists(update.table))) continue;
-    await db.run(update.sql, update.params);
+    try {
+      await withDeadlockRetry(() => db.run(update.sql, update.params));
+    } catch (error) {
+      console.warn(`Machine reference sync skipped for ${update.table}: ${error.message}`);
+    }
   }
 }
 
@@ -460,7 +487,7 @@ async function saveMachineRecord(input = {}) {
     );
     if (!rows.length) throw new Error("Machine config not found");
 
-    await db.run(`
+    await withDeadlockRetry(() => db.run(`
       UPDATE dbo.plc_machine_configs
       SET machine_id = ?, machine_key = ?, machine_name = ?, machine_type = ?, plant_code = ?, ip_address = ?, port = ?,
           protocol = ?, sequence_no = ?, is_active = ?,
@@ -480,13 +507,13 @@ async function saveMachineRecord(input = {}) {
       payload.register_config_json,
       payload.notes,
       id,
-    ]);
+    ]));
     if (payload.machine_id) {
-      await db.run(`
+      await withDeadlockRetry(() => db.run(`
         UPDATE dbo.iot_machines
         SET name = ?, ip_address = ?, port = ?, protocol = ?
         WHERE id = ?
-      `, [payload.machine_name, payload.ip_address, String(payload.port), payload.protocol, payload.machine_id]);
+      `, [payload.machine_name, payload.ip_address, String(payload.port), payload.protocol, payload.machine_id]));
     }
     await syncMachineNameReferences({
       ip: payload.ip_address,
@@ -496,7 +523,7 @@ async function saveMachineRecord(input = {}) {
     return id;
   }
 
-  const result = await db.run(`
+  const result = await withDeadlockRetry(() => db.run(`
     INSERT INTO dbo.plc_machine_configs
       (machine_id, machine_key, machine_name, machine_type, plant_code, ip_address, port, protocol,
        sequence_no, is_active, register_config_json, notes)
@@ -515,13 +542,13 @@ async function saveMachineRecord(input = {}) {
     payload.is_active,
     payload.register_config_json,
     payload.notes,
-  ]);
+  ]));
   if (payload.machine_id) {
-    await db.run(`
+    await withDeadlockRetry(() => db.run(`
       UPDATE dbo.iot_machines
       SET name = ?, ip_address = ?, port = ?, protocol = ?
       WHERE id = ?
-    `, [payload.machine_name, payload.ip_address, String(payload.port), payload.protocol, payload.machine_id]);
+    `, [payload.machine_name, payload.ip_address, String(payload.port), payload.protocol, payload.machine_id]));
   }
   await syncMachineNameReferences({
     ip: payload.ip_address,

@@ -57,6 +57,12 @@ const mergeRegisters = (current = [], imported = []) => [
   })),
 ];
 
+const getSaveRegisters = (registers, defaultRegistersByType, type) => (
+  Array.isArray(registers) && registers.length
+    ? registers
+    : getDefaultRegisters(defaultRegistersByType, type)
+);
+
 const MachineDashboard = ({ onLogout, currentUser }) => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [machines, setMachines]         = useState([]);
@@ -582,7 +588,7 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
           plant_code: payload.plant_code,
           machine_type: type,
           port: Number(plcDraft.port || 5002),
-          register_config: plcDraft.register_config || getDefaultRegisters(defaultRegistersByType, type),
+          register_config: getSaveRegisters(plcDraft.register_config, defaultRegistersByType, type),
         });
         toast.success("PLC config saved");
         await loadPlcSetup();

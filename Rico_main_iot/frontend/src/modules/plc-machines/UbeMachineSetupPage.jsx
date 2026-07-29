@@ -62,6 +62,12 @@ export function getDefaultRegisters(defaultRegistersByType, type) {
   return defaultRegistersByType?.[type] || [];
 }
 
+function getSaveRegisters(registers, defaultRegistersByType, type) {
+  return Array.isArray(registers) && registers.length
+    ? registers
+    : getDefaultRegisters(defaultRegistersByType, type);
+}
+
 export function keyFromMachine(machine = {}) {
   return String(machine.machine_code || machine.name || "")
     .trim()
@@ -720,7 +726,7 @@ export default function UbeMachineSetupPage({ onLogout, currentUser }) {
         ...draft,
         machine_type: type,
         port: Number(draft.port || 5002),
-        register_config: draft.register_config || getDefaultRegisters(defaultRegistersByType, type),
+        register_config: getSaveRegisters(draft.register_config, defaultRegistersByType, type),
       });
       toast.success("PLC configuration saved. Monitor will pick it up automatically.");
       const { rows, defaults } = await load();
