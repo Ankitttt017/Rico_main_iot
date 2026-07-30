@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, Download } from "lucide-react";
+import { CheckCircle2, Download, Search } from "lucide-react";
 import AppLayout from "../../../components/common/AppLayout";
 import ricoLogo from "../../../assets/rico-logo.png";
 import { DISPLAY_LABELS } from "../../plc-monitor/constants";
@@ -1354,6 +1354,8 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   const [draftQuickFilter, setDraftQuickFilter] = useState(activeQuickFilter);
   const [draftShiftFilter, setDraftShiftFilter] = useState(shiftFilter);
   const [draftShotResultFilter, setDraftShotResultFilter] = useState(shotResultFilter);
+  const [searchText, setSearchText] = useState("");
+  const [draftSearchText, setDraftSearchText] = useState("");
   const [rows, setRows] = useState([]);
   const [reportPage, setReportPage] = useState(1);
   const [pagination, setPagination] = useState({
@@ -1551,10 +1553,11 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     setToDate(draftToDate);
     setShiftFilter(draftShiftFilter);
     setShotResultFilter(draftResultFilterValue);
+    setSearchText(draftSearchText.trim());
     setReportPage(1);
     setPagination({ page: 1, pageSize: REPORT_RESULT_LIMIT, total: 0, totalPages: 1 });
     setFiltersApplied(true);
-  }, [draftFromDate, draftLineId, draftMachineId, draftMachineOptions, draftQuickFilter, draftResultFilterValue, draftShiftFilter, draftToDate]);
+  }, [draftFromDate, draftLineId, draftMachineId, draftMachineOptions, draftQuickFilter, draftResultFilterValue, draftSearchText, draftShiftFilter, draftToDate]);
 
   const clearReportFilters = useCallback(() => {
     const today = todayInput();
@@ -1572,6 +1575,8 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     setShiftFilter("all");
     setDraftShotResultFilter("all");
     setShotResultFilter("all");
+    setDraftSearchText("");
+    setSearchText("");
     setRows([]);
     setReportPage(1);
     setPagination({ page: 1, pageSize: REPORT_RESULT_LIMIT, total: 0, totalPages: 1 });
@@ -1606,6 +1611,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
         pageSize: REPORT_RESULT_LIMIT,
         shift: shiftFilter,
         shotResult: activeResultFilterValue,
+        shotNumber: searchText,
       });
       const nextPagination = response.data?.pagination || {};
       const nextRows = Array.isArray(response.data?.data) ? response.data.data : [];
@@ -1629,7 +1635,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [activeResultFilterValue, filtersApplied, fromDate, reportMachinesReady, reportPage, selectedMachine, selectedMachineIsGauge, selectedMachineIsLeak, shiftFilter, toDate]);
+  }, [activeResultFilterValue, filtersApplied, fromDate, reportMachinesReady, reportPage, searchText, selectedMachine, selectedMachineIsGauge, selectedMachineIsLeak, shiftFilter, toDate]);
 
   useEffect(() => {
     loadReport();
@@ -1689,7 +1695,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       tableScrollRef.current.scrollLeft = 0;
       tableScrollRef.current.scrollTop = 0;
     }
-  }, [columns.length, fromDate, reportPage, selectedMachineId, shiftFilter, activeResultFilterValue, toDate]);
+  }, [columns.length, fromDate, reportPage, searchText, selectedMachineId, shiftFilter, activeResultFilterValue, toDate]);
   const kpis = useMemo(() => {
     const counts = {
       ok: serverKpis.ok,
@@ -1724,11 +1730,13 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   const reportFilterLabel = activeQuickFilter ? getQuickFilterLabel(activeQuickFilter) : "Select date range";
   const reportShiftLabel = shiftFilter ? getShiftFilterLabel(shiftFilter) : "Select shift";
   const reportShotResultLabel = activeResultFilterValue ? getShotResultFilterLabel(activeResultFilterValue, isLeakReport) : "Select result";
+  const reportSearchLabel = searchText ? `${isGaugeReport || isLeakReport ? "Search" : "Shot"}: ${searchText}` : null;
   const reportFilterSummary = filtersApplied
     ? [
       reportFilterLabel,
       reportShiftLabel,
       isGaugeReport ? null : reportShotResultLabel,
+      reportSearchLabel,
       reportRangeLabel,
     ].filter(Boolean).join(" | ")
     : "Select filters to load report";
@@ -1737,9 +1745,10 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   const formIsGaugeReport = draftMachineId ? draftMachineIsGauge : isGaugeReport;
   const formIsLeakReport = draftMachineId ? draftMachineIsLeak : isLeakReport;
   const formResultFilterTitle = formIsLeakReport ? "Scan Result" : "Shot Result";
+  const searchPlaceholder = formIsGaugeReport || formIsLeakReport ? "Search scan data..." : "Search shot number...";
   const filterGridClass = formIsGaugeReport
-    ? "grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))] 2xl:[grid-template-columns:minmax(170px,1fr)_minmax(170px,1fr)_minmax(150px,0.9fr)_minmax(130px,0.8fr)_minmax(150px,0.9fr)_minmax(150px,0.9fr)_minmax(300px,1.8fr)_minmax(110px,0.6fr)_minmax(130px,0.7fr)] 2xl:items-end"
-    : "grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))] 2xl:[grid-template-columns:minmax(170px,1fr)_minmax(170px,1fr)_minmax(150px,0.9fr)_minmax(130px,0.8fr)_minmax(150px,0.9fr)_minmax(150px,0.9fr)_minmax(120px,0.7fr)_minmax(260px,1.6fr)_minmax(130px,0.8fr)] 2xl:items-end";
+    ? "grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))] 2xl:[grid-template-columns:minmax(160px,1fr)_minmax(165px,1fr)_minmax(145px,0.85fr)_minmax(125px,0.75fr)_minmax(145px,0.85fr)_minmax(145px,0.85fr)_minmax(220px,1.35fr)_minmax(105px,0.55fr)_minmax(105px,0.55fr)_minmax(120px,0.65fr)] 2xl:items-end"
+    : "grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))] 2xl:[grid-template-columns:minmax(160px,1fr)_minmax(165px,1fr)_minmax(145px,0.85fr)_minmax(125px,0.75fr)_minmax(145px,0.85fr)_minmax(145px,0.85fr)_minmax(115px,0.65fr)_minmax(220px,1.35fr)_minmax(105px,0.55fr)_minmax(120px,0.65fr)] 2xl:items-end";
   const machineLabel = filtersApplied
     ? (selectedMachine?.machine_name || selectedMachine?.plc_ip || "Machine")
     : "Machine";
@@ -1776,6 +1785,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     slugify(reportFilterLabel),
     slugify(reportShiftLabel),
     isGaugeReport ? null : slugify(reportShotResultLabel),
+    searchText ? `search-${slugify(searchText)}` : null,
     fromDate,
     toDate,
   ].filter(Boolean).join("-");
@@ -1791,11 +1801,12 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       limit: REPORT_EXPORT_PAGE_SIZE,
       shift: shiftFilter,
       shotResult: activeResultFilterValue,
+      shotNumber: searchText,
     });
     const exportRows = Array.isArray(response.data?.data) ? response.data.data : [];
     const currentRows = filterFutureRowsForToday(exportRows, fromDate, toDate);
     return sortRowsLatestFirst(currentRows, { preferShotNumber: !selectedMachineIsGauge && !selectedMachineIsLeak });
-  }, [activeResultFilterValue, filtersApplied, fromDate, selectedMachine, selectedMachineIsGauge, selectedMachineIsLeak, shiftFilter, toDate]);
+  }, [activeResultFilterValue, filtersApplied, fromDate, searchText, selectedMachine, selectedMachineIsGauge, selectedMachineIsLeak, shiftFilter, toDate]);
 
   const downloadPdf = async () => {
     setExporting(true);
@@ -2115,6 +2126,26 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                   <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">To</span>
                   <input type="date" value={draftToDate} onChange={handleToDateChange} className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100" />
                 </label>
+                <label className="block">
+                  <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-slate-500">Search</span>
+                  <input
+                    type="search"
+                    value={draftSearchText}
+                    onChange={(event) => setDraftSearchText(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        applyReportFilters();
+                      }
+                    }}
+                    placeholder={searchPlaceholder}
+                    className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                  />
+                </label>
+                <button type="button" onClick={applyReportFilters} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-700 px-4 text-sm font-black text-white shadow-sm transition hover:bg-slate-800 sm:self-end">
+                  <Search className="h-4 w-4" />
+                  Search
+                </button>
                 <button type="button" onClick={applyReportFilters} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-blue-700 sm:self-end">
                   <CheckCircle2 className="h-4 w-4" />
                   Apply
