@@ -917,6 +917,14 @@ function formatClampTonnagePercentAsMn(value) {
   return Number(converted.toFixed(2)).toString();
 }
 
+function getReportDisplayValue(row = {}, key) {
+  const normalizedKey = normalizeColumnKey(key);
+  if (normalizedKey === "clamp_force_pct") {
+    return getRowValue(row, "clamp_tonnage_he_low_pct", "CLAMP TONNAGE(HE.LOW) %", key);
+  }
+  return row[key];
+}
+
 function formatValue(value, key) {
   if (NOT_AVAILABLE_COLUMNS.has(normalizeColumnKey(key))) return "N/A";
   if (value === null || value === undefined || value === "") return "-";
@@ -945,6 +953,9 @@ function formatReportCell(row, key, rowIndex = 0, rowCount = 0, rows = []) {
   if (key === "scan_time") return formatTimeParts24Hour(getRowTimeParts(row));
   if (normalizeColumnKey(key) === "scan_data") {
     return formatValue(row.scan_data || row.part_scan_data || row.part_qr_code || row.part_name, key);
+  }
+  if (normalizeColumnKey(key) === "clamp_force_pct") {
+    return formatValue(getReportDisplayValue(row, key), key);
   }
   // The production day runs from 06:00 to 05:59. For C-shift rows after
   // midnight, display the previous production date.
@@ -996,6 +1007,20 @@ function reportCellClassName(row = {}, key) {
 
 function isHighlightedReportCell(row = {}, key) {
   return Boolean(getReportCellTone(row, key));
+}
+
+function getReportRowKey(row = {}, index = 0) {
+  return String(row.id || row.reading_id || row.recorded_at || row.shot_datetime || row.shot_number || index);
+}
+
+function isReportSelectionColumn(key) {
+  const normalizedKey = normalizeColumnKey(key);
+  return [
+    SERIAL_COLUMN,
+    "shot_number",
+    "scan_data",
+    "part_scan_data",
+  ].includes(normalizedKey);
 }
 
 function reportCellHtmlAttrs(row, key) {
@@ -1372,6 +1397,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [selectedReportRowKey, setSelectedReportRowKey] = useState("");
   const tableScrollRef = useRef(null);
 
   useEffect(() => {
@@ -1679,6 +1705,12 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     })),
     [currentPage, pageSize, reportRows, totalRecords]
   );
+
+  useEffect(() => {
+    if (!selectedReportRowKey) return;
+    const stillVisible = pagedReportRows.some((row, index) => getReportRowKey(row, index) === selectedReportRowKey);
+    if (!stillVisible) setSelectedReportRowKey("");
+  }, [pagedReportRows, selectedReportRowKey]);
 
   useEffect(() => {
     if (reportPage > totalPages) setReportPage(totalPages);
@@ -2162,22 +2194,52 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                 </tr>
               </thead>
               <tbody>
-                {pagedReportRows.map((row, index) => (
-                  <tr key={row.id || `${row.recorded_at}-${index}`} className="border-b border-slate-100 hover:bg-slate-50">
-                    {columns.map((key) => (
-                      <td
-                        key={key}
-                        className={`border-r px-4 py-2.5 text-center align-middle font-semibold leading-tight last:border-r-0 ${
-                          ["part_name", "part_qr_code", "scan_data", "part_scan_data"].includes(normalizeColumnKey(key)) ? "break-all" : ""
-                        } ${
-                          reportCellClassName(row, key)
-                        }`}
-                      >
-                        {formatReportCell(row, key, index, pagedReportRows.length, pagedReportRows)}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
+                {pagedReportRows.map((row, index) => {
+                  const rowKey = getReportRowKey(row, index);
+                  const isSelectedRow = selectedReportRowKey === rowKey;
+                  return (
+                    <tr
+                      key={rowKey}
+                      tabIndex={0}
+                      aria-selected={isSelectedRow}
+                      onClick={() => setSelectedReportRowKey(rowKey)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          setSelectedReportRowKey(rowKey);
+                        }
+                      }}
+                      className={`cursor-pointer border-b border-slate-100 transition focus:outline-none ${
+                        isSelectedRow
+                          ? "bg-sky-50 shadow-[inset_4px_0_0_#0284c7]"
+                          : "hover:bg-slate-50"
+                      }`}
+                    >
+                      {columns.map((key) => {
+                        const keepsOwnHighlight = isHighlightedReportCell(row, key);
+                        const isSelectionColumn = isReportSelectionColumn(key);
+                        return (
+                          <td
+                            key={key}
+                            className={`border-r px-4 py-2.5 text-center align-middle font-semibold leading-tight last:border-r-0 ${
+                              ["part_name", "part_qr_code", "scan_data", "part_scan_data"].includes(normalizeColumnKey(key)) ? "break-all" : ""
+                            } ${
+                              reportCellClassName(row, key)
+                            } ${
+                              isSelectedRow ? "ring-1 ring-inset ring-sky-300" : ""
+                            } ${
+                              isSelectedRow && !keepsOwnHighlight ? "bg-sky-50 text-sky-950" : ""
+                            } ${
+                              isSelectedRow && isSelectionColumn ? "bg-sky-100 font-black text-sky-950" : ""
+                            }`}
+                          >
+                            {formatReportCell(row, key, index, pagedReportRows.length, pagedReportRows)}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
                 {!reportRows.length && !loading && (
                   <tr>
                     <td colSpan={columns.length || 1} className="px-4 py-10 text-center text-sm font-bold text-slate-500">
