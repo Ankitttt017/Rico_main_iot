@@ -22,6 +22,12 @@ const REQUIRED_COLUMNS = {
   app_users: ["id", "username", "role", "password_hash", "permissions_json", "is_active"],
   audit_log: ["id", "action", "performed_by", "timestamp"],
   plc_machine_configs: ["id", "machine_key", "machine_name", "machine_type", "ip_address", "port", "protocol"],
+  plc_machine_config_registers: [
+    "id", "machine_config_id", "machine_key", "machine_name", "machine_type", "ip_address",
+    "parameter_name", "display_label", "device", "string_device", "string_length",
+    "data_type", "scale_factor", "unit", "group_name", "sort_order", "computed_key",
+    "min_value", "max_value", "alarm_enabled", "show_on_monitor", "log_history", "is_active",
+  ],
   PlcCycleReadings: [
     "id", "recorded_at", "created_at", "machine_key", "machine_name", "plc_ip", "plc_port", "part_name",
     "shot_year", "shot_month", "shot_day", "shot_date", "shot_hour", "shot_minute", "shot_second", "shot_datetime",
@@ -68,6 +74,8 @@ const REQUIRED_INDEXES = [
   "IX_PlcCycleReadings_ip_shot_date_number",
   "IX_PlcConnectionEvents_started_at_desc",
   "IX_plc_machine_configs_ip_address",
+  "IX_plc_machine_config_registers_machine_active",
+  "IX_plc_machine_config_registers_ip",
   "IX_plc_machine_readings_machine_recorded_desc",
   "IX_plc_machine_reading_values_reading_parameter",
   "IX_Leaktest_ip_cycle_end_desc",

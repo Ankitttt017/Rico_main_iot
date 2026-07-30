@@ -1215,6 +1215,61 @@ IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
   CREATE INDEX IX_plc_machine_configs_ip_address
     ON dbo.plc_machine_configs (ip_address);
 
+IF OBJECT_ID(N'dbo.plc_machine_config_registers', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.plc_machine_config_registers (
+    id BIGINT IDENTITY(1,1) NOT NULL CONSTRAINT PK_plc_machine_config_registers PRIMARY KEY,
+    machine_config_id INT NOT NULL,
+    machine_id BIGINT NULL,
+    machine_key NVARCHAR(80) NULL,
+    machine_name NVARCHAR(160) NULL,
+    machine_type NVARCHAR(40) NULL,
+    ip_address VARCHAR(50) NULL,
+    parameter_name NVARCHAR(200) NOT NULL,
+    display_label NVARCHAR(200) NULL,
+    device NVARCHAR(80) NULL,
+    string_device NVARCHAR(80) NULL,
+    string_length INT NULL,
+    data_type NVARCHAR(40) NOT NULL CONSTRAINT DF_plc_machine_config_registers_data_type DEFAULT N'int',
+    scale_factor DECIMAL(18,6) NOT NULL CONSTRAINT DF_plc_machine_config_registers_scale DEFAULT 1,
+    unit NVARCHAR(40) NULL,
+    group_name NVARCHAR(80) NULL,
+    sort_order INT NOT NULL CONSTRAINT DF_plc_machine_config_registers_sort DEFAULT 0,
+    computed_key NVARCHAR(80) NULL,
+    min_value DECIMAL(18,4) NULL,
+    max_value DECIMAL(18,4) NULL,
+    warning_min DECIMAL(18,4) NULL,
+    warning_max DECIMAL(18,4) NULL,
+    alarm_enabled BIT NOT NULL CONSTRAINT DF_plc_machine_config_registers_alarm DEFAULT 0,
+    show_on_monitor BIT NOT NULL CONSTRAINT DF_plc_machine_config_registers_monitor DEFAULT 1,
+    show_to_operator BIT NOT NULL CONSTRAINT DF_plc_machine_config_registers_operator DEFAULT 0,
+    log_history BIT NOT NULL CONSTRAINT DF_plc_machine_config_registers_history DEFAULT 1,
+    is_active BIT NOT NULL CONSTRAINT DF_plc_machine_config_registers_active DEFAULT 1,
+    created_at DATETIME2(3) NOT NULL CONSTRAINT DF_plc_machine_config_registers_created DEFAULT SYSUTCDATETIME(),
+    updated_at DATETIME2(3) NOT NULL CONSTRAINT DF_plc_machine_config_registers_updated DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT FK_plc_machine_config_registers_config
+      FOREIGN KEY (machine_config_id) REFERENCES dbo.plc_machine_configs(id) ON DELETE CASCADE
+  );
+END;
+
+IF OBJECT_ID(N'dbo.plc_machine_config_registers', N'U') IS NOT NULL
+   AND NOT EXISTS (
+     SELECT 1 FROM sys.indexes
+     WHERE [name] = N'IX_plc_machine_config_registers_machine_active'
+       AND object_id = OBJECT_ID(N'dbo.plc_machine_config_registers')
+   )
+  CREATE INDEX IX_plc_machine_config_registers_machine_active
+    ON dbo.plc_machine_config_registers (machine_config_id, is_active, sort_order, id);
+
+IF OBJECT_ID(N'dbo.plc_machine_config_registers', N'U') IS NOT NULL
+   AND NOT EXISTS (
+     SELECT 1 FROM sys.indexes
+     WHERE [name] = N'IX_plc_machine_config_registers_ip'
+       AND object_id = OBJECT_ID(N'dbo.plc_machine_config_registers')
+   )
+  CREATE INDEX IX_plc_machine_config_registers_ip
+    ON dbo.plc_machine_config_registers (ip_address, is_active, sort_order, id);
+
 IF OBJECT_ID(N'dbo.plc_registers', N'U') IS NULL
 BEGIN
   CREATE TABLE dbo.plc_registers (
