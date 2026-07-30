@@ -153,6 +153,32 @@ function normalizeRegistersForMachineType(registers = [], type = "generic") {
   return registers;
 }
 
+function normalizeRegisterRow(row = {}) {
+  return {
+    id: `${cleanInt(row.machine_config_id, 0)}-${cleanInt(row.sort_order, 0)}-${cleanInt(row.id, 0)}`,
+    name: cleanText(row.parameter_name),
+    display_label: cleanText(row.display_label || row.parameter_name),
+    device: normalizeRegisterAddress(row.device),
+    stringDevice: normalizeRegisterAddress(row.string_device),
+    stringLength: cleanInt(row.string_length, ""),
+    type: normalizeRegisterType(row.data_type),
+    scale: cleanNumber(row.scale_factor, 1),
+    computed: cleanText(row.computed_key) || "",
+    group_name: cleanText(row.group_name) || "",
+    sort_order: cleanInt(row.sort_order, 0),
+    enabled: row.is_active === undefined ? true : Boolean(row.is_active),
+    min: cleanNumber(row.min_value),
+    max: cleanNumber(row.max_value),
+    warning_min: cleanNumber(row.warning_min),
+    warning_max: cleanNumber(row.warning_max),
+    unit: cleanText(row.unit) || "",
+    show_on_monitor: row.show_on_monitor === undefined ? true : Boolean(row.show_on_monitor),
+    show_to_operator: row.show_to_operator === undefined ? false : Boolean(row.show_to_operator),
+    log_history: row.log_history === undefined ? true : Boolean(row.log_history),
+    alarm_enabled: row.alarm_enabled === undefined ? false : Boolean(row.alarm_enabled),
+  };
+}
+
 function inferMachineType(input = {}) {
   const explicit = normalizeMachineType(input.machine_type);
   return explicit || "generic";
@@ -237,6 +263,63 @@ async function ensureSchema() {
             ON dbo.plc_machine_configs (ip_address);
       `);
       await db.run(`
+        IF OBJECT_ID(N'dbo.plc_machine_config_registers', N'U') IS NULL
+        BEGIN
+          CREATE TABLE dbo.plc_machine_config_registers (
+            id BIGINT IDENTITY(1,1) NOT NULL CONSTRAINT PK_plc_machine_config_registers PRIMARY KEY,
+            machine_config_id INT NOT NULL,
+            machine_id BIGINT NULL,
+            machine_key NVARCHAR(80) NULL,
+            machine_name NVARCHAR(160) NULL,
+            machine_type NVARCHAR(40) NULL,
+            ip_address VARCHAR(50) NULL,
+            parameter_name NVARCHAR(200) NOT NULL,
+            display_label NVARCHAR(200) NULL,
+            device NVARCHAR(80) NULL,
+            string_device NVARCHAR(80) NULL,
+            string_length INT NULL,
+            data_type NVARCHAR(40) NOT NULL CONSTRAINT DF_plc_machine_config_registers_data_type DEFAULT N'int',
+            scale_factor DECIMAL(18,6) NOT NULL CONSTRAINT DF_plc_machine_config_registers_scale DEFAULT 1,
+            unit NVARCHAR(40) NULL,
+            group_name NVARCHAR(80) NULL,
+            sort_order INT NOT NULL CONSTRAINT DF_plc_machine_config_registers_sort DEFAULT 0,
+            computed_key NVARCHAR(80) NULL,
+            min_value DECIMAL(18,4) NULL,
+            max_value DECIMAL(18,4) NULL,
+            warning_min DECIMAL(18,4) NULL,
+            warning_max DECIMAL(18,4) NULL,
+            alarm_enabled BIT NOT NULL CONSTRAINT DF_plc_machine_config_registers_alarm DEFAULT 0,
+            show_on_monitor BIT NOT NULL CONSTRAINT DF_plc_machine_config_registers_monitor DEFAULT 1,
+            show_to_operator BIT NOT NULL CONSTRAINT DF_plc_machine_config_registers_operator DEFAULT 0,
+            log_history BIT NOT NULL CONSTRAINT DF_plc_machine_config_registers_history DEFAULT 1,
+            is_active BIT NOT NULL CONSTRAINT DF_plc_machine_config_registers_active DEFAULT 1,
+            created_at DATETIME2(3) NOT NULL CONSTRAINT DF_plc_machine_config_registers_created DEFAULT SYSUTCDATETIME(),
+            updated_at DATETIME2(3) NOT NULL CONSTRAINT DF_plc_machine_config_registers_updated DEFAULT SYSUTCDATETIME(),
+            CONSTRAINT FK_plc_machine_config_registers_config
+              FOREIGN KEY (machine_config_id) REFERENCES dbo.plc_machine_configs(id) ON DELETE CASCADE
+          );
+        END;
+      `);
+      await db.run(`
+        IF OBJECT_ID(N'dbo.plc_machine_config_registers', N'U') IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM sys.indexes
+             WHERE [name] = N'IX_plc_machine_config_registers_machine_active'
+               AND object_id = OBJECT_ID(N'dbo.plc_machine_config_registers')
+           )
+          CREATE INDEX IX_plc_machine_config_registers_machine_active
+            ON dbo.plc_machine_config_registers (machine_config_id, is_active, sort_order, id);
+
+        IF OBJECT_ID(N'dbo.plc_machine_config_registers', N'U') IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM sys.indexes
+             WHERE [name] = N'IX_plc_machine_config_registers_ip'
+               AND object_id = OBJECT_ID(N'dbo.plc_machine_config_registers')
+           )
+          CREATE INDEX IX_plc_machine_config_registers_ip
+            ON dbo.plc_machine_config_registers (ip_address, is_active, sort_order, id);
+      `);
+      await db.run(`
         IF OBJECT_ID(N'dbo.plc_machine_readings', N'U') IS NULL
         BEGIN
           CREATE TABLE dbo.plc_machine_readings (
@@ -300,11 +383,15 @@ async function ensureSchema() {
 }
 
 function normalizeMachine(row = {}) {
-  let registerConfig = null;
-  try {
-    registerConfig = row.register_config_json ? JSON.parse(row.register_config_json) : null;
-  } catch {
-    registerConfig = null;
+  let registerConfig = Array.isArray(row.register_config_rows) && row.register_config_rows.length
+    ? row.register_config_rows
+    : null;
+  if (!registerConfig) {
+    try {
+      registerConfig = row.register_config_json ? JSON.parse(row.register_config_json) : null;
+    } catch {
+      registerConfig = null;
+    }
   }
   const machineType = inferMachineType({ ...row, register_config: registerConfig });
   const normalizedRegisterConfig = normalizeRegistersForMachineType(registerConfig, machineType);
@@ -347,12 +434,15 @@ function normalizeRegisters(input) {
       return {
         id: cleanText(item.id) || `${cleanText(item.name) || "register"}-${index}`,
         name: cleanText(item.name),
+        display_label: cleanText(item.display_label || item.displayLabel || item.label),
         device: type === "text" ? "" : device,
         stringDevice: textDevice,
         stringLength: cleanInt(item.stringLength ?? item.string_length, ""),
         type,
         scale: item.scale === "" || item.scale === null || item.scale === undefined ? 1 : Number(item.scale),
         computed: cleanText(item.computed) || "",
+        group_name: cleanText(item.group_name || item.groupName || item.group || item.category || item.section || item.tab),
+        sort_order: cleanInt(item.sort_order ?? item.sortOrder, index + 1),
         enabled: cleanBool(item.enabled, true),
         min: cleanNumber(item.min ?? item.minimum),
         max: cleanNumber(item.max ?? item.maximum),
@@ -374,6 +464,100 @@ async function tableExists(tableName) {
     [tableName]
   );
   return Number(rows[0]?.table_exists || 0) === 1;
+}
+
+async function syncMachineConfigRegisters(machineConfigId, payload = {}, registers = []) {
+  const id = cleanInt(machineConfigId);
+  if (!id || !Array.isArray(registers)) return;
+  if (!(await tableExists("dbo.plc_machine_config_registers"))) return;
+
+  await withDeadlockRetry(() => db.run(
+    "DELETE FROM dbo.plc_machine_config_registers WHERE machine_config_id = ?",
+    [id]
+  ));
+
+  for (const [index, register] of registers.entries()) {
+    await withDeadlockRetry(() => db.run(`
+      INSERT INTO dbo.plc_machine_config_registers
+        (machine_config_id, machine_id, machine_key, machine_name, machine_type, ip_address,
+         parameter_name, display_label, device, string_device, string_length, data_type,
+         scale_factor, unit, group_name, sort_order, computed_key,
+         min_value, max_value, warning_min, warning_max, alarm_enabled,
+         show_on_monitor, show_to_operator, log_history, is_active)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      id,
+      payload.machine_id,
+      payload.machine_key,
+      payload.machine_name,
+      payload.machine_type,
+      payload.ip_address,
+      register.name,
+      register.display_label || register.name,
+      register.device || "",
+      register.stringDevice || register.string_device || "",
+      cleanInt(register.stringLength ?? register.string_length),
+      register.type || "int",
+      register.scale === "" || register.scale === null || register.scale === undefined ? 1 : Number(register.scale),
+      register.unit || "",
+      register.group_name || register.group || "",
+      cleanInt(register.sort_order ?? register.sortOrder, index + 1),
+      register.computed || "",
+      register.min ?? null,
+      register.max ?? null,
+      register.warning_min ?? null,
+      register.warning_max ?? null,
+      Number(Boolean(register.alarm_enabled ?? register.alarmEnabled)),
+      register.show_on_monitor === undefined ? 1 : Number(Boolean(register.show_on_monitor)),
+      register.show_to_operator === undefined ? 0 : Number(Boolean(register.show_to_operator)),
+      register.log_history === undefined ? 1 : Number(Boolean(register.log_history)),
+      register.enabled === undefined ? 1 : Number(Boolean(register.enabled)),
+    ]));
+  }
+}
+
+async function getRegisterConfigsByMachineIds(machineConfigIds = []) {
+  const ids = [...new Set(machineConfigIds.map((id) => cleanInt(id)).filter(Boolean))];
+  const grouped = new Map();
+  if (!ids.length || !(await tableExists("dbo.plc_machine_config_registers"))) return grouped;
+
+  const placeholders = ids.map(() => "?").join(", ");
+  const { rows } = await db.query(`
+    SELECT
+      id,
+      machine_config_id,
+      parameter_name,
+      display_label,
+      device,
+      string_device,
+      string_length,
+      data_type,
+      scale_factor,
+      unit,
+      group_name,
+      sort_order,
+      computed_key,
+      min_value,
+      max_value,
+      warning_min,
+      warning_max,
+      alarm_enabled,
+      show_on_monitor,
+      show_to_operator,
+      log_history,
+      is_active
+    FROM dbo.plc_machine_config_registers
+    WHERE machine_config_id IN (${placeholders})
+      AND is_active = 1
+    ORDER BY machine_config_id, sort_order, id
+  `, ids);
+
+  rows.forEach((row) => {
+    const machineConfigId = cleanInt(row.machine_config_id);
+    if (!grouped.has(machineConfigId)) grouped.set(machineConfigId, []);
+    grouped.get(machineConfigId).push(normalizeRegisterRow(row));
+  });
+  return grouped;
 }
 
 async function syncMachineNameReferences({ ip, machineKey, machineName }) {
@@ -515,6 +699,9 @@ async function saveMachineRecord(input = {}) {
         WHERE id = ?
       `, [payload.machine_name, payload.ip_address, String(payload.port), payload.protocol, payload.machine_id]));
     }
+    if (hasRegisterConfigInput) {
+      await syncMachineConfigRegisters(id, payload, normalizedRegisterConfig || []);
+    }
     await syncMachineNameReferences({
       ip: payload.ip_address,
       machineKey: payload.machine_key,
@@ -543,6 +730,7 @@ async function saveMachineRecord(input = {}) {
     payload.register_config_json,
     payload.notes,
   ]));
+  const insertedId = result.rows[0]?.id;
   if (payload.machine_id) {
     await withDeadlockRetry(() => db.run(`
       UPDATE dbo.iot_machines
@@ -550,12 +738,15 @@ async function saveMachineRecord(input = {}) {
       WHERE id = ?
     `, [payload.machine_name, payload.ip_address, String(payload.port), payload.protocol, payload.machine_id]));
   }
+  if (hasRegisterConfigInput) {
+    await syncMachineConfigRegisters(insertedId, payload, normalizedRegisterConfig || []);
+  }
   await syncMachineNameReferences({
     ip: payload.ip_address,
     machineKey: payload.machine_key,
     machineName: payload.machine_name,
   });
-  return result.rows[0]?.id;
+  return insertedId;
 }
 
 async function listMachines(_req, res) {
@@ -585,9 +776,13 @@ async function listMachines(_req, res) {
       LEFT JOIN dbo.iot_machines m ON m.id = pc.machine_id
       ORDER BY sequence_no, machine_name
     `);
+    const registerConfigs = await getRegisterConfigsByMachineIds(rows.map((row) => row.id));
     res.json({
       success: true,
-      data: rows.map(normalizeMachine),
+      data: rows.map((row) => normalizeMachine({
+        ...row,
+        register_config_rows: registerConfigs.get(cleanInt(row.id)) || [],
+      })),
       default_registers: registersForType("generic"),
       default_registers_by_type: {
         generic: registersForType("generic"),

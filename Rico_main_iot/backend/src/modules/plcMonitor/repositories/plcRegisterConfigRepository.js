@@ -80,6 +80,32 @@ function normalizePlcRegister(row = {}, index = 0) {
   }, index);
 }
 
+function normalizeMachineConfigRegister(row = {}, index = 0) {
+  return normalizeRegister({
+    id: row.id ? `machine-config-register-${row.id}` : `machine-config-register-${index + 1}`,
+    name: row.parameter_name || row.display_label,
+    label: row.display_label,
+    device: row.device,
+    stringDevice: row.string_device,
+    stringLength: row.string_length || "",
+    type: row.data_type || "int",
+    scale: row.scale_factor,
+    unit: row.unit || "",
+    group_name: row.group_name || "",
+    sort_order: row.sort_order,
+    computed: row.computed_key || "",
+    enabled: row.is_active === undefined ? true : Boolean(row.is_active),
+    min: row.min_value ?? null,
+    max: row.max_value ?? null,
+    warning_min: row.warning_min ?? null,
+    warning_max: row.warning_max ?? null,
+    show_on_monitor: row.show_on_monitor === undefined ? true : Boolean(row.show_on_monitor),
+    show_to_operator: row.show_to_operator === undefined ? false : Boolean(row.show_to_operator),
+    log_history: row.log_history === undefined ? true : Boolean(row.log_history),
+    alarm_enabled: row.alarm_enabled === undefined ? false : Boolean(row.alarm_enabled),
+  }, index);
+}
+
 function registerDedupKey(register = {}) {
   const name = String(register.name || "").trim().toLowerCase();
   if (name) return `name:${name}`;
@@ -143,13 +169,17 @@ function profileKeysForMachine(row = {}) {
   return Array.from(new Set(keys.filter(Boolean)));
 }
 
-function normalizeMachineRegisterConfig(row = {}, profileRegistersByKey = new Map()) {
-  const configuredRegisters = parseRegisterConfig(row.register_config_json)
+function normalizeMachineRegisterConfig(row = {}, profileRegistersByKey = new Map(), machineConfigRegisters = []) {
+  const tableRegisters = Array.isArray(machineConfigRegisters)
+    ? machineConfigRegisters.map((register, index) => normalizeMachineConfigRegister(register, index))
+      .filter((register) => register.enabled !== false)
+    : [];
+  const jsonRegisters = parseRegisterConfig(row.register_config_json)
     .map((register, index) => normalizeRegister(register, index))
     .filter((register) => register.enabled !== false);
   const profileRegisters = profileKeysForMachine(row)
     .flatMap((key) => profileRegistersByKey.get(String(key).trim().toUpperCase()) || []);
-  const registers = mergeRegisters(configuredRegisters, profileRegisters);
+  const registers = tableRegisters.length ? tableRegisters : mergeRegisters(jsonRegisters, profileRegisters);
   const finalRegisters = String(row.machine_type || "").trim().toLowerCase() === "ube" && !hasUbePartNameRegister(registers)
     ? [normalizeRegister(UBE_PART_NAME_REGISTER), ...registers]
     : registers;
@@ -181,6 +211,13 @@ async function plcRegistersTableExists() {
   return Number(rows[0]?.table_exists || 0) === 1;
 }
 
+async function plcMachineConfigRegistersTableExists() {
+  const { rows } = await db.query(`
+    SELECT CASE WHEN OBJECT_ID('dbo.plc_machine_config_registers', 'U') IS NULL THEN 0 ELSE 1 END AS table_exists
+  `);
+  return Number(rows[0]?.table_exists || 0) === 1;
+}
+
 async function loadProfileRegistersByKey() {
   if (!(await plcRegistersTableExists())) return new Map();
 
@@ -204,6 +241,34 @@ async function loadProfileRegistersByKey() {
   return grouped;
 }
 
+async function loadMachineConfigRegistersByConfigIds(machineConfigIds = []) {
+  const ids = [...new Set(machineConfigIds.map((id) => Number.parseInt(id, 10)).filter(Number.isFinite))];
+  const grouped = new Map();
+  if (!ids.length || !(await plcMachineConfigRegistersTableExists())) return grouped;
+
+  const placeholders = ids.map(() => "?").join(", ");
+  const { rows } = await db.query(`
+    SELECT id, machine_config_id, parameter_name, display_label, device,
+           string_device, string_length, data_type, scale_factor, unit,
+           group_name, sort_order, computed_key, min_value, max_value,
+           warning_min, warning_max, alarm_enabled, show_on_monitor,
+           show_to_operator, log_history, is_active
+    FROM dbo.plc_machine_config_registers WITH (NOLOCK)
+    WHERE machine_config_id IN (${placeholders})
+      AND is_active = 1
+    ORDER BY machine_config_id, sort_order, id;
+  `, ids);
+
+  for (const row of rows) {
+    const machineConfigId = Number.parseInt(row.machine_config_id, 10);
+    if (!Number.isFinite(machineConfigId)) continue;
+    const list = grouped.get(machineConfigId) || [];
+    list.push(row);
+    grouped.set(machineConfigId, list);
+  }
+  return grouped;
+}
+
 async function loadActiveMachineRegisterConfigs() {
   if (!(await plcMachineConfigTableExists())) return [];
   const profileRegistersByKey = await loadProfileRegistersByKey();
@@ -219,7 +284,12 @@ async function loadActiveMachineRegisterConfigs() {
     ORDER BY pc.sequence_no, pc.machine_name;
   `);
 
-  return rows.map((row) => normalizeMachineRegisterConfig(row, profileRegistersByKey));
+  const machineRegistersByConfigId = await loadMachineConfigRegistersByConfigIds(rows.map((row) => row.id));
+  return rows.map((row) => normalizeMachineRegisterConfig(
+    row,
+    profileRegistersByKey,
+    machineRegistersByConfigId.get(Number.parseInt(row.id, 10)) || []
+  ));
 }
 
 async function loadRegisterConfigByMachineId(machineId) {
@@ -237,7 +307,13 @@ async function loadRegisterConfigByMachineId(machineId) {
     ORDER BY pc.sequence_no, pc.machine_name;
   `, [machineId]);
 
-  return rows[0] ? normalizeMachineRegisterConfig(rows[0], profileRegistersByKey) : null;
+  if (!rows[0]) return null;
+  const machineRegistersByConfigId = await loadMachineConfigRegistersByConfigIds([rows[0].id]);
+  return normalizeMachineRegisterConfig(
+    rows[0],
+    profileRegistersByKey,
+    machineRegistersByConfigId.get(Number.parseInt(rows[0].id, 10)) || []
+  );
 }
 
 async function loadRegisterConfigByMachineKey(machineKey) {
@@ -257,7 +333,13 @@ async function loadRegisterConfigByMachineKey(machineKey) {
     ORDER BY pc.sequence_no, pc.machine_name;
   `, [key, key]);
 
-  return rows[0] ? normalizeMachineRegisterConfig(rows[0], profileRegistersByKey) : null;
+  if (!rows[0]) return null;
+  const machineRegistersByConfigId = await loadMachineConfigRegistersByConfigIds([rows[0].id]);
+  return normalizeMachineRegisterConfig(
+    rows[0],
+    profileRegistersByKey,
+    machineRegistersByConfigId.get(Number.parseInt(rows[0].id, 10)) || []
+  );
 }
 
 module.exports = {
