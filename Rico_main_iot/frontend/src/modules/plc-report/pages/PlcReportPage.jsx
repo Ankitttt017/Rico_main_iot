@@ -1531,6 +1531,16 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     setDraftToDate(event.target.value);
   }, []);
 
+  const handleSearchTextChange = useCallback((event) => {
+    const nextSearchText = event.target.value;
+    setDraftSearchText(nextSearchText);
+    if (!nextSearchText.trim() && searchText) {
+      setSearchText("");
+      setReportPage(1);
+      setPagination({ page: 1, pageSize: REPORT_RESULT_LIMIT, total: 0, totalPages: 1 });
+    }
+  }, [searchText]);
+
   const applyReportFilters = useCallback(() => {
     const selectedDraftMachine = draftMachineOptions.find((machine) => getMachineId(machine) === draftMachineId);
     const isDraftGauge = isGaugeMachine(selectedDraftMachine);
@@ -2131,7 +2141,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                   <input
                     type="search"
                     value={draftSearchText}
-                    onChange={(event) => setDraftSearchText(event.target.value)}
+                    onChange={handleSearchTextChange}
                     onKeyDown={(event) => {
                       if (event.key === "Enter") {
                         event.preventDefault();
