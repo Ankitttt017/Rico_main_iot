@@ -436,6 +436,15 @@ export function normalizeLeakResult(value) {
 
   if (["OK", "O", "PASS", "PASSED", "GOOD", "G", "Y", "YES", "TRUE", "1"].includes(normalized)) return "OK";
   if (["NG", "N", "FAIL", "FAILED", "BAD", "B", "NO", "FALSE", "0"].includes(normalized)) return "NG";
+  const packedWord = Number(raw);
+  if (Number.isInteger(packedWord) && packedWord > 255 && packedWord <= 65535) {
+    const low = packedWord & 0xff;
+    const high = (packedWord >> 8) & 0xff;
+    const lowHigh = String.fromCharCode(low, high).trim().toUpperCase();
+    const highLow = String.fromCharCode(high, low).trim().toUpperCase();
+    if (lowHigh === "OK" || highLow === "OK") return "OK";
+    if (lowHigh === "NG" || highLow === "NG") return "NG";
+  }
   return raw;
 }
 

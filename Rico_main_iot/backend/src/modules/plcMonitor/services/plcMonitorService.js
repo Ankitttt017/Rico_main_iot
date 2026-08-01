@@ -582,7 +582,47 @@ function normalizeLeakResult(value) {
 
   if (["OK", "O", "PASS", "PASSED", "GOOD", "G", "Y", "YES", "TRUE", "1"].includes(normalized)) return "OK";
   if (["NG", "N", "FAIL", "FAILED", "BAD", "B", "NO", "FALSE", "0"].includes(normalized)) return "NG";
+  const packedWord = Number(raw);
+  if (Number.isInteger(packedWord) && packedWord > 255 && packedWord <= 65535) {
+    const low = packedWord & 0xff;
+    const high = (packedWord >> 8) & 0xff;
+    const lowHigh = String.fromCharCode(low, high).trim().toUpperCase();
+    const highLow = String.fromCharCode(high, low).trim().toUpperCase();
+    if (lowHigh === "OK" || highLow === "OK") return "OK";
+    if (lowHigh === "NG" || highLow === "NG") return "NG";
+  }
   return raw;
+}
+
+function getReadingAliasValue(readings = {}, names = []) {
+  for (const name of names) {
+    const value = unwrapReadingValue(readings[name]);
+    if (value !== null && value !== undefined && String(value).trim() !== "") return value;
+  }
+  const normalizedTargets = new Set(names.map(normalizeRegisterName));
+  for (const [name, reading] of Object.entries(readings || {})) {
+    if (!normalizedTargets.has(normalizeRegisterName(name))) continue;
+    const value = unwrapReadingValue(reading);
+    if (value !== null && value !== undefined && String(value).trim() !== "") return value;
+  }
+  return null;
+}
+
+function isTruthyPlcValue(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return ["1", "true", "yes", "on", "auto"].includes(normalized);
+}
+
+function normalizeLeakRunningMode(readings = {}) {
+  const autoValue = getReadingAliasValue(readings, ["auto_bit", "auto", "AUTO", "auto_mode", "running_mode"]);
+  if (autoValue !== null) {
+    const normalized = String(autoValue).trim().toLowerCase();
+    if (["auto", "2"].includes(normalized) || isTruthyPlcValue(autoValue)) return "AUTO";
+    if (["manual", "0"].includes(normalized)) return "MANUAL";
+  }
+  const manualValue = getReadingAliasValue(readings, ["manual", "MANUAL", "manual_mode"]);
+  if (manualValue !== null && isTruthyPlcValue(manualValue)) return "MANUAL";
+  return "MANUAL";
 }
 
 function normalizeLeakStatus(status, result) {
@@ -942,6 +982,8 @@ function formatDbRowForClient(row = {}) {
   if (Object.prototype.hasOwnProperty.call(next, "result")) {
     next.result = normalizeLeakResult(next.result) || next.result;
   }
+  const runningMode = normalizeLeakRunningMode(next);
+  if (runningMode) next.running_mode = runningMode;
   if (Object.prototype.hasOwnProperty.call(next, "status")) {
     next.status = normalizeLeakStatus(next.status, next.result);
   }
@@ -2483,7 +2525,7 @@ async function saveToDBUnlocked(machine, partName, readings) {
 async function saveLeakTestToDB(machine, partName, readings) {
   const recordedAtDate = readings.cycle_end_time ? new Date(readings.cycle_end_time) : new Date();
   const recordedAt = systemDateTimeString(recordedAtDate);
-  const runningMode = Number(readings.auto_bit) === 1 ? "AUTO" : "MANUAL";
+  const runningMode = normalizeLeakRunningMode(readings);
   const result = normalizeLeakResult(readings.result);
   const status = result || null;
   const partQrCode = partName || readings.part_qr_code || readings.scan_data || null;
@@ -3358,7 +3400,7 @@ function startPlcMonitor(io) {
     if (liveOnly) {
       readings.cycle_time = currentState.cycleTime ?? null;
     }
-    readings.running_mode = Number(readings.auto_bit) === 1 ? "Auto" : "Manual";
+    readings.running_mode = normalizeLeakRunningMode(readings);
 
     const payload = {
       machine: machine.name,
