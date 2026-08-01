@@ -48,7 +48,7 @@ const MachineCard = ({ machine, division, line, plcConfig, onEdit, onToggle, onD
   return (
     <article
       onClick={() => needsMasterLink ? onEdit?.(machine) : navigate(`/machine/${machine.id}`)}
-      className="group cursor-pointer overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-teal-300 hover:shadow-lg hover:shadow-slate-200/80"
+      className="group min-w-0 cursor-pointer overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-teal-300 hover:shadow-lg hover:shadow-slate-200/80"
     >
       <div className="flex h-28 items-center justify-center bg-[linear-gradient(145deg,_#f8fafc_0%,_#eaf2f1_100%)] px-3 pt-3">
         <MachineSVG />
@@ -68,47 +68,49 @@ const MachineCard = ({ machine, division, line, plcConfig, onEdit, onToggle, onD
             Tags: {registerCount}
           </span>
         </div>
-        <div className="mt-3 flex items-center justify-between gap-2">
-          <span className={`text-[9px] font-semibold px-2 py-0.5 rounded-full ${needsMasterLink || outsideCurrentPlant ? "bg-amber-100 text-amber-700" : badge.bg}`}>
-            {needsMasterLink ? "Needs line link" : outsideCurrentPlant ? "PLC linked" : badge.label}
-          </span>
-          <div className="flex items-center gap-1">
-            {!needsMasterLink && (
+        <div className="mt-3 space-y-2">
+          <div className="flex min-w-0 items-center justify-between gap-1.5">
+            <span className={`min-w-0 flex-1 truncate rounded-full px-2 py-1 text-[9px] font-semibold ${needsMasterLink || outsideCurrentPlant ? "bg-amber-100 text-amber-700" : badge.bg}`}>
+              {needsMasterLink ? "Needs line link" : outsideCurrentPlant ? "PLC linked" : badge.label}
+            </span>
+            <div className="flex shrink-0 items-center gap-1">
+              {!needsMasterLink && (
+                <button
+                  type="button"
+                  title={isActive ? "Disable machine" : "Enable machine"}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onToggle?.(machine);
+                  }}
+                  className={`flex h-7 w-7 items-center justify-center rounded-md border text-[10px] font-bold ${isActive ? "border-amber-200 text-amber-700 hover:bg-amber-50" : "border-emerald-200 text-emerald-700 hover:bg-emerald-50"}`}
+                >
+                  <Power className="h-3.5 w-3.5" />
+                </button>
+              )}
               <button
                 type="button"
-                title={isActive ? "Disable machine" : "Enable machine"}
+                title="Delete machine"
                 onClick={(event) => {
                   event.stopPropagation();
-                  onToggle?.(machine);
+                  onDelete?.(machine);
                 }}
-                className={`rounded-md border px-1.5 py-1 text-[10px] font-bold ${isActive ? "border-amber-200 text-amber-700 hover:bg-amber-50" : "border-emerald-200 text-emerald-700 hover:bg-emerald-50"}`}
+                className="flex h-7 w-7 items-center justify-center rounded-md border border-red-200 text-[10px] font-bold text-red-700 hover:bg-red-50"
               >
-                <Power className="h-3 w-3" />
+                <Trash2 className="h-3.5 w-3.5" />
               </button>
-            )}
-            <button
-              type="button"
-              title="Delete machine"
-              onClick={(event) => {
-                event.stopPropagation();
-                onDelete?.(machine);
-              }}
-              className="rounded-md border border-red-200 px-1.5 py-1 text-[10px] font-bold text-red-700 hover:bg-red-50"
-            >
-              <Trash2 className="h-3 w-3" />
-            </button>
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                onEdit?.(machine);
-              }}
-              className="rounded-md border border-slate-200 px-2 py-1 text-[10px] font-bold text-slate-500 hover:border-teal-300 hover:text-teal-700"
-            >
-              PLC / Tags
-            </button>
+            </div>
           </div>
-        </div>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onEdit?.(machine);
+            }}
+            className="flex h-8 w-full items-center justify-center rounded-md border border-slate-200 px-2 text-[10px] font-bold text-slate-500 hover:border-teal-300 hover:text-teal-700"
+          >
+            PLC / Tags
+          </button>
+          </div>
       </div>
     </article>
   );
