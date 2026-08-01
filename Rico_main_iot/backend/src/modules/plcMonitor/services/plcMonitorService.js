@@ -614,7 +614,7 @@ function isTruthyPlcValue(value) {
 }
 
 function normalizeLeakRunningMode(readings = {}) {
-  const autoValue = getReadingAliasValue(readings, ["auto_bit", "auto", "AUTO", "auto_mode", "running_mode"]);
+  const autoValue = getReadingAliasValue(readings, ["auto_bit", "auto", "AUTO", "auto_mode"]);
   if (autoValue !== null) {
     const normalized = String(autoValue).trim().toLowerCase();
     if (["auto", "2"].includes(normalized) || isTruthyPlcValue(autoValue)) return "AUTO";
@@ -622,6 +622,11 @@ function normalizeLeakRunningMode(readings = {}) {
   }
   const manualValue = getReadingAliasValue(readings, ["manual", "MANUAL", "manual_mode"]);
   if (manualValue !== null && isTruthyPlcValue(manualValue)) return "MANUAL";
+  if (manualValue !== null && !isTruthyPlcValue(manualValue)) return "AUTO";
+  const explicitMode = getReadingAliasValue(readings, ["running_mode", "Running_Mode", "Running Mode"]);
+  const normalizedMode = String(explicitMode ?? "").trim().toLowerCase();
+  if (["auto", "1", "2"].includes(normalizedMode)) return "AUTO";
+  if (["manual", "0"].includes(normalizedMode)) return "MANUAL";
   return "MANUAL";
 }
 

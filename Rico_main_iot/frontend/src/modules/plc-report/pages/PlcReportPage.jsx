@@ -923,10 +923,18 @@ function getReportDisplayValue(row = {}, key) {
     return getRowValue(row, "clamp_tonnage_he_low_pct", "CLAMP TONNAGE(HE.LOW) %", key);
   }
   if (normalizedKey === "running_mode") {
-    const autoValue = getRowValue(row, "auto_bit", "AUTO", "Auto", "auto", "running_mode", "Running Mode");
+    const autoValue = getRowValue(row, "auto_bit", "AUTO", "Auto", "auto");
     const normalizedAuto = String(autoValue ?? "").trim().toLowerCase();
     if (["1", "true", "yes", "on", "auto", "2"].includes(normalizedAuto)) return "Auto";
     if (["0", "manual"].includes(normalizedAuto)) return "Manual";
+    const manualValue = getRowValue(row, "manual", "MANUAL", "Manual", "manual_mode");
+    const normalizedManual = String(manualValue ?? "").trim().toLowerCase();
+    if (["1", "true", "yes", "on", "manual"].includes(normalizedManual)) return "Manual";
+    if (["0", "false", "no", "off"].includes(normalizedManual)) return "Auto";
+    const modeValue = getRowValue(row, "running_mode", "Running Mode");
+    const normalizedMode = String(modeValue ?? "").trim().toLowerCase();
+    if (["auto", "1", "2"].includes(normalizedMode)) return "Auto";
+    if (["manual", "0"].includes(normalizedMode)) return "Manual";
   }
   return row[key];
 }
