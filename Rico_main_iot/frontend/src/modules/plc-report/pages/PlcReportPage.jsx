@@ -922,6 +922,12 @@ function getReportDisplayValue(row = {}, key) {
   if (normalizedKey === "clamp_force_pct") {
     return getRowValue(row, "clamp_tonnage_he_low_pct", "CLAMP TONNAGE(HE.LOW) %", key);
   }
+  if (normalizedKey === "running_mode") {
+    const autoValue = getRowValue(row, "auto_bit", "AUTO", "Auto", "auto", "running_mode", "Running Mode");
+    const normalizedAuto = String(autoValue ?? "").trim().toLowerCase();
+    if (["1", "true", "yes", "on", "auto", "2"].includes(normalizedAuto)) return "Auto";
+    if (["0", "manual"].includes(normalizedAuto)) return "Manual";
+  }
   return row[key];
 }
 
@@ -975,7 +981,7 @@ function formatReportCell(row, key, rowIndex = 0, rowCount = 0, rows = []) {
       return "-";
     }
   }
-  return formatValue(row[key], key);
+  return formatValue(getReportDisplayValue(row, key), key);
 }
 
 function getLimitBaseKey(key) {
