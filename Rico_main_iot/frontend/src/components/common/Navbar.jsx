@@ -148,7 +148,7 @@ const Navbar = ({ onLogout, currentUser }) => {
   };
 
   return (
-    <header className={`app-topbar fixed left-0 right-0 top-0 z-50 h-[78px] border-b px-4 backdrop-blur transition-all duration-300 ease-in-out lg:px-6 ${collapsed && !hovered ? "lg:left-[60px]" : "lg:left-[220px]"}`}>
+    <header className={`app-topbar fixed left-0 right-0 top-0 z-50 h-[78px] border-b px-3 backdrop-blur transition-all duration-300 ease-in-out sm:px-4 xl:px-6 ${collapsed && !hovered ? "xl:left-[60px]" : "xl:left-[220px]"}`}>
       <div className="flex h-full items-center justify-between gap-4">
 
         {/* Left Side */}
@@ -158,7 +158,7 @@ const Navbar = ({ onLogout, currentUser }) => {
             {/* Hamburger - Mobile/Tablet Only */}
             <button
               type="button"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white lg:hidden"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white xl:hidden"
               onClick={() => setMobileOpen((prev) => !prev)}
             >
               <svg className="h-5 w-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -168,7 +168,7 @@ const Navbar = ({ onLogout, currentUser }) => {
 
             <span className="hidden h-9 w-1 rounded-full bg-[#007cba] sm:block" />
             <div className="min-w-0">
-              <h1 className="truncate text-xl font-extrabold text-slate-950">{meta.title}</h1>
+              <h1 className="truncate text-base font-extrabold text-slate-950 sm:text-xl">{meta.title}</h1>
               {meta.subtitle && <p className="hidden truncate text-sm text-slate-500 md:block">{meta.subtitle}</p>}
             </div>
           </div>
@@ -199,7 +199,7 @@ const Navbar = ({ onLogout, currentUser }) => {
               <svg className="h-4 w-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.7} d="M8 7V3m8 4V3M5 11h14M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
               </svg>
-              <span className="hidden lg:inline">{displayDate}</span>
+              <span className="hidden xl:inline">{displayDate}</span>
             </button>
             {pickerOpen && <DatePicker selectedDate={selectedDate} onChange={setSelectedDate} onClose={() => setPickerOpen(false)} />}
           </div>

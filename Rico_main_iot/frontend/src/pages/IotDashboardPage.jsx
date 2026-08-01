@@ -81,24 +81,24 @@ const IotDashboardPage = ({ onLogout, currentUser }) => {
 
   return (
     <AppLayout onLogout={onLogout} currentUser={currentUser}>
-      <div className="space-y-5">
-        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-4">
-              <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-[#123f75] text-white shadow-lg shadow-slate-300">
+      <div className="w-full min-w-0 space-y-4 sm:space-y-5">
+        <section className="w-full min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+          <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex min-w-0 items-start gap-3 sm:items-center sm:gap-4">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#123f75] text-white shadow-lg shadow-slate-300 sm:h-14 sm:w-14">
                 <svg className="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 19V5m5 14V9m5 10V7m5 12V3M4 19h17" />
                 </svg>
               </div>
-              <div>
+              <div className="min-w-0">
                 <p className="text-xs font-black uppercase tracking-[0.22em] text-[#0b73bd]">IoT Command Center</p>
-                <h2 className="text-2xl font-extrabold text-slate-950">Dashboard Overview</h2>
+                <h2 className="text-xl font-extrabold text-slate-950 sm:text-2xl">Dashboard Overview</h2>
                 <p className="text-sm font-medium text-slate-500">Production health, PLC status and master setup readiness.</p>
               </div>
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:flex lg:flex-wrap">
               {quickActions.map((action) => (
-                <Link key={action.to} to={action.to} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:border-[#0b73bd] hover:text-[#0b73bd]">
+                <Link key={action.to} to={action.to} className="flex min-h-10 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 py-2 text-center text-sm font-bold text-slate-700 hover:border-[#0b73bd] hover:text-[#0b73bd] sm:px-4">
                   {action.label}
                 </Link>
               ))}
@@ -106,9 +106,9 @@ const IotDashboardPage = ({ onLogout, currentUser }) => {
           </div>
         </section>
 
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <section className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
           {cards.map((card) => (
-            <div key={card.label} className={`rounded-2xl border-l-4 ${card.tone} border-y border-r bg-white p-5 shadow-sm`}>
+            <div key={card.label} className={`min-w-0 rounded-2xl border-l-4 ${card.tone} border-y border-r bg-white p-4 shadow-sm sm:p-5`}>
               <p className="text-xs font-black uppercase tracking-wide text-slate-400">{card.label}</p>
               <p className="mt-4 text-3xl font-extrabold text-slate-950">{loading ? "-" : fmt(card.value)}</p>
               <p className="mt-2 text-sm font-medium text-slate-500">{card.helper}</p>
@@ -116,14 +116,14 @@ const IotDashboardPage = ({ onLogout, currentUser }) => {
           ))}
         </section>
 
-        <section className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-4 flex items-center justify-between">
+        <section className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
+          <div className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-base font-extrabold text-slate-950">Live Machine Snapshot</h3>
               <Link to="/plc-monitor" className="text-sm font-bold text-[#0b73bd]">View monitor</Link>
             </div>
-            <div className="overflow-hidden rounded-xl border border-slate-100">
-              <table className="w-full text-left text-sm">
+            <div className="responsive-scroll rounded-xl border border-slate-100">
+              <table className="w-full min-w-[620px] text-left text-sm">
                 <thead className="bg-slate-50 text-xs font-black uppercase tracking-wide text-slate-500">
                   <tr>
                     <th className="px-4 py-3">Machine</th>
@@ -157,7 +157,7 @@ const IotDashboardPage = ({ onLogout, currentUser }) => {
             </div>
           </div>
 
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
             <h3 className="text-base font-extrabold text-slate-950">Setup Health</h3>
             <p className="mt-1 text-sm font-medium text-slate-500">Follow this sequence for clean industrial master data.</p>
             <div className="mt-5 space-y-3">
