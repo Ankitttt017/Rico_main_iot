@@ -202,7 +202,7 @@ export default function Sidebar({ currentUser }) {
   return (
     <>
       {mobileOpen && (
-        <div className="fixed inset-0 z-30 bg-black/40 lg:hidden" onClick={() => setMobileOpen(false)} />
+        <div className="fixed inset-0 z-30 bg-black/40 xl:hidden" onClick={() => setMobileOpen(false)} />
       )}
 
       <aside
@@ -210,7 +210,7 @@ export default function Sidebar({ currentUser }) {
         onMouseLeave={() => setHovered(false)}
         className={`fixed left-0 top-0 z-[60] flex h-screen flex-col border-r border-gray-200 bg-white transition-all duration-200 ${widthClass} ${
           mobileOpen ? "translate-x-0" : "-translate-x-full"
-        } lg:translate-x-0`}
+        } xl:translate-x-0`}
       >
         <div className="flex h-[78px] items-center justify-between border-b border-gray-100 px-4 py-4">
           {!visualCollapsed && (

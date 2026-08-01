@@ -157,10 +157,10 @@ const PartProfilePage = ({ onLogout, currentUser }) => {
       <Navbar onLogout={onLogout} currentUser={currentUser} />
       <Sidebar currentUser={currentUser} />
 
-      <main className={`pt-[94px] transition-all duration-300 ease-in-out ${
-        collapsed && !hovered ? "lg:pl-[60px]" : "lg:pl-[220px]"
+      <main className={`min-w-0 pt-[94px] transition-all duration-300 ease-in-out ${
+        collapsed && !hovered ? "xl:pl-[60px]" : "xl:pl-[220px]"
       }`}>
-        <div className="p-4 sm:p-6 max-w-[1540px] mx-auto">
+        <div className="mx-auto w-full min-w-0 max-w-[1540px] p-3 sm:p-5 xl:p-6">
           <div className="flex items-center gap-1.5 mb-4 text-sm text-gray-500">
             <button onClick={() => navigate("/parts")} className="app-brand-text font-semibold hover:underline">{t("partMaster")}</button>
             <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">

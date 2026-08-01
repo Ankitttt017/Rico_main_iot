@@ -106,10 +106,10 @@ const MachineProfilePage = ({ onLogout, currentUser }) => {
         />
       )}
 
-      <main className={`pt-[94px] transition-all duration-300 ease-in-out ${
-        collapsed && !hovered ? "lg:pl-[60px]" : "lg:pl-[220px]"
+      <main className={`min-w-0 pt-[94px] transition-all duration-300 ease-in-out ${
+        collapsed && !hovered ? "xl:pl-[60px]" : "xl:pl-[220px]"
       }`}>
-        <div className="p-4 sm:p-6">
+        <div className="w-full min-w-0 p-3 sm:p-5 xl:p-6">
 
           {/* Breadcrumb */}
           <div className="flex items-center gap-2 mb-5 text-sm">
