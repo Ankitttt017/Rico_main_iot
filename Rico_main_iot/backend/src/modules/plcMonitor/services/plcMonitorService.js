@@ -1931,24 +1931,25 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
       if (shift === "C") filters.push(`(${hourExpr} < 6 OR ${hourExpr} >= 23)`);
     }
   };
+  const productionClockDateExpr = "COALESCE(TRY_CONVERT(date, shot_date), TRY_CONVERT(date, shot_datetime), CAST(recorded_at AS date))";
   const productionDateExpr = `
     CASE
-      WHEN COALESCE(TRY_CONVERT(INT, shot_hour), DATEPART(hour, recorded_at)) < 6
-        THEN DATEADD(day, -1, CAST(recorded_at AS date))
-      ELSE CAST(recorded_at AS date)
+      WHEN COALESCE(TRY_CONVERT(INT, shot_hour), DATEPART(hour, shot_datetime), DATEPART(hour, recorded_at)) < 6
+        THEN DATEADD(day, -1, ${productionClockDateExpr})
+      ELSE ${productionClockDateExpr}
     END
   `;
   const productionSelect = `*, CONVERT(VARCHAR(10), ${productionDateExpr}, 23) AS production_date`;
   const productionOrderBy = `
     ${productionDateExpr} DESC,
+    CASE WHEN shot_number IS NULL THEN 1 ELSE 0 END,
+    TRY_CONVERT(BIGINT, shot_number) DESC,
     COALESCE(
       TRY_CONVERT(datetime2, shot_datetime),
       recorded_at,
       created_at
     ) DESC,
-    id DESC,
-    CASE WHEN shot_number IS NULL THEN 1 ELSE 0 END,
-    TRY_CONVERT(BIGINT, shot_number) DESC
+    id DESC
   `;
   const appendProductionDateFilters = (filters, values) => {
     if (from) {
