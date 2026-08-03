@@ -1207,6 +1207,14 @@ function getRowSortDateKey(row = {}) {
   ) || "";
 }
 
+function getRowSortShiftOrder(row = {}) {
+  const shift = getRowShift(row);
+  if (shift === "A") return 1;
+  if (shift === "B") return 2;
+  if (shift === "C") return 3;
+  return 4;
+}
+
 function getRowSortTime(row = {}) {
   const shotParts = getRowTimeParts(row);
   const shotTime = shotParts
@@ -1236,6 +1244,9 @@ function sortRowsLatestFirst(nextRows, options = {}) {
       const aDate = getRowSortDateKey(a);
       const bDate = getRowSortDateKey(b);
       if (aDate && bDate && aDate !== bDate) return bDate.localeCompare(aDate);
+
+      const shiftDiff = getRowSortShiftOrder(a) - getRowSortShiftOrder(b);
+      if (shiftDiff !== 0) return shiftDiff;
 
       const aShot = getRowSortShotNumber(a);
       const bShot = getRowSortShotNumber(b);
