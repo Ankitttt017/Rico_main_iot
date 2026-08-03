@@ -2228,7 +2228,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
             <div>
               <h2 className="text-sm font-black uppercase tracking-[0.14em] text-slate-800">Overall Machine Report</h2>
               <p className="text-xs font-semibold text-slate-500">
-                Latest records first | {totalRecords || reportRows.length} records
+                Shot numbers in order | {totalRecords || reportRows.length} records
               </p>
             </div>
             {loading && <span className="text-xs font-bold text-blue-600">Loading...</span>}
@@ -2313,7 +2313,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
             <p className="text-xs font-bold text-slate-500">
               {totalRecords
                 ? `Showing ${firstRecordNumber}-${lastRecordNumber} of ${totalRecords} records`
-                : `Showing ${reportRows.length} latest records`}
+                : `Showing ${reportRows.length} records`}
             </p>
             <div className="flex items-center gap-2">
               <button
