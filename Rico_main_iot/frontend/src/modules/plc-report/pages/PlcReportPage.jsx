@@ -1207,14 +1207,6 @@ function getRowSortDateKey(row = {}) {
   ) || "";
 }
 
-function getRowSortShiftOrder(row = {}) {
-  const shift = getRowShift(row);
-  if (shift === "A") return 1;
-  if (shift === "B") return 2;
-  if (shift === "C") return 3;
-  return 4;
-}
-
 function getRowSortTime(row = {}) {
   const shotParts = getRowTimeParts(row);
   const shotTime = shotParts
@@ -1244,22 +1236,21 @@ function sortRowsLatestFirst(nextRows, options = {}) {
       const aDate = getRowSortDateKey(a);
       const bDate = getRowSortDateKey(b);
       if (aDate && bDate && aDate !== bDate) return bDate.localeCompare(aDate);
-
-      const shiftDiff = getRowSortShiftOrder(a) - getRowSortShiftOrder(b);
-      if (shiftDiff !== 0) return shiftDiff;
-
-      const aShot = getRowSortShotNumber(a);
-      const bShot = getRowSortShotNumber(b);
-      if (aShot !== null && bShot !== null && aShot !== bShot) return bShot - aShot;
-      if (aShot !== null && bShot === null) return -1;
-      if (aShot === null && bShot !== null) return 1;
     }
+
 
     const timeDiff = getRowSortTime(b) - getRowSortTime(a);
     if (timeDiff !== 0) return timeDiff;
     const aId = getNumericId(a);
     const bId = getNumericId(b);
     if (aId !== null && bId !== null && aId !== bId) return bId - aId;
+    if (preferShotNumber) {
+      const aShot = getRowSortShotNumber(a);
+      const bShot = getRowSortShotNumber(b);
+      if (aShot !== null && bShot !== null && aShot !== bShot) return bShot - aShot;
+      if (aShot !== null && bShot === null) return -1;
+      if (aShot === null && bShot !== null) return 1;
+    }
     return 0;
   });
 }

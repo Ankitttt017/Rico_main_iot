@@ -1048,16 +1048,19 @@ function sortProductionHistoryRows(rows = []) {
     const bDate = productionHistoryDateKey(b);
     if (aDate && bDate && aDate !== bDate) return bDate.localeCompare(aDate);
 
+    const aKey = historySortKey(a);
+    const bKey = historySortKey(b);
+    if (aKey !== bKey) return bKey.localeCompare(aKey);
+    const aId = Number(a.id || 0);
+    const bId = Number(b.id || 0);
+    if (aId !== bId) return bId - aId;
+
     const aShot = productionHistoryShotNumber(a);
     const bShot = productionHistoryShotNumber(b);
     if (aShot !== null && bShot !== null && aShot !== bShot) return bShot - aShot;
     if (aShot !== null && bShot === null) return -1;
     if (aShot === null && bShot !== null) return 1;
-
-    const aKey = historySortKey(a);
-    const bKey = historySortKey(b);
-    if (aKey !== bKey) return bKey.localeCompare(aKey);
-    return Number(b.id || 0) - Number(a.id || 0);
+    return 0;
   });
 }
 
@@ -1932,7 +1935,6 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
     }
   };
   const productionHourExpr = "COALESCE(TRY_CONVERT(INT, shot_hour), DATEPART(hour, shot_datetime), DATEPART(hour, recorded_at))";
-  const productionMinuteExpr = "COALESCE(TRY_CONVERT(INT, shot_minute), DATEPART(minute, shot_datetime), DATEPART(minute, recorded_at))";
   const productionClockDateExpr = "COALESCE(TRY_CONVERT(date, shot_date), TRY_CONVERT(date, shot_datetime), CAST(recorded_at AS date))";
   const productionDateExpr = `
     CASE
@@ -1941,25 +1943,17 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
       ELSE ${productionClockDateExpr}
     END
   `;
-  const productionShiftOrderExpr = `
-    CASE
-      WHEN ${productionHourExpr} >= 6 AND (${productionHourExpr} < 14 OR (${productionHourExpr} = 14 AND ${productionMinuteExpr} < 30)) THEN 1
-      WHEN (${productionHourExpr} > 14 OR (${productionHourExpr} = 14 AND ${productionMinuteExpr} >= 30)) AND ${productionHourExpr} < 23 THEN 2
-      ELSE 3
-    END
-  `;
   const productionSelect = `*, CONVERT(VARCHAR(10), ${productionDateExpr}, 23) AS production_date`;
   const productionOrderBy = `
     ${productionDateExpr} DESC,
-    ${productionShiftOrderExpr} ASC,
-    CASE WHEN shot_number IS NULL THEN 1 ELSE 0 END,
-    TRY_CONVERT(BIGINT, shot_number) DESC,
     COALESCE(
       TRY_CONVERT(datetime2, shot_datetime),
       recorded_at,
       created_at
     ) DESC,
-    id DESC
+    id DESC,
+    CASE WHEN shot_number IS NULL THEN 1 ELSE 0 END,
+    TRY_CONVERT(BIGINT, shot_number) DESC
   `;
   const appendProductionDateFilters = (filters, values) => {
     if (from) {
