@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const db = require("../../config/db");
 
 let schemaReadyPromise = null;
+let schemaWarmupStarted = false;
 
 const PERMISSIONS = {
   MASTER_MANAGE: "master:manage",
@@ -147,7 +148,9 @@ function verifyPassword(password, storedHash = "") {
   if (text.startsWith("pbkdf2$")) {
     const [, iterationsText, salt, hash] = text.split("$");
     const iterations = Number(iterationsText);
+    if (!iterations || !salt || !hash) return false;
     const nextHash = crypto.pbkdf2Sync(String(password || ""), salt, iterations, 32, "sha256").toString("hex");
+    if (nextHash.length !== hash.length) return false;
     return crypto.timingSafeEqual(Buffer.from(nextHash, "hex"), Buffer.from(hash, "hex"));
   }
   const legacyHash = crypto.createHash("sha256").update(String(password || "")).digest("hex");
@@ -285,6 +288,15 @@ WHERE role IS NOT NULL`);
   return schemaReadyPromise;
 }
 
+function warmupSchema() {
+  if (schemaWarmupStarted) return schemaReadyPromise || Promise.resolve();
+  schemaWarmupStarted = true;
+  return ensureSchema().catch((error) => {
+    console.error("Auth schema warmup failed:", error.message);
+    throw error;
+  });
+}
+
 function roleDto([key, value]) {
   return {
     key,
@@ -311,7 +323,7 @@ async function isSystemAdminActor(username) {
   if (!actor) return false;
   if (actor.toLowerCase() === ROLE_DEFINITIONS.SYSTEM_ADMIN.defaultUsername) return true;
   const { rows } = await db.query(
-    "SELECT TOP 1 role FROM dbo.app_users WHERE LOWER(username) = LOWER(?) AND is_active = 1",
+    "SELECT TOP 1 role FROM dbo.app_users WHERE username = ? AND is_active = 1",
     [actor]
   );
   return roleKey(rows[0]?.role) === "SYSTEM_ADMIN";
@@ -329,24 +341,22 @@ async function login(req, res) {
     const { rows } = await db.query(
       `SELECT TOP 1 *
        FROM dbo.app_users
-       WHERE LOWER(username) = LOWER(?) AND is_active = 1`,
+       WHERE username = ? AND is_active = 1`,
       [username]
     );
     const user = rows[0];
     if (!user) return res.status(401).json({ success: false, message: "Invalid username or password." });
 
     if (!verifyPassword(password, user.password_hash)) {
+      return res.status(401).json({ success: false, message: "Invalid username or password." });
+    }
+
+    if (Number(user.failed_attempts || 0) !== 0 || user.locked_until) {
       await db.run(
         "UPDATE dbo.app_users SET failed_attempts = 0, locked_until = NULL, updated_at = SYSUTCDATETIME() WHERE id = ?",
         [user.id]
       );
-      return res.status(401).json({ success: false, message: "Invalid username or password." });
     }
-
-    await db.run(
-      "UPDATE dbo.app_users SET failed_attempts = 0, locked_until = NULL, updated_at = SYSUTCDATETIME() WHERE id = ?",
-      [user.id]
-    );
 
     res.json({ success: true, data: normalizeUser(user) });
   } catch (error) {
@@ -373,7 +383,7 @@ async function checkUsername(req, res) {
     await ensureSchema();
     const username = String(req.query.u || "").trim();
     if (!username) return res.json({ success: true, available: false });
-    const { rows } = await db.query("SELECT TOP 1 id FROM dbo.app_users WHERE LOWER(username) = LOWER(?)", [username]);
+    const { rows } = await db.query("SELECT TOP 1 id FROM dbo.app_users WHERE username = ?", [username]);
     res.json({ success: true, available: rows.length === 0 });
   } catch (error) {
     res.status(500).json({ success: false, message: "Unable to check username.", error: error.message });
@@ -399,7 +409,7 @@ async function createUser(req, res) {
     await ensureSchema();
     const { errors, username, fullName, role } = validateUserInput(req.body);
     if (errors.length) return res.status(400).json({ success: false, message: errors[0], errors });
-    const existing = await db.query("SELECT TOP 1 id FROM dbo.app_users WHERE LOWER(username) = LOWER(?)", [username]);
+    const existing = await db.query("SELECT TOP 1 id FROM dbo.app_users WHERE username = ?", [username]);
     if (existing.rows.length) return res.status(409).json({ success: false, error: "USERNAME_TAKEN", message: `Username '${username}' already exists` });
 
     const roleMeta = ROLE_DEFINITIONS[role];
@@ -568,6 +578,7 @@ module.exports = {
   PERMISSIONS,
   ROLE_DEFINITIONS,
   ensureSchema,
+  warmupSchema,
   listRoles,
   login,
   listUsers,
