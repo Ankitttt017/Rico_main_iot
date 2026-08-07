@@ -1236,6 +1236,12 @@ function sortRowsLatestFirst(nextRows, options = {}) {
       const aDate = getRowSortDateKey(a);
       const bDate = getRowSortDateKey(b);
       if (aDate && bDate && aDate !== bDate) return bDate.localeCompare(aDate);
+
+      const aShot = getRowSortShotNumber(a);
+      const bShot = getRowSortShotNumber(b);
+      if (aShot !== null && bShot !== null && aShot !== bShot) return bShot - aShot;
+      if (aShot !== null && bShot === null) return -1;
+      if (aShot === null && bShot !== null) return 1;
     }
 
 
@@ -1244,13 +1250,6 @@ function sortRowsLatestFirst(nextRows, options = {}) {
     const aId = getNumericId(a);
     const bId = getNumericId(b);
     if (aId !== null && bId !== null && aId !== bId) return bId - aId;
-    if (preferShotNumber) {
-      const aShot = getRowSortShotNumber(a);
-      const bShot = getRowSortShotNumber(b);
-      if (aShot !== null && bShot !== null && aShot !== bShot) return bShot - aShot;
-      if (aShot !== null && bShot === null) return -1;
-      if (aShot === null && bShot !== null) return 1;
-    }
     return 0;
   });
 }
