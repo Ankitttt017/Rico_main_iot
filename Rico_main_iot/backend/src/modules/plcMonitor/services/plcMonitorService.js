@@ -4214,7 +4214,7 @@ function startPlcMonitor(io) {
           return run;
         };
 
-        const captureUbeCycleSnapshot = async ({ startedAt, endedAt, durationSec, trigger = "cycle-end", capturedShotNumber }) => {
+        const captureUbeCycleSnapshot = async ({ startedAt, endedAt, durationSec, trigger = "cycle-end", capturedShotNumber, capturedShotTimestamp }) => {
           let lastError = null;
           let lastPayload = null;
           for (let attempt = 1; attempt <= UBE_CYCLE_END_SAVE_ATTEMPTS; attempt += 1) {
@@ -4229,8 +4229,8 @@ function startPlcMonitor(io) {
               }));
               // If we captured a fast shot-number snapshot at the moment the cycle-end
               // transition was detected, prefer that value over the (later) read value.
-              // This avoids a race where the PLC's live counter advances before the
-              // queued snapshot is processed (socket reads are serialized and may be delayed).
+              // Also override the PLC shot timestamp if available so the persisted
+              // report record matches the actual cycle-end event, not a delayed read.
               if (capturedShotNumber !== null && capturedShotNumber !== undefined) {
                 try {
                   if (!payload.rawReadings || typeof payload.rawReadings !== "object") payload.rawReadings = {};
@@ -4243,6 +4243,38 @@ function startPlcMonitor(io) {
                   }
                 } catch (e) {
                   // Non-fatal: if overriding fails, continue with original payload
+                }
+              }
+              if (capturedShotTimestamp) {
+                try {
+                  const shotDate = buildShotDateValue(
+                    new Date(capturedShotTimestamp).getFullYear(),
+                    new Date(capturedShotTimestamp).getMonth() + 1,
+                    new Date(capturedShotTimestamp).getDate()
+                  );
+                  const shotTime = buildShotTimeValue(
+                    new Date(capturedShotTimestamp).getHours(),
+                    new Date(capturedShotTimestamp).getMinutes(),
+                    new Date(capturedShotTimestamp).getSeconds()
+                  );
+                  if (!payload.rawReadings || typeof payload.rawReadings !== "object") payload.rawReadings = {};
+                  payload.rawReadings.shot_datetime = capturedShotTimestamp;
+                  payload.rawReadings.shot_date = getProductionDate(shotDate, shotTime) || shotDate;
+                  payload.rawReadings.shot_time = shotTime;
+                  payload.rawReadings.shot_year = pad2(new Date(capturedShotTimestamp).getFullYear());
+                  payload.rawReadings.shot_month = pad2(new Date(capturedShotTimestamp).getMonth() + 1);
+                  payload.rawReadings.shot_day = pad2(new Date(capturedShotTimestamp).getDate());
+                  payload.rawReadings.shot_hour = pad2(new Date(capturedShotTimestamp).getHours());
+                  payload.rawReadings.shot_minute = pad2(new Date(capturedShotTimestamp).getMinutes());
+                  payload.rawReadings.shot_second = pad2(new Date(capturedShotTimestamp).getSeconds());
+                  if (payload.readings) {
+                    if (payload.readings.shot_datetime) payload.readings.shot_datetime.value = capturedShotTimestamp;
+                    if (payload.readings.shot_date) payload.readings.shot_date.value = payload.rawReadings.shot_date;
+                    if (payload.readings.shot_time) payload.readings.shot_time.value = shotTime;
+                  }
+                  payload.timestamp = capturedShotTimestamp;
+                } catch (e) {
+                  // Non-fatal: if overriding timestamp fails, continue with original payload
                 }
               }
               payload.saveResult = await persistUbeReading(
@@ -4436,29 +4468,47 @@ function startPlcMonitor(io) {
                 : `Cycle end is ON; duration ${durationSec ?? "-"} sec. Waiting before PLC snapshot.`,
             });
 
-            // Read the configured SHOT NO. register immediately here (serialized
-            // through runPlcOperation) to capture the shot number that belonged to
-            // this specific cycle-end event. Without this, delayed processing of
-            // the cycleEndQueue can read a later shot counter and miss intermediate
-            // shot numbers when the PLC increments the counter between detection
-            // and processing.
+            // Read the configured SHOT NO. and shot timestamp immediately here
+            // (serialized through runPlcOperation) to capture the exact cycle-end
+            // snapshot from the PLC. This keeps report persistence aligned with the
+            // moment the end-bit fired and avoids later reads capturing a different
+            // live shot counter or shot time.
             let capturedShotNumber = null;
+            let capturedShotTimestamp = null;
             try {
               const shotDevice = findConfiguredRegisterDevice(machine, ["SHOT NO.", "Shot Number", "shot_number"]);
               if (shotDevice) {
                 try {
-                  const raw = await runPlcOperation(async () => readWord(sock, shotDevice));
-                  const numeric = Number(raw);
-                  capturedShotNumber = Number.isFinite(numeric) ? numeric : raw;
+                  const snapshot = await runPlcOperation(async () => {
+                    const rawShot = await readWord(sock, shotDevice);
+                    const shotTimestamp = await readUbeShotTimestamp(sock, cycleEndAt);
+                    return { rawShot, shotTimestamp };
+                  });
+                  const numeric = Number(snapshot.rawShot);
+                  capturedShotNumber = Number.isFinite(numeric) ? numeric : snapshot.rawShot;
+                  if (snapshot.shotTimestamp instanceof Date && !Number.isNaN(snapshot.shotTimestamp.getTime())) {
+                    capturedShotTimestamp = snapshot.shotTimestamp.toISOString();
+                  }
                 } catch (e) {
                   capturedShotNumber = null;
+                  capturedShotTimestamp = null;
                 }
               }
             } catch (e) {
               capturedShotNumber = null;
+              capturedShotTimestamp = null;
             }
 
-            enqueueUbeCycleEnd({ startedAt: cycleStartAt, endedAt: cycleEndAt, durationSec, capturedShotNumber });
+            enqueueUbeCycleEnd({
+              startedAt: cycleStartAt,
+              endedAt: cycleEndAt,
+              durationSec,
+              capturedShotNumber,
+              capturedShotTimestamp,
+            });
+            if (Number.isFinite(capturedShotNumber)) {
+              lastDetectedShotNumber = capturedShotNumber;
+            }
             cycleStartAt = null;
           } else if (!cycleSnapshotPending && loopStartedAt - lastLiveReadAt >= UBE_LIVE_READ_MS) {
             lastLiveReadAt = loopStartedAt;
@@ -4472,10 +4522,18 @@ function startPlcMonitor(io) {
               const shotDevice = findConfiguredRegisterDevice(machine, ["SHOT NO.", "Shot Number", "shot_number"]);
               if (shotDevice) {
                 try {
-                  const raw = await runPlcOperation(async () => readWord(sock, shotDevice));
-                  const numeric = Number(raw);
-                  const currentShotNumber = Number.isFinite(numeric) ? numeric : raw;
-                  
+                  const snapshot = await runPlcOperation(async () => {
+                    const rawShot = await readWord(sock, shotDevice);
+                    const shotTimestamp = await readUbeShotTimestamp(sock, new Date());
+                    return { rawShot, shotTimestamp };
+                  });
+                  const numeric = Number(snapshot.rawShot);
+                  const currentShotNumber = Number.isFinite(numeric) ? numeric : snapshot.rawShot;
+                  const currentShotTimestamp =
+                    snapshot.shotTimestamp instanceof Date && !Number.isNaN(snapshot.shotTimestamp.getTime())
+                      ? snapshot.shotTimestamp.toISOString()
+                      : null;
+
                   if (
                     lastDetectedShotNumber !== null &&
                     Number.isFinite(currentShotNumber) &&
@@ -4502,6 +4560,7 @@ function startPlcMonitor(io) {
                       endedAt: cycleEndAt,
                       durationSec,
                       capturedShotNumber: currentShotNumber,
+                      capturedShotTimestamp: currentShotTimestamp,
                       trigger: "shot-number-change-fallback",
                     });
                     cycleStartAt = null;
