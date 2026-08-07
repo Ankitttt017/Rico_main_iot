@@ -19,7 +19,6 @@ const {
   CONNECTION_EVENTS_TABLE,
   MACHINE_READINGS_TABLE,
   MACHINE_READING_VALUES_TABLE,
-  UBE_CYCLE_END_DELAY_MS,
   UBE_CYCLE_END_POLL_MS,
   UBE_LIVE_READ_MS,
   PLC_MAX_CONSECUTIVE_READ_FAILURES,
@@ -102,9 +101,6 @@ const UBE_CYCLE_END_DEBOUNCE_MS = Math.max(
   500,
   Number(process.env.PLC_UBE_CYCLE_END_DEBOUNCE_MS || 3000)
 );
-const UBE_SHOT_CHANGE_FALLBACK_ENABLED = String(
-  process.env.PLC_UBE_SHOT_CHANGE_FALLBACK_ENABLED || "true"
-).trim().toLowerCase() !== "false";
 const plantEnvironmentCache = {
   at: 0,
   data: null,
@@ -4207,8 +4203,6 @@ function startPlcMonitor(io) {
         let consecutiveReadFailures = 0;
         let lastCycleEndQueuedAt = 0;
         let lastSavedCycleShot = null;
-        let lastObservedLiveShot = null;
-        let lastFallbackQueuedShot = null;
         const cycleEndQueue = [];
         let cycleEndQueueRunning = false;
         let plcOperation = Promise.resolve();
@@ -4219,50 +4213,7 @@ function startPlcMonitor(io) {
           return run;
         };
 
-        const captureUbeCycleSnapshot = async ({ startedAt, endedAt, durationSec, trigger = "cycle-end", snapshotPayload = null }) => {
-          if (trigger === "shot-change-fallback" && snapshotPayload?.rawReadings) {
-            const savedShotNumber = getFormattedShotNumber(snapshotPayload) || "-";
-            const saveResult = await persistUbeReading(
-              machine,
-              snapshotPayload.partName || machine.partName || "",
-              snapshotPayload.rawReadings
-            );
-            const numericShot = Number(savedShotNumber);
-            if (
-              !saveResult?.skipped &&
-              Number.isFinite(numericShot) &&
-              Number.isFinite(lastSavedCycleShot) &&
-              numericShot > lastSavedCycleShot + 1
-            ) {
-              console.warn(
-                `PLC Cycle End missed shot warning ${machine.ip}: last=${lastSavedCycleShot}, current=${numericShot}, missing=${lastSavedCycleShot + 1}..${numericShot - 1}`
-              );
-            }
-            if (!saveResult?.skipped && Number.isFinite(numericShot)) {
-              lastSavedCycleShot = numericShot;
-            }
-            if (savedShotNumber !== "-") {
-              lastObservedLiveShot = savedShotNumber;
-            }
-            updateMachineState(machine, {
-              connected: true,
-              error: saveResult?.skipped && !saveResult.queued
-                ? `${trigger} shot ${savedShotNumber} save skipped: ${saveResult.reason}.`
-                : null,
-              shotStatus: saveResult?.skipped
-                ? `${trigger} shot ${savedShotNumber} checked: ${saveResult.reason}.`
-                : `${trigger} shot ${savedShotNumber} saved.`,
-            });
-            console.log(
-              `PLC Cycle End snapshot ${machine.ip}: trigger=${trigger}, shot=${savedShotNumber}, attempt=1, result=${
-                saveResult?.skipped ? `skipped:${saveResult.reason}` : "saved"
-              }`
-            );
-            return { ...snapshotPayload, saveResult };
-          }
-
-          await sleep(UBE_CYCLE_END_DELAY_MS);
-
+        const captureUbeCycleSnapshot = async ({ startedAt, endedAt, durationSec, trigger = "cycle-end" }) => {
           let lastError = null;
           let lastPayload = null;
           for (let attempt = 1; attempt <= UBE_CYCLE_END_SAVE_ATTEMPTS; attempt += 1) {
@@ -4299,9 +4250,6 @@ function startPlcMonitor(io) {
                 }
                 if (!saveResult?.skipped && Number.isFinite(numericShot)) {
                   lastSavedCycleShot = numericShot;
-                }
-                if (savedShotNumber !== "-") {
-                  lastObservedLiveShot = savedShotNumber;
                 }
                 updateMachineState(machine, {
                   connected: true,
@@ -4367,11 +4315,11 @@ function startPlcMonitor(io) {
 
         const enqueueUbeCycleEnd = (event) => {
           const eventTime = event.endedAt instanceof Date ? event.endedAt.getTime() : Date.now();
-          if (event.trigger !== "shot-change-fallback" && eventTime - lastCycleEndQueuedAt < UBE_CYCLE_END_DEBOUNCE_MS) {
+          if (eventTime - lastCycleEndQueuedAt < UBE_CYCLE_END_DEBOUNCE_MS) {
             console.warn(`PLC Cycle End duplicate pulse ignored ${machine.ip}: debounce=${UBE_CYCLE_END_DEBOUNCE_MS}ms`);
             return false;
           }
-          if (event.trigger !== "shot-change-fallback") lastCycleEndQueuedAt = eventTime;
+          lastCycleEndQueuedAt = eventTime;
           cycleEndQueue.push(event);
           processCycleEndQueue();
           return true;
@@ -4388,29 +4336,6 @@ function startPlcMonitor(io) {
                 emit: true,
                 liveOnly: true,
               }));
-              const liveShot = getFormattedShotNumber(payload);
-              if (liveShot) {
-                const shotChanged = lastObservedLiveShot !== null && liveShot !== lastObservedLiveShot;
-                lastObservedLiveShot = liveShot;
-                if (
-                  UBE_SHOT_CHANGE_FALLBACK_ENABLED &&
-                  shotChanged &&
-                  liveShot !== lastFallbackQueuedShot
-                ) {
-                  lastFallbackQueuedShot = liveShot;
-                  const fallbackAt = new Date();
-                  console.warn(
-                    `PLC UBE shot-change fallback queued ${machine.ip}: shot=${liveShot}`
-                  );
-                  enqueueUbeCycleEnd({
-                    startedAt: null,
-                    endedAt: fallbackAt,
-                    durationSec: null,
-                    trigger: "shot-change-fallback",
-                    snapshotPayload: payload,
-                  });
-                }
-              }
               consecutiveReadFailures = 0;
             } catch (error) {
               if (isPlcReadTimeoutError(error)) {
