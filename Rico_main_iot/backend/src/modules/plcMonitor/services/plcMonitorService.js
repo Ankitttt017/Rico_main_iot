@@ -2448,14 +2448,41 @@ async function saveToDBUnlocked(machine, partName, readings) {
     normalizeReadingForDB("cycle_end_time", readings.cycle_end_time) ||
     normalizeReadingForDB("shot_datetime", readings.shot_datetime);
   const shotNumber = normalizeReadingForDB("shot_number", readings.shot_number ?? readings["SHOT NO."]);
+  const cycleTime = Number(readings.cycle_time ?? readings["CYCLE TIME sec."] ?? 0);
+  const minCycleTime = Number(process.env.PLC_MIN_VALID_CYCLE_TIME_SEC || 5);
   const hasPlcRecordedAt = Boolean(plcRecordedAt);
 
   if (!hasPlcRecordedAt) {
     return { skipped: true, reason: "missing-plc-shot-datetime" };
   }
 
+  // Skip shots with invalid/incomplete cycle times (likely partial reads)
+  if (cycleTime > 0 && cycleTime < minCycleTime && shotNumber !== null && shotNumber !== undefined) {
+    return { skipped: true, reason: "incomplete-cycle-time" };
+  }
+
   if (hasPlcRecordedAt) {
     const machineKey = getCanonicalMachineKey(machine);
+    
+    // Enhanced duplicate detection with multiple strategies
+    // Strategy 1: Exact match - same machine, shot number, and exact timestamp
+    if (shotNumber !== null && shotNumber !== undefined) {
+      const { rows: exactDupRows } = await db.query(
+        `SELECT TOP 1 id FROM ${TABLE}
+         WHERE (machine_key = ? OR plc_ip = ?)
+           AND CAST(recorded_at AS DATETIME2(0)) = CAST(? AS DATETIME2(0))
+           AND (
+             (TRY_CONVERT(BIGINT, ?) IS NOT NULL AND TRY_CONVERT(BIGINT, shot_number) = TRY_CONVERT(BIGINT, ?))
+             OR
+             (TRY_CONVERT(BIGINT, ?) IS NULL AND LTRIM(RTRIM(CAST(shot_number AS NVARCHAR(80)))) = ?)
+           )
+         ORDER BY recorded_at DESC, id DESC`,
+        [machineKey, machine.ip, plcRecordedAt, shotNumber, shotNumber, shotNumber, String(shotNumber).trim()]
+      );
+      if (exactDupRows.length) return { skipped: true, reason: "duplicate-exact-timestamp-shot" };
+    }
+    
+    // Strategy 2: Same machine + shot number within a small time window (15 seconds)
     const duplicateFilters = [
       "(machine_key = ? OR plc_ip = ?)",
     ];
@@ -2471,15 +2498,36 @@ async function saveToDBUnlocked(machine, partName, readings) {
         (TRY_CONVERT(BIGINT, ?) IS NULL AND LTRIM(RTRIM(CAST(shot_number AS NVARCHAR(80)))) = ?)
       )`);
       duplicateValues.push(shotNumber, shotNumber, shotNumber, String(shotNumber).trim());
+      
+      // For shots within the time window, keep the one with valid cycle time
+      const { rows: duplicateRows } = await db.query(
+        `SELECT TOP 1 id, CAST([Cycle Time (SEC)] AS FLOAT) as cycle_time_db FROM ${TABLE}
+         WHERE ${duplicateFilters.join(" AND ")}
+         ORDER BY recorded_at DESC, id DESC`,
+        duplicateValues
+      );
+      
+      if (duplicateRows.length) {
+        const dbCycleTime = Number(duplicateRows[0].cycle_time_db || 0);
+        // If new record has invalid cycle time but DB has valid one, skip new
+        if (cycleTime < minCycleTime && dbCycleTime >= minCycleTime) {
+          return { skipped: true, reason: "duplicate-incomplete-cycle" };
+        }
+        // If both valid or both invalid, skip as duplicate
+        if (!(cycleTime < minCycleTime && dbCycleTime < minCycleTime)) {
+          return { skipped: true, reason: "duplicate-cycle-timestamp" };
+        }
+      }
+    } else {
+      // No shot number, just check time window
+      const { rows: duplicateRows } = await db.query(
+        `SELECT TOP 1 id FROM ${TABLE}
+         WHERE ${duplicateFilters.join(" AND ")}
+         ORDER BY recorded_at DESC, id DESC`,
+        duplicateValues
+      );
+      if (duplicateRows.length) return { skipped: true, reason: "duplicate-cycle-timestamp" };
     }
-
-    const { rows: duplicateRows } = await db.query(
-      `SELECT TOP 1 id FROM ${TABLE}
-       WHERE ${duplicateFilters.join(" AND ")}
-       ORDER BY recorded_at DESC, id DESC`,
-      duplicateValues
-    );
-    if (duplicateRows.length) return { skipped: true, reason: "duplicate-cycle-timestamp" };
   }
 
   const values = [
