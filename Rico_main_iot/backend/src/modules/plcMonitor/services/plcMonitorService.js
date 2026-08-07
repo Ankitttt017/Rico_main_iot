@@ -4213,7 +4213,7 @@ function startPlcMonitor(io) {
           return run;
         };
 
-        const captureUbeCycleSnapshot = async ({ startedAt, endedAt, durationSec, trigger = "cycle-end" }) => {
+        const captureUbeCycleSnapshot = async ({ startedAt, endedAt, durationSec, trigger = "cycle-end", capturedShotNumber }) => {
           let lastError = null;
           let lastPayload = null;
           for (let attempt = 1; attempt <= UBE_CYCLE_END_SAVE_ATTEMPTS; attempt += 1) {
@@ -4226,6 +4226,24 @@ function startPlcMonitor(io) {
                   ? { startedAt, endedAt, durationSec }
                   : null,
               }));
+              // If we captured a fast shot-number snapshot at the moment the cycle-end
+              // transition was detected, prefer that value over the (later) read value.
+              // This avoids a race where the PLC's live counter advances before the
+              // queued snapshot is processed (socket reads are serialized and may be delayed).
+              if (capturedShotNumber !== null && capturedShotNumber !== undefined) {
+                try {
+                  if (!payload.rawReadings || typeof payload.rawReadings !== "object") payload.rawReadings = {};
+                  payload.rawReadings.shot_number = capturedShotNumber;
+                  if (payload.readings && payload.readings["SHOT NO."]) {
+                    payload.readings["SHOT NO."].value = capturedShotNumber;
+                  }
+                  if (payload.readings && payload.readings.shot_number) {
+                    payload.readings.shot_number.value = capturedShotNumber;
+                  }
+                } catch (e) {
+                  // Non-fatal: if overriding fails, continue with original payload
+                }
+              }
               payload.saveResult = await persistUbeReading(
                 machine,
                 payload.partName || machine.partName || "",
@@ -4417,7 +4435,29 @@ function startPlcMonitor(io) {
                 : `Cycle end is ON; duration ${durationSec ?? "-"} sec. Waiting before PLC snapshot.`,
             });
 
-            enqueueUbeCycleEnd({ startedAt: cycleStartAt, endedAt: cycleEndAt, durationSec });
+            // Read the configured SHOT NO. register immediately here (serialized
+            // through runPlcOperation) to capture the shot number that belonged to
+            // this specific cycle-end event. Without this, delayed processing of
+            // the cycleEndQueue can read a later shot counter and miss intermediate
+            // shot numbers when the PLC increments the counter between detection
+            // and processing.
+            let capturedShotNumber = null;
+            try {
+              const shotDevice = findConfiguredRegisterDevice(machine, ["SHOT NO.", "Shot Number", "shot_number"]);
+              if (shotDevice) {
+                try {
+                  const raw = await runPlcOperation(async () => readWord(sock, shotDevice));
+                  const numeric = Number(raw);
+                  capturedShotNumber = Number.isFinite(numeric) ? numeric : raw;
+                } catch (e) {
+                  capturedShotNumber = null;
+                }
+              }
+            } catch (e) {
+              capturedShotNumber = null;
+            }
+
+            enqueueUbeCycleEnd({ startedAt: cycleStartAt, endedAt: cycleEndAt, durationSec, capturedShotNumber });
             cycleStartAt = null;
           } else if (!cycleSnapshotPending && loopStartedAt - lastLiveReadAt >= UBE_LIVE_READ_MS) {
             lastLiveReadAt = loopStartedAt;
