@@ -1046,21 +1046,21 @@ function sortProductionHistoryRows(rows = []) {
   return rows.sort((a, b) => {
     const aDate = productionHistoryDateKey(a);
     const bDate = productionHistoryDateKey(b);
-    if (aDate && bDate && aDate !== bDate) return aDate.localeCompare(bDate);
+    if (aDate && bDate && aDate !== bDate) return bDate.localeCompare(aDate);
 
     const aKey = historySortKey(a);
     const bKey = historySortKey(b);
-    if (aKey !== bKey) return aKey.localeCompare(bKey);
+    if (aKey !== bKey) return bKey.localeCompare(aKey);
 
     const aShot = productionHistoryShotNumber(a);
     const bShot = productionHistoryShotNumber(b);
-    if (aShot !== null && bShot !== null && aShot !== bShot) return aShot - bShot;
+    if (aShot !== null && bShot !== null && aShot !== bShot) return bShot - aShot;
     if (aShot !== null && bShot === null) return -1;
     if (aShot === null && bShot !== null) return 1;
 
     const aId = Number(a.id || 0);
     const bId = Number(b.id || 0);
-    if (aId !== bId) return aId - bId;
+    if (aId !== bId) return bId - aId;
     return 0;
   });
 }
@@ -1946,15 +1946,15 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
   `;
   const productionSelect = `*, CONVERT(VARCHAR(10), ${productionDateExpr}, 23) AS production_date`;
   const productionOrderBy = `
-    ${productionDateExpr} ASC,
+    ${productionDateExpr} DESC,
     COALESCE(
       TRY_CONVERT(datetime2, shot_datetime),
       recorded_at,
       created_at
-    ) ASC,
+    ) DESC,
     CASE WHEN shot_number IS NULL THEN 1 ELSE 0 END,
-    TRY_CONVERT(BIGINT, shot_number) ASC,
-    id ASC
+    TRY_CONVERT(BIGINT, shot_number) DESC,
+    id DESC
   `;
   const appendProductionDateFilters = (filters, values) => {
     if (from) {
