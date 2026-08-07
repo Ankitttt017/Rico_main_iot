@@ -1235,22 +1235,20 @@ function sortRowsLatestFirst(nextRows, options = {}) {
     if (preferShotNumber) {
       const aDate = getRowSortDateKey(a);
       const bDate = getRowSortDateKey(b);
-      if (aDate && bDate && aDate !== bDate) return aDate.localeCompare(bDate);
-    }
+      if (aDate && bDate && aDate !== bDate) return bDate.localeCompare(aDate);
 
-
-    const timeDiff = getRowSortTime(a) - getRowSortTime(b);
-    if (timeDiff !== 0) return timeDiff;
-    if (preferShotNumber) {
       const aShot = getRowSortShotNumber(a);
       const bShot = getRowSortShotNumber(b);
-      if (aShot !== null && bShot !== null && aShot !== bShot) return aShot - bShot;
+      if (aShot !== null && bShot !== null && aShot !== bShot) return bShot - aShot;
       if (aShot !== null && bShot === null) return -1;
       if (aShot === null && bShot !== null) return 1;
     }
+
+    const timeDiff = getRowSortTime(b) - getRowSortTime(a);
+    if (timeDiff !== 0) return timeDiff;
     const aId = getNumericId(a);
     const bId = getNumericId(b);
-    if (aId !== null && bId !== null && aId !== bId) return aId - bId;
+    if (aId !== null && bId !== null && aId !== bId) return bId - aId;
     return 0;
   });
 }
@@ -2228,7 +2226,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
             <div>
               <h2 className="text-sm font-black uppercase tracking-[0.14em] text-slate-800">Overall Machine Report</h2>
               <p className="text-xs font-semibold text-slate-500">
-                Oldest shots first | {totalRecords || reportRows.length} records
+                Current shots first | {totalRecords || reportRows.length} records
               </p>
             </div>
             {loading && <span className="text-xs font-bold text-blue-600">Loading...</span>}
