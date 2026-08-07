@@ -4203,6 +4203,7 @@ function startPlcMonitor(io) {
         let consecutiveReadFailures = 0;
         let lastCycleEndQueuedAt = 0;
         let lastSavedCycleShot = null;
+        let lastDetectedShotNumber = null;
         const cycleEndQueue = [];
         let cycleEndQueueRunning = false;
         let plcOperation = Promise.resolve();
@@ -4462,6 +4463,59 @@ function startPlcMonitor(io) {
           } else if (!cycleSnapshotPending && loopStartedAt - lastLiveReadAt >= UBE_LIVE_READ_MS) {
             lastLiveReadAt = loopStartedAt;
             startLiveSnapshotRead();
+          }
+
+          // Fallback: Detect shot-number change (only if end-bit didn't trigger this cycle)
+          // This catches cycles where the electrical end-bit signal was missed
+          if (!shouldCaptureCycle) {
+            try {
+              const shotDevice = findConfiguredRegisterDevice(machine, ["SHOT NO.", "Shot Number", "shot_number"]);
+              if (shotDevice) {
+                try {
+                  const raw = await runPlcOperation(async () => readWord(sock, shotDevice));
+                  const numeric = Number(raw);
+                  const currentShotNumber = Number.isFinite(numeric) ? numeric : raw;
+                  
+                  if (
+                    lastDetectedShotNumber !== null &&
+                    Number.isFinite(currentShotNumber) &&
+                    Number.isFinite(lastDetectedShotNumber) &&
+                    currentShotNumber > lastDetectedShotNumber &&
+                    !cycleEndHandled
+                  ) {
+                    console.log(
+                      `PLC Cycle End fallback triggered ${machine.ip}: last=${lastDetectedShotNumber}, current=${currentShotNumber}`
+                    );
+                    cycleEndHandled = true;
+                    const cycleEndAt = new Date();
+                    const durationSec = cycleStartAt
+                      ? Number(((cycleEndAt - cycleStartAt) / 1000).toFixed(2))
+                      : null;
+                    updateMachineState(machine, {
+                      connected: true,
+                      error: null,
+                      shotStatus: `Cycle detected via shot-number change (fallback); shot=${currentShotNumber}, duration=${durationSec ?? "-"} sec.`,
+                    });
+                    
+                    enqueueUbeCycleEnd({
+                      startedAt: cycleStartAt,
+                      endedAt: cycleEndAt,
+                      durationSec,
+                      capturedShotNumber: currentShotNumber,
+                      trigger: "shot-number-change-fallback",
+                    });
+                    cycleStartAt = null;
+                    lastDetectedShotNumber = currentShotNumber;
+                  } else if (Number.isFinite(currentShotNumber)) {
+                    lastDetectedShotNumber = currentShotNumber;
+                  }
+                } catch (e) {
+                  // Fallback read failed, continue
+                }
+              }
+            } catch (e) {
+              // Fallback check failed, continue
+            }
           }
 
           if (cycleEnd === 0) cycleEndHandled = false;
