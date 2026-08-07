@@ -2349,6 +2349,9 @@ async function saveToDB(machine, partName, readings) {
   const saveKey = buildUbeTimestampSaveKey(machine, readings);
   if (saveKey) {
     if (inFlightUbeSaveKeys.has(saveKey)) {
+      const shotNumber = normalizeReadingForDB("shot_number", readings.shot_number ?? readings["SHOT NO."]);
+      const plcRecordedAt = normalizeReadingForDB("cycle_end_time", readings.cycle_end_time) || normalizeReadingForDB("shot_datetime", readings.shot_datetime);
+      console.warn(`PLC DB save skipped (in-flight): ${machine?.ip || machine?.name || "unknown"} shot=${shotNumber ?? "-"} time=${plcRecordedAt} key=${saveKey}`);
       return { skipped: true, reason: "duplicate-cycle-in-flight" };
     }
     inFlightUbeSaveKeys.add(saveKey);
@@ -2357,7 +2360,11 @@ async function saveToDB(machine, partName, readings) {
   try {
     return await saveToDBUnlocked(machine, partName, readings);
   } finally {
-    if (saveKey) inFlightUbeSaveKeys.delete(saveKey);
+    if (saveKey) {
+      inFlightUbeSaveKeys.delete(saveKey);
+      // small log to help debug intermittent skips
+      // (actual skip reasons are logged inside saveToDBUnlocked)
+    }
   }
 }
 
@@ -2453,11 +2460,13 @@ async function saveToDBUnlocked(machine, partName, readings) {
   const hasPlcRecordedAt = Boolean(plcRecordedAt);
 
   if (!hasPlcRecordedAt) {
+    console.warn(`PLC DB save skipped (missing timestamp): ${machine?.ip || machine?.name || "unknown"} part=${partName || "-"}`);
     return { skipped: true, reason: "missing-plc-shot-datetime" };
   }
 
   // Skip shots with invalid/incomplete cycle times (likely partial reads)
   if (cycleTime > 0 && cycleTime < minCycleTime && shotNumber !== null && shotNumber !== undefined) {
+    console.warn(`PLC DB save skipped (incomplete cycle time): ${machine?.ip || machine?.name || "unknown"} shot=${shotNumber ?? "-"} cycle_time=${cycleTime}`);
     return { skipped: true, reason: "incomplete-cycle-time" };
   }
 
@@ -2479,7 +2488,10 @@ async function saveToDBUnlocked(machine, partName, readings) {
          ORDER BY recorded_at DESC, id DESC`,
         [machineKey, machine.ip, plcRecordedAt, shotNumber, shotNumber, shotNumber, String(shotNumber).trim()]
       );
-      if (exactDupRows.length) return { skipped: true, reason: "duplicate-exact-timestamp-shot" };
+      if (exactDupRows.length) {
+        console.warn(`PLC DB save skipped (exact duplicate): ${machine?.ip || machine?.name || "unknown"} shot=${shotNumber ?? "-"} time=${plcRecordedAt}`);
+        return { skipped: true, reason: "duplicate-exact-timestamp-shot" };
+      }
     }
     
     // Strategy 2: Same machine + shot number within a small time window (15 seconds)
@@ -2511,10 +2523,12 @@ async function saveToDBUnlocked(machine, partName, readings) {
         const dbCycleTime = Number(duplicateRows[0].cycle_time_db || 0);
         // If new record has invalid cycle time but DB has valid one, skip new
         if (cycleTime < minCycleTime && dbCycleTime >= minCycleTime) {
+          console.warn(`PLC DB save skipped (duplicate incomplete): ${machine?.ip || machine?.name || "unknown"} shot=${shotNumber ?? "-"} new_cycle=${cycleTime} db_cycle=${dbCycleTime}`);
           return { skipped: true, reason: "duplicate-incomplete-cycle" };
         }
         // If both valid or both invalid, skip as duplicate
         if (!(cycleTime < minCycleTime && dbCycleTime < minCycleTime)) {
+          console.warn(`PLC DB save skipped (duplicate): ${machine?.ip || machine?.name || "unknown"} shot=${shotNumber ?? "-"} new_cycle=${cycleTime} db_cycle=${dbCycleTime}`);
           return { skipped: true, reason: "duplicate-cycle-timestamp" };
         }
       }
