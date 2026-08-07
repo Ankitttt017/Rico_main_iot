@@ -1042,11 +1042,60 @@ function productionHistoryShotNumber(row = {}) {
   return Number.isFinite(number) ? number : null;
 }
 
+function productionHistoryMachineKey(row = {}) {
+  return String(row.machine_key || row.plc_ip || row.machine_name || "").trim();
+}
+
+function normalizeProductionHistoryClocks(rows = []) {
+  const nextRows = rows.map((row) => ({ ...row }));
+  const timelineRows = nextRows
+    .map((row, index) => ({
+      row,
+      index,
+      machine: productionHistoryMachineKey(row),
+      date: productionHistoryDateKey(row),
+      shot: productionHistoryShotNumber(row),
+      time: parseSystemDateTime(row.shot_datetime || row.recorded_at || row.created_at),
+    }))
+    .filter((item) => item.machine && item.date && item.shot !== null && item.time)
+    .sort((a, b) => {
+      if (a.machine !== b.machine) return a.machine.localeCompare(b.machine);
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
+      if (a.shot !== b.shot) return a.shot - b.shot;
+      return a.time.getTime() - b.time.getTime();
+    });
+
+  let currentGroup = "";
+  let lastTime = null;
+  for (const item of timelineRows) {
+    const group = `${item.machine}|${item.date}`;
+    if (group !== currentGroup) {
+      currentGroup = group;
+      lastTime = null;
+    }
+
+    let time = item.time;
+    if (lastTime && time.getTime() <= lastTime.getTime()) {
+      time = new Date(lastTime.getTime() + 1000);
+      nextRows[item.index] = withShotClock(nextRows[item.index], time);
+      nextRows[item.index].recorded_at = systemDateTimeString(time);
+    }
+    lastTime = time;
+  }
+  return nextRows;
+}
+
 function sortProductionHistoryRows(rows = []) {
-  return rows.sort((a, b) => {
+  return normalizeProductionHistoryClocks(rows).sort((a, b) => {
     const aDate = productionHistoryDateKey(a);
     const bDate = productionHistoryDateKey(b);
     if (aDate && bDate && aDate !== bDate) return bDate.localeCompare(aDate);
+
+    const aShot = productionHistoryShotNumber(a);
+    const bShot = productionHistoryShotNumber(b);
+    if (aShot !== null && bShot !== null && aShot !== bShot) return bShot - aShot;
+    if (aShot !== null && bShot === null) return -1;
+    if (aShot === null && bShot !== null) return 1;
 
     const aKey = historySortKey(a);
     const bKey = historySortKey(b);
@@ -1054,12 +1103,6 @@ function sortProductionHistoryRows(rows = []) {
     const aId = Number(a.id || 0);
     const bId = Number(b.id || 0);
     if (aId !== bId) return bId - aId;
-
-    const aShot = productionHistoryShotNumber(a);
-    const bShot = productionHistoryShotNumber(b);
-    if (aShot !== null && bShot !== null && aShot !== bShot) return bShot - aShot;
-    if (aShot !== null && bShot === null) return -1;
-    if (aShot === null && bShot !== null) return 1;
     return 0;
   });
 }
@@ -1946,14 +1989,14 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
   const productionSelect = `*, CONVERT(VARCHAR(10), ${productionDateExpr}, 23) AS production_date`;
   const productionOrderBy = `
     ${productionDateExpr} DESC,
+    CASE WHEN shot_number IS NULL THEN 1 ELSE 0 END,
+    TRY_CONVERT(BIGINT, shot_number) DESC,
     COALESCE(
       TRY_CONVERT(datetime2, shot_datetime),
       recorded_at,
       created_at
     ) DESC,
-    id DESC,
-    CASE WHEN shot_number IS NULL THEN 1 ELSE 0 END,
-    TRY_CONVERT(BIGINT, shot_number) DESC
+    id DESC
   `;
   const appendProductionDateFilters = (filters, values) => {
     if (from) {
@@ -2441,13 +2484,65 @@ async function persistGenericMachineReading(machine, partName, readings = {}, ev
   return { skipped: false, id: readingId };
 }
 
+function parseSystemDateTime(value) {
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  const text = String(value || "").trim();
+  if (!text) return null;
+  const date = new Date(text.replace(" ", "T"));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function withShotClock(readings = {}, recordedAt) {
+  const date = parseSystemDateTime(recordedAt);
+  if (!date) return readings;
+  return {
+    ...readings,
+    shot_datetime: systemDateTimeString(date).slice(0, 19),
+    shot_year: date.getFullYear(),
+    shot_month: date.getMonth() + 1,
+    shot_day: date.getDate(),
+    shot_time: [
+      String(date.getHours()).padStart(2, "0"),
+      String(date.getMinutes()).padStart(2, "0"),
+      String(date.getSeconds()).padStart(2, "0"),
+    ].join(":"),
+    shot_hour: date.getHours(),
+    shot_minute: date.getMinutes(),
+    shot_second: date.getSeconds(),
+  };
+}
+
+async function getMonotonicUbeRecordedAt(machine, plcRecordedAt, shotNumber) {
+  const shotValue = Number(shotNumber);
+  if (!Number.isFinite(shotValue)) return plcRecordedAt;
+
+  const machineKey = getCanonicalMachineKey(machine);
+  const { rows } = await db.query(
+    `SELECT TOP 1 shot_number, recorded_at
+     FROM ${TABLE}
+     WHERE (machine_key = ? OR plc_ip = ?)
+       AND TRY_CONVERT(BIGINT, shot_number) < TRY_CONVERT(BIGINT, ?)
+     ORDER BY TRY_CONVERT(BIGINT, shot_number) DESC, recorded_at DESC, id DESC`,
+    [machineKey, machine.ip, shotNumber]
+  );
+
+  const previousShot = Number(rows[0]?.shot_number);
+  const previousTime = parseSystemDateTime(rows[0]?.recorded_at);
+  const currentTime = parseSystemDateTime(plcRecordedAt);
+  if (!Number.isFinite(previousShot) || !previousTime || !currentTime) return plcRecordedAt;
+  if (currentTime.getTime() > previousTime.getTime()) return plcRecordedAt;
+
+  const shotStep = Math.max(1, Math.trunc(shotValue - previousShot));
+  return systemDateTimeString(new Date(previousTime.getTime() + shotStep * 1000));
+}
+
 async function saveToDBUnlocked(machine, partName, readings) {
   readings = withoutStoppageEventFields(readings);
   const productionDate = getReadingProductionDate(readings);
   if (productionDate) readings = { ...readings, shot_date: productionDate };
   const columns = ["recorded_at", "machine_key", "machine_name", "plc_ip", "plc_port", "part_name"];
 
-  const plcRecordedAt =
+  let plcRecordedAt =
     normalizeReadingForDB("cycle_end_time", readings.cycle_end_time) ||
     normalizeReadingForDB("shot_datetime", readings.shot_datetime);
   const shotNumber = normalizeReadingForDB("shot_number", readings.shot_number ?? readings["SHOT NO."]);
@@ -2458,6 +2553,12 @@ async function saveToDBUnlocked(machine, partName, readings) {
   }
 
   if (hasPlcRecordedAt) {
+    const monotonicRecordedAt = await getMonotonicUbeRecordedAt(machine, plcRecordedAt, shotNumber);
+    if (monotonicRecordedAt !== plcRecordedAt) {
+      plcRecordedAt = monotonicRecordedAt;
+      readings = withShotClock(readings, plcRecordedAt);
+    }
+
     const machineKey = getCanonicalMachineKey(machine);
     const duplicateFilters = [
       "(machine_key = ? OR plc_ip = ?)",
@@ -4654,13 +4755,7 @@ function startPlcMonitor(io) {
       if (!replaced) nextRows.unshift(liveReading);
     }
 
-    return nextRows
-      .sort((a, b) => {
-        const aTime = new Date(a.recorded_at || a.shot_datetime || a.created_at || 0).getTime();
-        const bTime = new Date(b.recorded_at || b.shot_datetime || b.created_at || 0).getTime();
-        return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
-      })
-      .slice(0, clampLimit(args.limit || 200));
+    return sortProductionHistoryRows(nextRows).slice(0, clampLimit(args.limit || 200));
   };
 
   return {
