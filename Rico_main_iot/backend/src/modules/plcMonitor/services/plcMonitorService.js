@@ -3325,7 +3325,18 @@ function startPlcMonitor(io) {
       },
     };
 
-    if (emit) {
+    const currentState = machineState.get(machineKey) || {};
+    const currentStateShotNumber = Number(currentState.lastShotNumber);
+    const payloadShotNumber = Number(readings.shot_number);
+    const staleLiveOnly =
+      liveOnly &&
+      !isGauge &&
+      isUbeMachine(machine) &&
+      Number.isFinite(currentStateShotNumber) &&
+      Number.isFinite(payloadShotNumber) &&
+      payloadShotNumber < currentStateShotNumber;
+
+    if (emit && !staleLiveOnly) {
       const emitData = {
         machine: machine.name,
         machineKey,
@@ -3359,6 +3370,12 @@ function startPlcMonitor(io) {
         partName,
         cycleTime: readings.cycle_time,
         shotStatus: liveOnly ? "Live registers updated." : "Cycle complete.",
+      });
+    } else if (staleLiveOnly) {
+      updateMachineState(machine, {
+        connected: true,
+        error: null,
+        shotStatus: `Stale live snapshot ignored; latest shot is ${currentStateShotNumber}.`,
       });
     }
 
@@ -4342,17 +4359,40 @@ function startPlcMonitor(io) {
           return run;
         };
 
+        const readUbeSnapshotOnDedicatedSocket = async (options, label = "snapshot") => {
+          let snapshotSock = null;
+          try {
+            snapshotSock = await withTimeout(
+              connectPLC(machine),
+              Number(process.env.PLC_UBE_SNAPSHOT_CONNECT_TIMEOUT_MS || 10000),
+              `UBE ${label} connect ${machine.ip}:${machine.port}`
+            );
+            return await readAll(machine, snapshotSock, options);
+          } finally {
+            closeSocket(snapshotSock);
+          }
+        };
+
         const captureUbeCycleSnapshot = async ({ startedAt, endedAt, durationSec, trigger = "cycle-end", capturedShotNumber, capturedShotTimestamp }) => {
           let lastError = null;
           let lastPayload = null;
           for (let attempt = 1; attempt <= UBE_CYCLE_END_SAVE_ATTEMPTS; attempt += 1) {
             try {
-              const payload = await runPlcOperation(() => readAll(machine, sock, {
+              let payload = null;
+              const snapshotOptions = {
                 persist: false,
-                emit: true,
+                emit: false,
                 continueOnReadError: true,
                 cycleTiming: endedAt ? { startedAt, endedAt, durationSec } : null,
-              }));
+              };
+              try {
+                payload = await readUbeSnapshotOnDedicatedSocket(snapshotOptions, "cycle snapshot");
+              } catch (snapshotError) {
+                console.warn(
+                  `PLC Cycle End dedicated snapshot ${machine.ip}: ${snapshotError.message}; using monitor socket`
+                );
+                payload = await runPlcOperation(() => readAll(machine, sock, snapshotOptions));
+              }
               // If we captured a fast shot-number snapshot at the moment the cycle-end
               // transition was detected, prefer that value over the (later) read value.
               // Also override the PLC shot timestamp if available so the persisted
@@ -4414,6 +4454,44 @@ function startPlcMonitor(io) {
               const saveFinished = !saveResult?.skipped || saveResult.queued;
 
               if (saveFinished || attempt === UBE_CYCLE_END_SAVE_ATTEMPTS) {
+                if (!saveResult?.skipped || saveResult?.queued) {
+                  const finalReadings = withoutStoppageEventFields(payload.rawReadings || {});
+                  payload.readings = formatReadingsForClient(finalReadings, machine);
+                  payload.cycleTime = finalReadings.cycle_time;
+                  payload.shotTime = finalReadings.shot_time || payload.shotTime;
+                  payload.timestamp = finalReadings.shot_datetime || payload.timestamp;
+                  const emitData = {
+                    machine: machine.name,
+                    machineKey: getCanonicalMachineKey(machine),
+                    machineType: getMachineTypeName(machine),
+                    partName: payload.partName,
+                    shotTime: payload.shotTime,
+                    readings: payload.readings,
+                    cycleTime: payload.cycleTime,
+                    timestamp: payload.timestamp,
+                    observedAt: payload.observedAt,
+                    liveOnly: false,
+                    config: payload.config,
+                  };
+                  io.emit(`plc_data:${emitData.machineKey}`, emitData);
+                  io.emit("plc_data", emitData);
+                  io.emit("cycle_complete", { ...payload, readings: payload.readings });
+                  updateMachineState(machine, {
+                    connected: true,
+                    error: null,
+                    lastCycleAt: payload.timestamp,
+                    lastShotNumber: finalReadings.shot_number,
+                    latestReading: formatLiveReadingSnapshot(
+                      machine,
+                      payload.partName,
+                      finalReadings,
+                      payload.timestamp
+                    ),
+                    partName: payload.partName,
+                    cycleTime: finalReadings.cycle_time,
+                    shotStatus: `${trigger} shot ${savedShotNumber} captured.`,
+                  });
+                }
                 const numericShot = Number(savedShotNumber);
                 if (
                   !saveResult?.skipped &&
@@ -4507,12 +4585,12 @@ function startPlcMonitor(io) {
           liveReadRunning = true;
           (async () => {
             try {
-              const payload = await runPlcOperation(() => readAll(machine, sock, {
+              const payload = await readUbeSnapshotOnDedicatedSocket({
                 persist: false,
                 persistStoppage: true,
                 emit: true,
                 liveOnly: true,
-              }));
+              }, "live snapshot");
               consecutiveReadFailures = 0;
             } catch (error) {
               if (isPlcReadTimeoutError(error)) {
