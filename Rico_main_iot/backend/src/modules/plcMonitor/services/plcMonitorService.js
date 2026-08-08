@@ -107,6 +107,8 @@ const UBE_SHOT_CHANGE_FALLBACK_GRACE_MS = Math.max(
   0,
   Number(process.env.PLC_UBE_SHOT_CHANGE_FALLBACK_GRACE_MS || 1500)
 );
+const UBE_STRICT_CONFIG_REGISTERS =
+  String(process.env.PLC_UBE_STRICT_CONFIG_REGISTERS || "true").toLowerCase() !== "false";
 const plantEnvironmentCache = {
   at: 0,
   data: null,
@@ -473,6 +475,14 @@ const UBE_LIMIT_READ_PARAMETERS = [
 ];
 
 function mergeUbeReadParameters(configuredParameters = []) {
+  const enabledConfiguredParameters = configuredParameters
+    .filter((parameter) => parameter && parameter.enabled !== false);
+  if (UBE_STRICT_CONFIG_REGISTERS && enabledConfiguredParameters.length) {
+    return enabledConfiguredParameters
+      .map((parameter) => normalizeUbeReadParameter(parameter))
+      .filter(Boolean);
+  }
+
   const merged = [];
   const seen = new Set();
 
@@ -488,9 +498,7 @@ function mergeUbeReadParameters(configuredParameters = []) {
     merged.push(normalized);
   };
 
-  configuredParameters
-    .filter((parameter) => parameter && parameter.enabled !== false)
-    .forEach(add);
+  enabledConfiguredParameters.forEach(add);
   UBE_LIMIT_READ_PARAMETERS.forEach(add);
 
   return merged;
@@ -3260,11 +3268,21 @@ function startPlcMonitor(io) {
     readings.shot_number = readings["SHOT NO."] ?? null;
     readings.ok_shot = readings["HIGH SHOT COUNT"] ?? null;
     readings.ng_counter = readings["NG COUNTER"] ?? null;
-    if (readings.clamp_tonnage_he_low_pct !== undefined && readings.clamp_tonnage_he_low_pct !== null) {
+    if (
+      readings.clamp_force_pct === undefined &&
+      readings["CLAMP FORCE (%)"] === undefined &&
+      readings.clamp_tonnage_he_low_pct !== undefined &&
+      readings.clamp_tonnage_he_low_pct !== null
+    ) {
       readings.clamp_force_pct = Number((Number(readings.clamp_tonnage_he_low_pct) / 10).toFixed(2));
       readings["CLAMP FORCE (%)"] = readings.clamp_force_pct;
     }
-    if (readings.clamp_tonnage_he_low_mn !== undefined && readings.clamp_tonnage_he_low_mn !== null) {
+    if (
+      readings.clamp_tonnage === undefined &&
+      readings["CLAMP TONNAGE (T)"] === undefined &&
+      readings.clamp_tonnage_he_low_mn !== undefined &&
+      readings.clamp_tonnage_he_low_mn !== null
+    ) {
       readings.clamp_tonnage = Number(Number(readings.clamp_tonnage_he_low_mn).toFixed(2));
       readings["CLAMP TONNAGE (T)"] = readings.clamp_tonnage;
     }
