@@ -107,8 +107,6 @@ const UBE_SHOT_CHANGE_FALLBACK_GRACE_MS = Math.max(
   0,
   Number(process.env.PLC_UBE_SHOT_CHANGE_FALLBACK_GRACE_MS || 1500)
 );
-const UBE_STRICT_CONFIG_REGISTERS =
-  String(process.env.PLC_UBE_STRICT_CONFIG_REGISTERS || "true").toLowerCase() !== "false";
 const plantEnvironmentCache = {
   at: 0,
   data: null,
@@ -477,12 +475,6 @@ const UBE_LIMIT_READ_PARAMETERS = [
 function mergeUbeReadParameters(configuredParameters = []) {
   const enabledConfiguredParameters = configuredParameters
     .filter((parameter) => parameter && parameter.enabled !== false);
-  if (UBE_STRICT_CONFIG_REGISTERS && enabledConfiguredParameters.length) {
-    return enabledConfiguredParameters
-      .map((parameter) => normalizeUbeReadParameter(parameter))
-      .filter(Boolean);
-  }
-
   const merged = [];
   const seen = new Set();
 
