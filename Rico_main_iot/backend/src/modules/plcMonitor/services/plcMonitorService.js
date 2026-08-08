@@ -4388,7 +4388,7 @@ function startPlcMonitor(io) {
               try {
                 payload = await readUbeSnapshotOnDedicatedSocket(snapshotOptions, "cycle snapshot");
               } catch (snapshotError) {
-                console.warn(
+                console.log(
                   `PLC Cycle End dedicated snapshot ${machine.ip}: ${snapshotError.message}; using monitor socket`
                 );
                 payload = await runPlcOperation(() => readAll(machine, sock, snapshotOptions));
@@ -4584,13 +4584,22 @@ function startPlcMonitor(io) {
           if (liveReadRunning) return;
           liveReadRunning = true;
           (async () => {
+            const liveOptions = {
+              persist: false,
+              persistStoppage: true,
+              emit: true,
+              liveOnly: true,
+            };
             try {
-              const payload = await readUbeSnapshotOnDedicatedSocket({
-                persist: false,
-                persistStoppage: true,
-                emit: true,
-                liveOnly: true,
-              }, "live snapshot");
+              try {
+                await readUbeSnapshotOnDedicatedSocket(liveOptions, "live snapshot");
+              } catch (dedicatedError) {
+                if (!isPlcConnectionError(dedicatedError)) throw dedicatedError;
+                console.log(
+                  `PLC live snapshot dedicated connection unavailable ${machine.ip}: ${dedicatedError.message}; using monitor socket`
+                );
+                await runPlcOperation(() => readAll(machine, sock, liveOptions));
+              }
               consecutiveReadFailures = 0;
             } catch (error) {
               if (isPlcReadTimeoutError(error)) {
