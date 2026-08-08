@@ -3296,10 +3296,6 @@ function startPlcMonitor(io) {
       if (hasValidEnd) {
         if (hasValidStart) readings.cycle_start_time = startedAt.toISOString();
         readings.cycle_end_time = endedAt.toISOString();
-        if (Number.isFinite(durationSec) && durationSec >= 0) {
-          readings.cycle_time = durationSec;
-          readings["CYCLE TIME sec."] = durationSec;
-        }
       }
     }
 

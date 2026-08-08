@@ -346,7 +346,7 @@ const READING_VALUE_ALIASES = {
   both: ["BOTH", "Both"],
   "CYCLE TIME": ["cycle_time"],
   "Cycle Time": ["cycle_time"],
-  cycle_time: ["CYCLE TIME", "Cycle Time", "Cycle Time Sec", "Cycle Time In Sec", "cycle_time_in_sec"],
+  cycle_time: ["CYCLE TIME sec.", "CYCLE TIME", "Cycle Time", "Cycle Time Sec", "Cycle Time In Sec", "cycle_time_in_sec"],
   "CYCLE START": ["cycle_start"],
   "Cycle Start": ["cycle_start"],
   cycle_start: ["CYCLE START", "Cycle Start"],
