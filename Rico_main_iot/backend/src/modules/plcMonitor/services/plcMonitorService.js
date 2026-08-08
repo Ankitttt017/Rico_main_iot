@@ -101,6 +101,12 @@ const UBE_CYCLE_END_DEBOUNCE_MS = Math.max(
   500,
   Number(process.env.PLC_UBE_CYCLE_END_DEBOUNCE_MS || 3000)
 );
+const UBE_SHOT_CHANGE_FALLBACK_ENABLED =
+  String(process.env.PLC_UBE_SHOT_CHANGE_FALLBACK_ENABLED || "true").toLowerCase() !== "false";
+const UBE_SHOT_CHANGE_FALLBACK_GRACE_MS = Math.max(
+  0,
+  Number(process.env.PLC_UBE_SHOT_CHANGE_FALLBACK_GRACE_MS || 1500)
+);
 const plantEnvironmentCache = {
   at: 0,
   data: null,
@@ -990,6 +996,7 @@ function formatDbRowForClient(row = {}) {
   }
 
   for (const column of DROPPED_READING_COLUMNS) delete next[column];
+  delete next.duplicate_rank;
   Object.keys(next).forEach((column) => {
     if (isStoppageOrBreakdownKey(column)) delete next[column];
   });
@@ -1952,6 +1959,27 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
     ) DESC,
     id DESC
   `;
+  const productionDuplicateRank = `
+    ROW_NUMBER() OVER (
+      PARTITION BY
+        COALESCE(machine_key, plc_ip),
+        ${productionDateExpr},
+        CASE
+          WHEN shot_number IS NULL THEN CONCAT(N'row-', id)
+          ELSE CONCAT(N'shot-', LTRIM(RTRIM(CAST(shot_number AS NVARCHAR(80)))))
+        END
+      ORDER BY
+        COALESCE(TRY_CONVERT(datetime2, shot_datetime), recorded_at, created_at) DESC,
+        id DESC
+    ) AS duplicate_rank
+  `;
+  const buildProductionRowsCte = (where = "") => `
+        WITH production_rows AS (
+          SELECT ${productionSelect}, ${productionDuplicateRank}
+          FROM ${TABLE}
+          ${where}
+        )
+      `;
   const appendProductionDateFilters = (filters, values) => {
     if (from) {
       filters.push(`${productionDateExpr} >= CAST(? AS date)`);
@@ -1963,15 +1991,13 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
     }
   };
   const buildProductionKpisSql = (where) => `
-        WITH filtered AS (
-          SELECT *
-          FROM ${TABLE}
-          ${where}
-        )
+        ${buildProductionRowsCte(where)}
         SELECT
-          (SELECT SUM(CASE WHEN TRY_CONVERT(INT, shot_status) = 1 THEN 1 ELSE 0 END) FROM filtered) AS ok,
-          (SELECT SUM(CASE WHEN TRY_CONVERT(INT, shot_status) = 3 THEN 1 ELSE 0 END) FROM filtered) AS warm,
-          (SELECT SUM(CASE WHEN TRY_CONVERT(INT, shot_status) = 5 THEN 1 ELSE 0 END) FROM filtered) AS off_count
+          SUM(CASE WHEN TRY_CONVERT(INT, shot_status) = 1 THEN 1 ELSE 0 END) AS ok,
+          SUM(CASE WHEN TRY_CONVERT(INT, shot_status) = 3 THEN 1 ELSE 0 END) AS warm,
+          SUM(CASE WHEN TRY_CONVERT(INT, shot_status) = 5 THEN 1 ELSE 0 END) AS off_count
+        FROM production_rows
+        WHERE duplicate_rank = 1
       `;
   const normalizeProductionKpis = (row = {}) => ({
     ok: Number(row.ok || 0),
@@ -1988,14 +2014,21 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
     if (isPaged) {
       const [{ rows }, { rows: countRows }, { rows: kpiRows }] = await Promise.all([
         db.query(
-          `SELECT ${productionSelect}
-           FROM ${TABLE}
-           ${where}
+          `${buildProductionRowsCte(where)}
+           SELECT *
+           FROM production_rows
+           WHERE duplicate_rank = 1
            ORDER BY ${productionOrderBy}
            OFFSET ${offset} ROWS FETCH NEXT ${safeLimit} ROWS ONLY`,
           values
         ),
-        db.query(`SELECT COUNT(1) AS total FROM ${TABLE} ${where}`, values),
+        db.query(
+          `${buildProductionRowsCte(where)}
+           SELECT COUNT(1) AS total
+           FROM production_rows
+           WHERE duplicate_rank = 1`,
+          values
+        ),
         db.query(buildProductionKpisSql(where), values),
       ]);
       return {
@@ -2007,9 +2040,10 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
       };
     }
     const { rows } = await db.query(
-      `SELECT TOP (${safeLimit}) ${productionSelect}
-       FROM ${TABLE}
-       ${where}
+      `${buildProductionRowsCte(where)}
+       SELECT TOP (${safeLimit}) *
+       FROM production_rows
+       WHERE duplicate_rank = 1
        ORDER BY ${productionOrderBy}`,
       values
     );
@@ -2262,14 +2296,21 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
     const where = `WHERE ${filters.join(" AND ")}`;
     const [{ rows }, { rows: countRows }, { rows: kpiRows }] = await Promise.all([
       db.query(
-        `SELECT ${productionSelect}
-         FROM ${TABLE}
-         ${where}
+        `${buildProductionRowsCte(where)}
+         SELECT *
+         FROM production_rows
+         WHERE duplicate_rank = 1
          ORDER BY ${productionOrderBy}
          OFFSET ${offset} ROWS FETCH NEXT ${safeLimit} ROWS ONLY`,
         values
       ),
-      db.query(`SELECT COUNT(1) AS total FROM ${TABLE} ${where}`, values),
+      db.query(
+        `${buildProductionRowsCte(where)}
+         SELECT COUNT(1) AS total
+         FROM production_rows
+         WHERE duplicate_rank = 1`,
+        values
+      ),
       db.query(buildProductionKpisSql(where), values),
     ]);
     return {
@@ -2282,9 +2323,10 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
   }
 
   const { rows } = await db.query(
-    `SELECT TOP (${safeLimit}) ${productionSelect}
-     FROM ${TABLE}
-     WHERE ${filters.join(" AND ")}
+    `${buildProductionRowsCte(`WHERE ${filters.join(" AND ")}`)}
+     SELECT TOP (${safeLimit}) *
+     FROM production_rows
+     WHERE duplicate_rank = 1
      ORDER BY ${productionOrderBy}`,
     values
   );
@@ -2491,6 +2533,25 @@ async function saveToDBUnlocked(machine, partName, readings) {
       if (exactDupRows.length) {
         console.warn(`PLC DB save skipped (exact duplicate): ${machine?.ip || machine?.name || "unknown"} shot=${shotNumber ?? "-"} time=${plcRecordedAt}`);
         return { skipped: true, reason: "duplicate-exact-timestamp-shot" };
+      }
+
+      if (productionDate) {
+        const { rows: sameShotRows } = await db.query(
+          `SELECT TOP 1 id FROM ${TABLE}
+           WHERE (machine_key = ? OR plc_ip = ?)
+             AND TRY_CONVERT(date, COALESCE(shot_date, shot_datetime, recorded_at)) = CAST(? AS date)
+             AND (
+               (TRY_CONVERT(BIGINT, ?) IS NOT NULL AND TRY_CONVERT(BIGINT, shot_number) = TRY_CONVERT(BIGINT, ?))
+               OR
+               (TRY_CONVERT(BIGINT, ?) IS NULL AND LTRIM(RTRIM(CAST(shot_number AS NVARCHAR(80)))) = ?)
+             )
+           ORDER BY recorded_at DESC, id DESC`,
+          [machineKey, machine.ip, productionDate, shotNumber, shotNumber, shotNumber, String(shotNumber).trim()]
+        );
+        if (sameShotRows.length) {
+          console.warn(`PLC DB save skipped (duplicate shot/day): ${machine?.ip || machine?.name || "unknown"} shot=${shotNumber ?? "-"} production_date=${productionDate}`);
+          return { skipped: true, reason: "duplicate-shot-production-date" };
+        }
       }
     }
     
@@ -3215,22 +3276,30 @@ function startPlcMonitor(io) {
       }
     }
 
-    if (cycleTiming?.startedAt && cycleTiming?.endedAt) {
-      const startedAt = cycleTiming.startedAt instanceof Date
-        ? cycleTiming.startedAt
-        : new Date(cycleTiming.startedAt);
+    if (cycleTiming?.endedAt) {
+      const startedAt = cycleTiming.startedAt
+        ? cycleTiming.startedAt instanceof Date
+          ? cycleTiming.startedAt
+          : new Date(cycleTiming.startedAt)
+        : null;
       const endedAt = cycleTiming.endedAt instanceof Date
         ? cycleTiming.endedAt
         : new Date(cycleTiming.endedAt);
+      const hasValidEnd = !Number.isNaN(endedAt.getTime());
+      const hasValidStart = startedAt && !Number.isNaN(startedAt.getTime());
       const durationSec = Number.isFinite(Number(cycleTiming.durationSec))
         ? Number(cycleTiming.durationSec)
-        : Number(((endedAt - startedAt) / 1000).toFixed(2));
+        : hasValidStart && hasValidEnd
+          ? Number(((endedAt - startedAt) / 1000).toFixed(2))
+          : null;
 
-      if (Number.isFinite(durationSec) && durationSec >= 0) {
-        readings.cycle_start_time = startedAt.toISOString();
+      if (hasValidEnd) {
+        if (hasValidStart) readings.cycle_start_time = startedAt.toISOString();
         readings.cycle_end_time = endedAt.toISOString();
-        readings.cycle_time = durationSec;
-        readings["CYCLE TIME sec."] = durationSec;
+        if (Number.isFinite(durationSec) && durationSec >= 0) {
+          readings.cycle_time = durationSec;
+          readings["CYCLE TIME sec."] = durationSec;
+        }
       }
     }
 
@@ -4266,6 +4335,7 @@ function startPlcMonitor(io) {
         let lastCycleEndQueuedAt = 0;
         let lastSavedCycleShot = null;
         let lastDetectedShotNumber = null;
+        let fallbackShotCandidate = null;
         const cycleEndQueue = [];
         let cycleEndQueueRunning = false;
         let plcOperation = Promise.resolve();
@@ -4285,9 +4355,7 @@ function startPlcMonitor(io) {
                 persist: false,
                 emit: true,
                 continueOnReadError: true,
-                cycleTiming: startedAt && durationSec !== null
-                  ? { startedAt, endedAt, durationSec }
-                  : null,
+                cycleTiming: endedAt ? { startedAt, endedAt, durationSec } : null,
               }));
               // If we captured a fast shot-number snapshot at the moment the cycle-end
               // transition was detected, prefer that value over the (later) read value.
@@ -4517,6 +4585,7 @@ function startPlcMonitor(io) {
           }
 
           if (shouldCaptureCycle) {
+            fallbackShotCandidate = null;
             cycleEndHandled = true;
             const cycleEndAt = new Date();
             const durationSec = cycleStartAt
@@ -4579,7 +4648,7 @@ function startPlcMonitor(io) {
 
           // Fallback: Detect shot-number change (only if end-bit didn't trigger this cycle)
           // This catches cycles where the electrical end-bit signal was missed
-          if (!shouldCaptureCycle) {
+          if (UBE_SHOT_CHANGE_FALLBACK_ENABLED && !shouldCaptureCycle && cycleEnd !== 1) {
             try {
               const shotDevice = findConfiguredRegisterDevice(machine, ["SHOT NO.", "Shot Number", "shot_number"]);
               if (shotDevice) {
@@ -4603,32 +4672,54 @@ function startPlcMonitor(io) {
                     currentShotNumber > lastDetectedShotNumber &&
                     !cycleEndHandled
                   ) {
-                    console.log(
-                      `PLC Cycle End fallback triggered ${machine.ip}: last=${lastDetectedShotNumber}, current=${currentShotNumber}`
-                    );
-                    cycleEndHandled = true;
-                    const cycleEndAt = new Date();
-                    const durationSec = cycleStartAt
-                      ? Number(((cycleEndAt - cycleStartAt) / 1000).toFixed(2))
-                      : null;
-                    updateMachineState(machine, {
-                      connected: true,
-                      error: null,
-                      shotStatus: `Cycle detected via shot-number change (fallback); shot=${currentShotNumber}, duration=${durationSec ?? "-"} sec.`,
-                    });
-                    
-                    enqueueUbeCycleEnd({
-                      startedAt: cycleStartAt,
-                      endedAt: cycleEndAt,
-                      durationSec,
-                      capturedShotNumber: currentShotNumber,
-                      capturedShotTimestamp: currentShotTimestamp,
-                      trigger: "shot-number-change-fallback",
-                    });
-                    cycleStartAt = null;
-                    lastDetectedShotNumber = currentShotNumber;
+                    const nowMs = Date.now();
+                    const sameCandidate =
+                      fallbackShotCandidate &&
+                      fallbackShotCandidate.currentShotNumber === currentShotNumber &&
+                      fallbackShotCandidate.lastShotNumber === lastDetectedShotNumber;
+
+                    if (!sameCandidate) {
+                      fallbackShotCandidate = {
+                        lastShotNumber: lastDetectedShotNumber,
+                        currentShotNumber,
+                        currentShotTimestamp,
+                        firstSeenAt: nowMs,
+                      };
+                      updateMachineState(machine, {
+                        connected: true,
+                        error: null,
+                        shotStatus: `Shot change seen; waiting ${UBE_SHOT_CHANGE_FALLBACK_GRACE_MS}ms for cycle end bit before fallback save.`,
+                      });
+                    } else if (nowMs - fallbackShotCandidate.firstSeenAt >= UBE_SHOT_CHANGE_FALLBACK_GRACE_MS) {
+                      console.log(
+                        `PLC Cycle End fallback triggered ${machine.ip}: last=${lastDetectedShotNumber}, current=${currentShotNumber}`
+                      );
+                      cycleEndHandled = true;
+                      const cycleEndAt = new Date();
+                      const durationSec = cycleStartAt
+                        ? Number(((cycleEndAt - cycleStartAt) / 1000).toFixed(2))
+                        : null;
+                      updateMachineState(machine, {
+                        connected: true,
+                        error: null,
+                        shotStatus: `Cycle detected via shot-number fallback; shot=${currentShotNumber}, duration=${durationSec ?? "-"} sec.`,
+                      });
+
+                      enqueueUbeCycleEnd({
+                        startedAt: cycleStartAt,
+                        endedAt: cycleEndAt,
+                        durationSec,
+                        capturedShotNumber: currentShotNumber,
+                        capturedShotTimestamp: currentShotTimestamp,
+                        trigger: "shot-number-change-fallback",
+                      });
+                      cycleStartAt = null;
+                      lastDetectedShotNumber = currentShotNumber;
+                      fallbackShotCandidate = null;
+                    }
                   } else if (Number.isFinite(currentShotNumber)) {
                     lastDetectedShotNumber = currentShotNumber;
+                    fallbackShotCandidate = null;
                   }
                 } catch (e) {
                   // Fallback read failed, continue
