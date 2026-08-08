@@ -9,3 +9,4 @@ uptime-kuma/
 actions-runner/
 *.tar.gz
 artifacts/
+Rico_main_iot/backend/plc-pending-ube-saves.json

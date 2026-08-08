@@ -2574,7 +2574,7 @@ async function saveToDBUnlocked(machine, partName, readings) {
       
       // For shots within the time window, keep the one with valid cycle time
       const { rows: duplicateRows } = await db.query(
-        `SELECT TOP 1 id, CAST([Cycle Time (SEC)] AS FLOAT) as cycle_time_db FROM ${TABLE}
+        `SELECT TOP 1 id, TRY_CONVERT(FLOAT, [cycle_time]) as cycle_time_db FROM ${TABLE}
          WHERE ${duplicateFilters.join(" AND ")}
          ORDER BY recorded_at DESC, id DESC`,
         duplicateValues
