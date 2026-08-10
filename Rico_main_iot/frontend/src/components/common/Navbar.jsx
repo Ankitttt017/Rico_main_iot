@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { useI18n } from "../../context/I18nContext";
 import { useSidebar } from "../../context/SidebarContext";
 
 const pageMeta = {
@@ -12,7 +11,7 @@ const pageMeta = {
   "/parts": { title: "Part Manager", subtitle: "Part master, material and process configuration", searchPlaceholder: "Search part...", searchPath: "/parts" },
   "/operations": { title: "Operation Manager", subtitle: "Part routing, process steps and logs", searchPlaceholder: "Search operation...", searchPath: "/operations" },
   "/machines": { title: "Machine Manager", subtitle: "Machine assets and production setup", searchPlaceholder: "Search machine...", searchPath: "/machines" },
-  "/operator-workstation": { title: "Digital Workstation", subtitle: "Operator production screen and downtime entry", searchPlaceholder: "Search workstation...", searchPath: "/operator-workstation" },
+  "/operator-workstation": { title: "Operator View", subtitle: "Operator production screen and downtime entry", searchPlaceholder: "Search workstation...", searchPath: "/operator-workstation" },
   "/downtime-tracker": { title: "Downtime Tracker", subtitle: "Downtime events and loss tracking", hideSearch: true },
   "/plc-monitor": { title: "Real Time Monitor", subtitle: "", hideSearch: true },
   "/machine-plc-setup": { title: "PLC Config / Tags", subtitle: "PLC connection, register mapping and limits", searchPlaceholder: "Search PLC tag...", searchPath: "/machine-plc-setup" },
@@ -22,75 +21,12 @@ const pageMeta = {
   "/system-settings": { title: "System Settings", subtitle: "Application configuration and preferences", hideSearch: true },
 };
 
-const DAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
-const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-
-const DatePicker = ({ selectedDate, onChange, onClose }) => {
-  const today = new Date();
-  const [view, setView] = useState({
-    year: selectedDate ? selectedDate.getFullYear() : today.getFullYear(),
-    month: selectedDate ? selectedDate.getMonth() : today.getMonth(),
-  });
-
-  const firstDay = new Date(view.year, view.month, 1).getDay();
-  const daysInMonth = new Date(view.year, view.month + 1, 0).getDate();
-  const cells = [];
-  for (let i = 0; i < firstDay; i++) cells.push(null);
-  for (let day = 1; day <= daysInMonth; day++) cells.push(day);
-
-  const prevMonth = () => setView((v) => v.month === 0 ? { year: v.year - 1, month: 11 } : { ...v, month: v.month - 1 });
-  const nextMonth = () => setView((v) => v.month === 11 ? { year: v.year + 1, month: 0 } : { ...v, month: v.month + 1 });
-  const selectDay = (day) => { onChange(new Date(view.year, view.month, day)); onClose(); };
-
-  return (
-    <div className="absolute right-0 top-full z-50 mt-2 w-72 select-none rounded-xl border border-slate-200 bg-white p-4 shadow-2xl shadow-slate-300/40">
-      <div className="mb-3 flex items-center justify-between">
-        <button type="button" onClick={prevMonth} className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100">
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-          </svg>
-        </button>
-        <span className="text-sm font-bold text-slate-800">{MONTHS[view.month]} {view.year}</span>
-        <button type="button" onClick={nextMonth} className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100">
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-          </svg>
-        </button>
-      </div>
-      <div className="mb-1 grid grid-cols-7">
-        {DAYS.map((day) => <span key={day} className="py-1 text-center text-[10px] font-semibold text-slate-400">{day}</span>)}
-      </div>
-      <div className="grid grid-cols-7 gap-y-0.5">
-        {cells.map((day, index) => {
-          if (day === null) return <span key={`empty-${index}`} />;
-          const selected = selectedDate && selectedDate.getFullYear() === view.year && selectedDate.getMonth() === view.month && selectedDate.getDate() === day;
-          const current = today.getFullYear() === view.year && today.getMonth() === view.month && today.getDate() === day;
-          return (
-            <button key={day} type="button" onClick={() => selectDay(day)}
-              className={`mx-auto flex h-8 w-8 items-center justify-center rounded-full text-xs font-medium transition-colors ${selected ? "bg-[#134b8f] text-white" : current ? "border border-[#007cba] text-[#134b8f] hover:bg-[#eaf5ff]" : "text-slate-700 hover:bg-slate-100"}`}>
-              {day}
-            </button>
-          );
-        })}
-      </div>
-      <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3">
-        <button type="button" onClick={() => { onChange(new Date()); onClose(); }} className="text-xs font-semibold text-[#134b8f] hover:underline">Today</button>
-        <button type="button" onClick={() => { onChange(null); onClose(); }} className="text-xs text-slate-400 hover:text-slate-600">Clear</button>
-      </div>
-    </div>
-  );
-};
-
 const Navbar = ({ onLogout, currentUser }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { locale, t } = useI18n();
   const { collapsed, hovered, setMobileOpen } = useSidebar();
   const [search, setSearch] = useState("");
-  const [pickerOpen, setPickerOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [selectedDate, setSelectedDate] = useState(new Date());
-  const pickerRef = useRef(null);
   const profileRef = useRef(null);
 
   const meta = useMemo(() => {
@@ -102,11 +38,6 @@ const Navbar = ({ onLogout, currentUser }) => {
     }
     return pageMeta[location.pathname] || pageMeta["/lines"];
   }, [location.pathname]);
-
-  const displayDate = useMemo(() => {
-    const date = selectedDate || new Date();
-    return date.toLocaleDateString(locale, { weekday: "short", day: "2-digit", month: "short", year: "numeric" });
-  }, [selectedDate, locale]);
 
   const user = currentUser || { name: "Admin", role: "Administrator" };
   const initials = user.name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "AD";
@@ -121,14 +52,13 @@ const Navbar = ({ onLogout, currentUser }) => {
   }, [location.pathname, location.search]);
 
   useEffect(() => {
-    if (!pickerOpen && !profileOpen) return;
+    if (!profileOpen) return;
     const handler = (event) => {
-      if (pickerRef.current && !pickerRef.current.contains(event.target)) setPickerOpen(false);
       if (profileRef.current && !profileRef.current.contains(event.target)) setProfileOpen(false);
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, [pickerOpen, profileOpen]);
+  }, [profileOpen]);
 
   const handleSearchSubmit = (event) => {
     event.preventDefault();
@@ -189,20 +119,6 @@ const Navbar = ({ onLogout, currentUser }) => {
             />
           </form>
           )}
-
-          <div className="relative hidden sm:block" ref={pickerRef}>
-            <button
-              type="button"
-              onClick={() => setPickerOpen((prev) => !prev)}
-              className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold transition-colors focus:outline-none focus:ring-4 focus:ring-[#007cba]/10 ${pickerOpen ? "border-[#007cba] bg-[#eaf5ff] text-[#134b8f]" : "border-[#cfdded] bg-[#f8fbff] text-slate-700 hover:border-[#9fb8d2] hover:bg-white"}`}
-            >
-              <svg className="h-4 w-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.7} d="M8 7V3m8 4V3M5 11h14M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-              </svg>
-              <span className="hidden xl:inline">{displayDate}</span>
-            </button>
-            {pickerOpen && <DatePicker selectedDate={selectedDate} onChange={setSelectedDate} onClose={() => setPickerOpen(false)} />}
-          </div>
 
           <div className="relative border-l border-slate-200 pl-3" ref={profileRef}>
             <button

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
-import BrandLogo from "../../../components/common/BrandLogo";
+import AppLayout from "../../../components/common/AppLayout";
 import {
   Activity,
   AlertTriangle,
@@ -11,7 +11,6 @@ import {
   Download,
   FileText,
   Gauge,
-  LogOut,
   Monitor,
   Package,
   RefreshCw,
@@ -480,26 +479,26 @@ const PlcMachineCard = ({ reading, machineInfo, lineInfo, onOpenTable, liveState
   ];
 
   return (
-    <article className="overflow-hidden rounded-md border border-zinc-900 bg-[linear-gradient(135deg,#2b2728_0%,#181616_52%,#090909_100%)] px-4 py-4 shadow-[0_18px_44px_rgba(0,0,0,0.42)]">
+    <article className="overflow-hidden rounded-md border border-[#c8d8ff] bg-white px-4 py-4 shadow-sm">
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(220px,1fr)_minmax(220px,0.9fr)] 2xl:grid-cols-[minmax(260px,1fr)_minmax(260px,0.8fr)_minmax(420px,1.2fr)]">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <Monitor className="h-5 w-5 shrink-0 text-white" />
-            <h2 className="truncate text-lg font-black text-white">{machineName}</h2>
+            <Monitor className="h-5 w-5 shrink-0 text-[#1474b8]" />
+            <h2 className="truncate text-lg font-black text-slate-950">{machineName}</h2>
           </div>
-          <div className="mt-2 flex min-w-0 items-center gap-2 text-sm font-bold uppercase text-zinc-300">
+          <div className="mt-2 flex min-w-0 items-center gap-2 text-sm font-bold uppercase text-slate-600">
             <Package className="h-4 w-4 shrink-0" />
             <span className="truncate">{partLabel}</span>
           </div>
         </div>
 
         <div className="flex items-start gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-zinc-300">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#eaf5ff] text-[#1474b8]">
             <User className="h-9 w-9" />
           </div>
           <div className="min-w-0 pt-0.5">
-            <p className="truncate text-base font-bold text-zinc-300">No Operator Selected</p>
-            <p className="mt-1 flex items-center gap-1.5 text-sm font-bold text-[#00e20b]">
+            <p className="truncate text-base font-bold text-slate-700">No Operator Selected</p>
+            <p className="mt-1 flex items-center gap-1.5 text-sm font-bold text-emerald-700">
               <BarChart3 className="h-4 w-4" />
               Average Efficiency : {formatPercent(averageEfficiency)}
             </p>
@@ -523,8 +522,8 @@ const PlcMachineCard = ({ reading, machineInfo, lineInfo, onOpenTable, liveState
               onClick={onClick}
               className={`flex h-10 min-w-[64px] items-center justify-center rounded-md transition sm:min-w-[72px] ${
                 active
-                  ? "bg-[linear-gradient(90deg,#d93434,#351d1d)] text-white hover:brightness-110"
-                  : "bg-[linear-gradient(90deg,#2a2a2a,#111111)] text-white hover:bg-zinc-800"
+                  ? "border border-[#bfd0e8] bg-[#f8fbff] text-[#1474b8] hover:bg-[#edf4ff]"
+                  : "border border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
               }`}
               title={label}
             >
@@ -544,49 +543,49 @@ const PlcMachineCard = ({ reading, machineInfo, lineInfo, onOpenTable, liveState
       </div>
 
       <div className="mt-4 grid gap-3 text-sm font-bold [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))]">
-        <div className="flex items-center gap-1.5 text-[#00e20b]">
+        <div className="flex items-center gap-1.5 text-emerald-700">
           <Timer className="h-4 w-4" />
           Cycletime:{formatValue(cycleActual, "s")} / {formatValue(cycleTarget, "s")}
         </div>
-        <div className="flex items-center gap-1.5 text-[#00e20b]">
+        <div className="flex items-center gap-1.5 text-emerald-700">
           <Activity className="h-4 w-4" />
           Load & Unload: {formatValue(loadUnloadActual, "s")} / {formatValue(loadUnloadTarget, "s")}
         </div>
-        <div className="flex items-center gap-1.5 text-[#00e20b]">
+        <div className="flex items-center gap-1.5 text-emerald-700">
           <Gauge className="h-4 w-4" />
           MU: {formatPercent(mu)}
         </div>
-        <div className="flex items-center gap-1.5 text-white">
-          <span className="inline-flex h-6 items-center gap-1 rounded-full bg-red-600 px-3 font-black">
+        <div className="flex items-center gap-1.5 text-slate-700">
+          <span className="inline-flex h-6 items-center gap-1 rounded-full bg-red-50 px-3 font-black text-red-700 ring-1 ring-red-200">
             <Gauge className="h-4 w-4" />
             PU: {formatPercent(pu)}
           </span>
         </div>
-        <div className="flex items-center gap-1.5 text-red-400">
+        <div className="flex items-center gap-1.5 text-red-600">
           <AlertTriangle className="h-4 w-4" />
           DT: {formatDurationLabel(workstationSummary?.kpi?.downtime || reading?.dt || reading?.down_time)}
         </div>
-        <div className="flex items-center gap-1.5 text-red-400">
+        <div className="flex items-center gap-1.5 text-red-600">
           <AlertTriangle className="h-4 w-4" />
           Idle: {formatDurationLabel(workstationSummary?.kpi?.idle || reading?.idle_time)}
         </div>
-        <div className="flex items-center gap-1.5 text-red-400">
+        <div className="flex items-center gap-1.5 text-red-600">
           <AlertTriangle className="h-4 w-4" />
           LS: {formatDurationLabel(workstationSummary?.kpi?.line_stop || reading?.ls_time || reading?.line_stop_time)}
         </div>
-        <div className="flex items-center gap-1.5 text-red-400">
+        <div className="flex items-center gap-1.5 text-red-600">
           <AlertTriangle className="h-4 w-4" />
           ES: {formatDurationLabel(workstationSummary?.kpi?.emergency_stop || reading?.es_time || reading?.emergency_stop_time)}
         </div>
       </div>
 
-      <div className="mt-4 grid gap-2 text-center text-sm font-black text-zinc-300 [grid-template-columns:repeat(auto-fit,minmax(104px,1fr))]">
+      <div className="mt-4 grid gap-2 text-center text-sm font-black text-slate-500 [grid-template-columns:repeat(auto-fit,minmax(104px,1fr))]">
         {(hourlyRows.length ? hourlyRows : SHIFT_SLOTS.map((slot) => ({ slot }))).map((row) => (
           <span key={row.slot}>{row.slot}</span>
         ))}
       </div>
 
-      <div className="mt-3 flex h-[42px] w-full max-w-[860px] overflow-hidden rounded-full bg-zinc-900">
+      <div className="mt-3 flex h-[42px] w-full max-w-[860px] overflow-hidden rounded-full bg-slate-100 ring-1 ring-slate-200">
         {(hourlyRows.length ? hourlyRows : [{ slot: "current", efficiency_percent: progress }]).map((row) => {
           const value = Math.max(0, Math.min(Number(row.efficiency_percent || 0), 100));
           return (
@@ -599,26 +598,26 @@ const PlcMachineCard = ({ reading, machineInfo, lineInfo, onOpenTable, liveState
 
       {hourlyRows.length > 0 && (
         <section className="mt-5">
-          <div className="mb-2 flex items-center justify-between gap-3 text-sm font-black text-zinc-300">
+          <div className="mb-2 flex items-center justify-between gap-3 text-sm font-black text-slate-700">
             <span>Hourly Production Report | प्रति घंटा उत्पादन का विवरण</span>
             <span>Current Die: {workstationSummary?.part?.die_no || "-"}</span>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[980px] text-left text-sm">
-              <thead className="bg-zinc-800 text-xs uppercase text-zinc-300">
+              <thead className="bg-[#eaf5ff] text-xs uppercase text-slate-600">
                 <tr>
                   <th className="px-4 py-3">Hour</th>
                   {hourlyRows.map((row) => <th key={row.slot} className="px-4 py-3">{row.slot}</th>)}
                   <th className="px-4 py-3">Total</th>
                 </tr>
               </thead>
-              <tbody className="bg-zinc-950/30 text-zinc-100">
+              <tbody className="bg-white text-slate-700">
                 {[
                   ["Target", "target", totals.target],
                   ["Actual", "actual", totals.actual],
                   ["Rejection", "rejection", totals.rejection],
                 ].map(([label, key, total]) => (
-                  <tr key={label} className="border-t border-zinc-800">
+                  <tr key={label} className="border-t border-slate-100">
                     <td className="px-4 py-3 font-bold">{label}</td>
                     {hourlyRows.map((row) => <td key={`${label}-${row.slot}`} className="px-4 py-3">{row[key] ?? 0}</td>)}
                     <td className="px-4 py-3 font-black">{total ?? 0}</td>
@@ -632,14 +631,14 @@ const PlcMachineCard = ({ reading, machineInfo, lineInfo, onOpenTable, liveState
 
       {downtimeReasons.length > 0 && (
         <section className="mt-5">
-          <div className="mb-3 text-sm font-black text-zinc-300">Declare Downtime | डाउनटाइम घोषित करें</div>
+          <div className="mb-3 text-sm font-black text-slate-700">Declare Downtime | डाउनटाइम घोषित करें</div>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
             {downtimeReasons.map((reason) => (
               <button
                 key={reason}
                 type="button"
                 onClick={() => onDeclareDowntime?.(reason, reading, workstationSummary)}
-                className="h-10 rounded-md bg-[linear-gradient(90deg,#626262,#394040)] px-3 text-sm font-black text-white transition hover:brightness-110"
+                className="h-10 rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-black text-slate-700 transition hover:bg-slate-100"
               >
                 {reason}
               </button>
@@ -851,7 +850,7 @@ const PlcTableModal = ({ reading, theme = "dark", onClose }) => {
 };
 
 const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
-  const theme = "dark";
+  const theme = "light";
   const [plants, setPlants] = useState(PLANTS);
   const [selectedPlant, setSelectedPlant] = useState(PLANTS[0] || null);
   const [divisionFilter, setDivisionFilter] = useState("HPDC");
@@ -861,7 +860,6 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
   const [machinesByLine, setMachinesByLine] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [plcReadings, setPlcReadings] = useState([]);
   const [plcLoading, setPlcLoading] = useState(true);
   const [plcError, setPlcError] = useState("");
@@ -1210,63 +1208,13 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
   const isDark = theme === "dark";
 
   return (
-    <main className={`min-h-screen transition-colors ${
-      isDark
-        ? "bg-black text-white"
-        : "bg-[radial-gradient(circle_at_16%_0%,rgba(159,208,245,0.34),transparent_28rem),radial-gradient(circle_at_88%_10%,rgba(0,124,186,0.12),transparent_24rem),linear-gradient(180deg,#f8fbff_0%,#eef4fb_54%,#e7eff8_100%)] text-slate-950"
-    }`}>
-      <header className={`sticky top-0 z-20 border-b px-4 py-3 shadow-[0_10px_35px_rgba(0,0,0,0.18)] sm:px-7 ${
-        isDark ? "border-white/5 bg-black/95" : "border-[#c8d8ff] bg-[#f8fbff]/95"
-      }`}>
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex h-[52px] w-[176px] items-center justify-center rounded-lg border border-white/10 bg-white px-4 shadow-[0_8px_22px_rgba(255,255,255,0.08)] sm:h-[56px] sm:w-[206px] sm:px-5">
-            <div className="scale-[0.84]">
-              <BrandLogo wordmark className="justify-center" />
-            </div>
-          </div>
-          <div className="hidden lg:block" />
-          <div className="flex items-center gap-4">
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setUserMenuOpen((open) => !open)}
-                className={`flex items-center gap-3 rounded-lg px-2 py-1 transition ${isDark ? "hover:bg-white/5" : "hover:bg-slate-100"}`}
-              >
-                <div className="text-right">
-                  <p className={`text-sm font-extrabold ${isDark ? "text-zinc-100" : "text-slate-900"}`}>{currentUser?.name || "Operator"}</p>
-                  <p className="text-xs font-bold text-[#e0a300]">{currentUser?.role || "Operator"}</p>
-                </div>
-                <div className="relative flex h-10 w-10 items-center justify-center rounded-full bg-zinc-100 text-zinc-500">
-                  <User className="h-7 w-7" />
-                  <span className="absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full bg-emerald-500" />
-                </div>
-              </button>
-              {userMenuOpen && (
-                <div className={`absolute right-0 top-full mt-2 w-44 rounded-lg border p-2 shadow-2xl ${
-                  isDark ? "border-zinc-800 bg-[#121212]" : "border-slate-200 bg-white"
-                }`}>
-                  <button
-                    type="button"
-                    onClick={onLogout}
-                    className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-bold transition ${
-                      isDark ? "text-zinc-100 hover:bg-red-500/15 hover:text-red-200" : "text-slate-700 hover:bg-red-50 hover:text-red-600"
-                    }`}
-                  >
-                    <LogOut className="h-4 w-4" />
-                    Logout
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </header>
-
+    <AppLayout onLogout={onLogout} currentUser={currentUser} hideFooter>
+      <main className="min-h-[calc(100vh-118px)] rounded-lg border border-[#c8d8ff] bg-[linear-gradient(180deg,#ffffff_0%,#f8fbff_52%,#eef4fb_100%)] text-slate-950 shadow-sm">
       <section className="px-4 pb-6 pt-4 sm:px-6">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-3">
             <div>
-              <p className={`text-xs font-black uppercase tracking-[0.18em] ${isDark ? "text-cyan-300" : "text-[#1474b8]"}`}>Digital Workstation</p>
+              <p className={`text-xs font-black uppercase tracking-[0.18em] ${isDark ? "text-cyan-300" : "text-[#1474b8]"}`}>Operator View</p>
               <h1 className={`mt-1 text-2xl font-bold ${isDark ? "text-zinc-200" : "text-slate-950"}`}>Live Production</h1>
             </div>
           </div>
@@ -1301,12 +1249,12 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
         </div>
 
         {error && (
-          <div className="mb-4 rounded-md border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm font-semibold text-red-200">
+          <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
             {error}
           </div>
         )}
         {downtimeMessage && (
-          <div className="mb-4 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm font-semibold text-emerald-100">
+          <div className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
             {downtimeMessage}
           </div>
         )}
@@ -1332,7 +1280,7 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
           </div>
 
           {plcError && (
-            <div className="mb-4 rounded-md border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm font-semibold text-red-200">
+            <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
               {plcError}
             </div>
           )}
@@ -1371,8 +1319,8 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
                           onClick={() => setHistoryOpen((open) => !open)}
                           className={`flex h-10 items-center gap-2 rounded-md border px-3 text-xs font-black transition ${
                             state?.status === "breakdown"
-                              ? "border-red-500/30 bg-red-500/10 text-red-200 hover:bg-red-500/20"
-                              : "border-zinc-800 bg-[#101010] text-zinc-300 hover:bg-zinc-900"
+                              ? "border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
+                              : "border-[#c8d8ff] bg-white text-slate-700 hover:bg-[#edf4ff]"
                           }`}
                           title="Breakdown history"
                         >
@@ -1385,14 +1333,14 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
                 })()
               ))}
               {historyOpen && visibleBreakdownHistory.length > 0 && (
-                <section className="rounded-md border border-zinc-900 bg-[#101010] p-4">
+                <section className="rounded-md border border-[#c8d8ff] bg-white p-4 shadow-sm">
                   <div className="mb-3 flex items-center justify-between gap-3">
-                    <h3 className="text-sm font-black uppercase tracking-[0.14em] text-zinc-300">Die Breakdown History</h3>
-                    <span className="text-xs font-bold text-zinc-500">Latest {visibleBreakdownHistory.length}</span>
+                    <h3 className="text-sm font-black uppercase tracking-[0.14em] text-slate-700">Die Breakdown History</h3>
+                    <span className="text-xs font-bold text-slate-500">Latest {visibleBreakdownHistory.length}</span>
                   </div>
                   <div className="overflow-x-auto">
                     <table className="w-full min-w-[760px] text-left text-xs">
-                      <thead className="text-zinc-500">
+                      <thead className="text-slate-500">
                         <tr>
                           <th className="py-2 pr-4 font-black uppercase">Machine</th>
                           <th className="py-2 pr-4 font-black uppercase">Status</th>
@@ -1404,15 +1352,15 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
                       </thead>
                       <tbody>
                         {visibleBreakdownHistory.map((event) => (
-                          <tr key={event.id} className="border-t border-zinc-900">
-                            <td className="py-2 pr-4 font-bold text-zinc-200">{event.machineName}</td>
-                            <td className={`py-2 pr-4 font-black ${event.status === "breakdown" ? "text-red-300" : "text-emerald-300"}`}>
+                          <tr key={event.id} className="border-t border-slate-100">
+                            <td className="py-2 pr-4 font-bold text-slate-700">{event.machineName}</td>
+                            <td className={`py-2 pr-4 font-black ${event.status === "breakdown" ? "text-red-600" : "text-emerald-600"}`}>
                               Die Breakdown
                             </td>
-                            <td className="py-2 pr-4 font-bold text-zinc-400">{formatDateTime(event.startedAt)}</td>
-                            <td className="py-2 pr-4 font-bold text-zinc-400">{event.endedAt ? formatDateTime(event.endedAt) : "Live"}</td>
-                            <td className="py-2 pr-4 font-bold text-zinc-400">{event.durationSec === null ? "-" : formatElapsed(event.durationSec * 1000)}</td>
-                            <td className="py-2 pr-4 font-bold text-zinc-400">{event.reason}</td>
+                            <td className="py-2 pr-4 font-bold text-slate-600">{formatDateTime(event.startedAt)}</td>
+                            <td className="py-2 pr-4 font-bold text-slate-600">{event.endedAt ? formatDateTime(event.endedAt) : "Live"}</td>
+                            <td className="py-2 pr-4 font-bold text-slate-600">{event.durationSec === null ? "-" : formatElapsed(event.durationSec * 1000)}</td>
+                            <td className="py-2 pr-4 font-bold text-slate-600">{event.reason}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -1438,7 +1386,8 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
           onClose={() => setTableReading(null)}
         />
       )}
-    </main>
+      </main>
+    </AppLayout>
   );
 };
 

@@ -24,7 +24,7 @@ export const masterDataItems = [
 ];
 
 export const shopfloorItems = [
-  { label: "Digital Workstation", to: "/operator-workstation", icon: "M4 6h16M4 10h16M7 14h10m-8 4h6M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z", countKey: "lines", permission: "workstation:view", newTab: true },
+  { label: "Operator View", to: "/operator-workstation", icon: "M4 6h16M4 10h16M7 14h10m-8 4h6M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z", countKey: "lines", permission: "workstation:view" },
   { label: "Real Time Monitor", to: "/plc-monitor", icon: "M4 7h16M6 7v10a2 2 0 002 2h8a2 2 0 002-2V7M9 11h2m2 0h2M9 15h6M8 3h8a2 2 0 012 2v2H6V5a2 2 0 012-2z", permission: "plc:view" },
 ];
 
