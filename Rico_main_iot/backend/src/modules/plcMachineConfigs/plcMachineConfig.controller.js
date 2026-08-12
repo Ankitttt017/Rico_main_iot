@@ -592,7 +592,6 @@ function normalizeMachine(row = {}) {
 }
 
 function registersForType(_type = "generic") {
-  if (normalizeMachineType(_type) === "ube") return DEFAULT_UBE_REGISTERS;
   return [];
 }
 
@@ -918,10 +917,6 @@ async function saveMachineRecord(input = {}) {
     notes: cleanText(input.notes),
   };
 
-  if (type === "ube" && (!payload.register_config_json || payload.register_config_json === "[]" || payload.register_config_json === "null")) {
-    payload.register_config_json = JSON.stringify(DEFAULT_UBE_REGISTERS);
-  }
-
   if (id) {
     const { rows } = await db.query(
       "SELECT TOP 1 id FROM dbo.plc_machine_configs WHERE id = ?",
@@ -959,7 +954,7 @@ async function saveMachineRecord(input = {}) {
     }
     const registersToSync = hasRegisterConfigInput
       ? (normalizedRegisterConfig || [])
-      : (type === "ube" ? DEFAULT_UBE_REGISTERS : []);
+      : [];
     await syncMachineConfigRegisters(id, payload, registersToSync);
     await syncMachineNameReferences({
       ip: payload.ip_address,
@@ -999,7 +994,7 @@ async function saveMachineRecord(input = {}) {
   }
   const insertedRegisters = hasRegisterConfigInput
     ? (normalizedRegisterConfig || [])
-    : (type === "ube" ? DEFAULT_UBE_REGISTERS : []);
+    : [];
   await syncMachineConfigRegisters(insertedId, payload, insertedRegisters);
   await syncMachineNameReferences({
     ip: payload.ip_address,

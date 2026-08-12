@@ -58,14 +58,12 @@ export function getMachineType(machine = {}) {
   return ["leaktest", "gauge", "ube"].includes(explicit) ? explicit : "ube";
 }
 
-export function getDefaultRegisters(defaultRegistersByType, type) {
-  return defaultRegistersByType?.[type] || [];
+export function getDefaultRegisters(_defaultRegistersByType, _type) {
+  return [];
 }
 
-function getSaveRegisters(registers, defaultRegistersByType, type) {
-  return Array.isArray(registers) && registers.length
-    ? registers
-    : getDefaultRegisters(defaultRegistersByType, type);
+function getSaveRegisters(registers) {
+  return Array.isArray(registers) ? registers : [];
 }
 
 export function keyFromMachine(machine = {}) {
@@ -133,15 +131,13 @@ function setRegisterTypeValue(register = {}, type = "int") {
   return next;
 }
 
-export function withRegisterDefaults(machine, defaultRegistersByType) {
+export function withRegisterDefaults(machine) {
   const type = getMachineType(machine);
   return {
     ...machine,
     machine_type: type,
     protocol: machine.protocol || "SLMP",
-    register_config: Array.isArray(machine.register_config) && machine.register_config.length
-      ? machine.register_config
-      : getDefaultRegisters(defaultRegistersByType, type),
+    register_config: Array.isArray(machine.register_config) ? machine.register_config : [],
   };
 }
 

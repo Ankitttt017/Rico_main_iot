@@ -393,9 +393,9 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
       machine_name: machine?.name || machine?.machine_code || "",
       plant_code: machine?.plant_code || plant,
       machine_type: type,
-      register_config: getDefaultRegisters(defaults, type),
+      register_config: existing?.register_config || [],
     };
-  }, [defaultRegistersByType, plant, plcConfigs]);
+  }, [plant, plcConfigs]);
 
   const findMachineForPlcConfig = useCallback(async (config = {}) => {
     if (!config) return null;
@@ -588,7 +588,7 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
           plant_code: payload.plant_code,
           machine_type: type,
           port: Number(plcDraft.port || 5002),
-          register_config: getSaveRegisters(plcDraft.register_config, defaultRegistersByType, type),
+          register_config: plcDraft.register_config || [],
         });
         toast.success("PLC config saved");
         await loadPlcSetup();
@@ -839,18 +839,18 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
                       onImportRegisters={(imported) => setPlcDraft((current) => ({
                         ...current,
                         register_config: mergeRegisters(
-                          current.register_config || getDefaultRegisters(defaultRegistersByType, getPlcMachineType(current)),
+                          current.register_config || [],
                           imported
                         ),
                       }))}
                     />
                     <div className="mt-3">
                       <RegisterConfigTable
-                        registers={plcDraft.register_config || getDefaultRegisters(defaultRegistersByType, getPlcMachineType(plcDraft))}
+                        registers={plcDraft.register_config || []}
                         setRegisters={(updater) => setPlcDraft((current) => ({
                           ...current,
                           register_config: typeof updater === "function"
-                            ? updater(current.register_config || getDefaultRegisters(defaultRegistersByType, getPlcMachineType(current)))
+                            ? updater(current.register_config || [])
                             : updater,
                         }))}
                         maxHeightClass="max-h-[calc(100vh-520px)] min-h-[320px]"
