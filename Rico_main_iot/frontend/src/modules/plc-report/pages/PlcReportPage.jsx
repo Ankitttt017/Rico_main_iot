@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, Download, Search } from "lucide-react";
+import { Download, Search } from "lucide-react";
 import AppLayout from "../../../components/common/AppLayout";
 import ricoLogo from "../../../assets/rico-logo.png";
 import { DISPLAY_LABELS } from "../../plc-monitor/constants";
@@ -1581,7 +1581,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     }
   }, [searchText]);
 
-  const applyReportFilters = useCallback(() => {
+  const applyReportFilters = useCallback(({ showValidationError = true } = {}) => {
     const selectedDraftMachine = draftMachineOptions.find((machine) => getMachineId(machine) === draftMachineId);
     const isDraftGauge = isGaugeMachine(selectedDraftMachine);
     const needsResult = selectedDraftMachine && !isDraftGauge;
@@ -1592,7 +1592,9 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       setServerKpis({ ok: 0, warm: 0, off: 0 });
       setServerKpisReady(false);
       setFiltersApplied(false);
-      setError("Please select line and machine before applying.");
+      if (showValidationError) {
+        setError("Please select line and machine to load report.");
+      }
       return;
     }
     setError("");
@@ -1608,6 +1610,24 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     setPagination({ page: 1, pageSize: REPORT_RESULT_LIMIT, total: 0, totalPages: 1 });
     setFiltersApplied(true);
   }, [draftFromDate, draftLineId, draftMachineId, draftMachineOptions, draftQuickFilter, draftResultFilterValue, draftSearchText, draftShiftFilter, draftToDate]);
+
+  useEffect(() => {
+    if (!reportMachinesReady || !draftMachineId) return undefined;
+    const timer = window.setTimeout(() => {
+      applyReportFilters({ showValidationError: false });
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [
+    applyReportFilters,
+    draftFromDate,
+    draftLineId,
+    draftMachineId,
+    draftQuickFilter,
+    draftResultFilterValue,
+    draftShiftFilter,
+    draftToDate,
+    reportMachinesReady,
+  ]);
 
   const clearReportFilters = useCallback(() => {
     const today = todayInput();
@@ -1795,7 +1815,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       reportSearchLabel,
       reportRangeLabel,
     ].filter(Boolean).join(" | ")
-    : "Select filters to load report";
+    : "Select a machine to load report";
   const reportResultFilterTitle = isGaugeReport ? "Filter" : isLeakReport ? "Scan Result" : "Shot Result";
   const reportResultFilterValue = isGaugeReport ? reportFilterSummary : reportShotResultLabel;
   const formIsGaugeReport = draftMachineId ? draftMachineIsGauge : isGaugeReport;
@@ -2053,7 +2073,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
             <div className="min-w-0">
               <h1 className="text-xl font-black leading-tight text-slate-950 sm:text-2xl">{reportTitle}</h1>
               <p className="text-sm font-semibold text-slate-500">
-                {reportSubtitle} | {filtersApplied ? `${fromDate} to ${toDate}` : "Select filters to load report"}
+                {reportSubtitle} | {filtersApplied ? `${fromDate} to ${toDate}` : "Select a machine to load report"}
               </p>
             </div>
           </div>
@@ -2198,13 +2218,9 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                     className="mt-1 h-10 w-full rounded-lg border border-slate-300 px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
                   />
                 </label>
-                <button type="button" onClick={applyReportFilters} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-700 px-4 text-sm font-black text-white shadow-sm transition hover:bg-slate-800 sm:self-end">
+                <button type="button" onClick={() => applyReportFilters()} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-700 px-4 text-sm font-black text-white shadow-sm transition hover:bg-slate-800 sm:self-end">
                   <Search className="h-4 w-4" />
                   Search
-                </button>
-                <button type="button" onClick={applyReportFilters} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-blue-700 sm:self-end">
-                  <CheckCircle2 className="h-4 w-4" />
-                  Apply
                 </button>
                 <button type="button" onClick={downloadExcel} disabled={exporting || !filtersApplied} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60 sm:self-end">
                   <Download className="h-4 w-4" />
@@ -2299,7 +2315,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                   <tr>
                     <td colSpan={columns.length || 1} className="px-4 py-10 text-center text-sm font-bold text-slate-500">
                       {!filtersApplied
-                        ? "Select filters and apply to load report"
+                        ? "Select a machine to load report"
                         : "No records found for selected date range"}
                     </td>
                   </tr>

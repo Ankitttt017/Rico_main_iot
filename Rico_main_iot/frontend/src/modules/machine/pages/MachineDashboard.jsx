@@ -742,8 +742,8 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
   return (
     <AppLayout onLogout={onLogout} currentUser={currentUser}>
           {machineModalOpen && machineDraft && (
-            <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
-              <div className="max-h-[92vh] w-full max-w-6xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="fixed inset-0 z-[70] bg-slate-950/50 p-2 backdrop-blur-sm">
+              <div className="flex h-full w-full flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
                 <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
                   <div>
                     <h3 className="text-lg font-extrabold text-slate-950">{machineDraft.id ? "Edit Machine" : "Add Machine"}</h3>
@@ -754,10 +754,10 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
                     setPlcTestResult(null);
                   }} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50">Close</button>
                 </div>
-                <div className="max-h-[calc(92vh-137px)] overflow-y-auto">
-                  <div className="grid gap-4 p-5 md:grid-cols-2">
+                <div className="flex-1 overflow-y-auto">
+                  <div className="grid gap-4 p-5 md:grid-cols-3 lg:grid-cols-6">
                     <MachineSelect
-                      label="Location / Plant"
+                      label="Plant"
                       value={machineDraft.plant_code}
                       onChange={(value) => {
                         setMachineDraft((current) => ({ ...current, plant_code: value, category: "", line_id: "" }));
@@ -790,7 +790,7 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
                       options={assignLineOptions}
                     />
                     <label className="flex flex-col gap-1">
-                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Machine Type / Asset Type</span>
+                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Asset Type</span>
                       <input value={machineDraft.asset || ""} onChange={(event) => {
                         const asset = event.target.value;
                         setMachineDraft((current) => ({ ...current, asset }));
@@ -802,7 +802,7 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
                       }} placeholder="Die Casting / CNC / Leak Test" className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none focus:border-teal-500 focus:ring-4 focus:ring-teal-50" />
                     </label>
                     <label className="flex flex-col gap-1">
-                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Machine Name</span>
+                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Machine</span>
                       <input value={machineDraft.name || ""} onChange={(event) => {
                         const name = event.target.value;
                         setMachineDraft((current) => ({ ...current, name }));
@@ -853,7 +853,7 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
                             ? updater(current.register_config || getDefaultRegisters(defaultRegistersByType, getPlcMachineType(current)))
                             : updater,
                         }))}
-                        maxHeightClass="max-h-[260px]"
+                        maxHeightClass="max-h-[calc(100vh-520px)] min-h-[320px]"
                       />
                     </div>
                     {plcTestResult && (

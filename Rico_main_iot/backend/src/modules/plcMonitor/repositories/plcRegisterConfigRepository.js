@@ -17,6 +17,45 @@ const UBE_PART_NAME_REGISTER = {
   log_history: true,
 };
 
+const UBE_KNOWN_SCALE_MAP = new Map([
+  ["cycle_time_sec", 0.1],
+  ["die_close_core_in_time_sec", 0.1],
+  ["pouring_time_sec", 0.1],
+  ["shot_fwd_time_sec", 0.1],
+  ["curing_time_sec", 0.1],
+  ["die_open_core_out_time_sec", 0.1],
+  ["ejector_time_sec", 0.1],
+  ["extract_time_sec", 0.1],
+  ["spray_time_sec", 0.1],
+  ["v1_m_sec", 0.01],
+  ["v2_m_sec", 0.01],
+  ["v3_m_sec", 0.01],
+  ["v4_m_sec", 0.01],
+  ["biscuit_thickness_mm", 0.1],
+  ["metal_press_mpa", 0.1],
+  ["clamp_tonnage_he_low_mn", 0.01],
+  ["shot_acc_pressure", 0.01],
+  ["intensification_acc_pressure", 0.01],
+  ["jet_cooling_pressure_kgf_cm2", 0.1],
+  ["cooling_water_flow_rate_mov_l_min", 0.1],
+  ["cooling_water_flow_rate_sta_l_min", 0.1],
+  ["fix_1_flow_lpm", 0.1],
+  ["fix_2_flow_lpm", 0.1],
+  ["fix_3_flow_lpm", 0.1],
+  ["mov_1_flow_lpm", 0.1],
+  ["mov_2_flow_lpm", 0.1],
+  ["mov_3_flow_lpm", 0.1],
+]);
+
+function getKnownUbeScale(name) {
+  const norm = String(name || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return UBE_KNOWN_SCALE_MAP.get(norm) ?? null;
+}
+
 function parseRegisterConfig(value) {
   if (!value) return [];
   if (Array.isArray(value)) return value;
@@ -35,6 +74,22 @@ function normalizeRegister(register = {}, index = 0) {
   const stringDevice = String(register.stringDevice || register.string_device || "").trim().toUpperCase();
   const stringLength = register.stringLength ?? register.string_length ?? "";
 
+  const knownScale = getKnownUbeScale(name);
+  let scale = register.scale === "" || register.scale === null || register.scale === undefined
+    ? null
+    : Number(register.scale);
+
+  if ((scale === null || scale === 1) && knownScale !== null) {
+    scale = knownScale;
+  } else if (scale === null) {
+    scale = 1;
+  }
+
+  let type = String(register.type || register.readMethod || register.read_method || "int").trim().toLowerCase();
+  if (knownScale !== null && knownScale !== 1 && (type === "int" || !type)) {
+    type = "decimal";
+  }
+
   return {
     ...register,
     id: String(register.id || name || device || stringDevice || `register-${index + 1}`).trim(),
@@ -42,10 +97,8 @@ function normalizeRegister(register = {}, index = 0) {
     device,
     stringDevice,
     stringLength,
-    type: String(register.type || register.readMethod || register.read_method || "int").trim().toLowerCase(),
-    scale: register.scale === "" || register.scale === null || register.scale === undefined
-      ? 1
-      : Number(register.scale),
+    type,
+    scale,
     enabled: register.enabled === undefined ? true : Boolean(register.enabled),
   };
 }
@@ -53,23 +106,14 @@ function normalizeRegister(register = {}, index = 0) {
 function normalizePlcRegister(row = {}, index = 0) {
   const profileKey = String(row.profile_key || "").trim().toUpperCase();
   const parameterName = String(row.parameter_name || row.display_label || "").trim();
-  const ubeOverrides = profileKey === "UBE_850T"
-    ? {
-        "SHOT TIME": { device: "D2103-D2105", data_type: "text", scale_factor: 1, unit: "" },
-        "CLAMP FORCE (%)": { device: "D6918", data_type: "decimal", scale_factor: 0.1, unit: "%" },
-        "CLAMP TONNAGE (T)": { device: "D6920", data_type: "decimal", scale_factor: 0.01, unit: "T" },
-      }
-    : {};
-  const override = ubeOverrides[parameterName] || {};
-
   return normalizeRegister({
     id: row.id ? `plc-register-${row.id}` : `profile-register-${index + 1}`,
     name: parameterName,
     label: row.display_label,
-    device: override.device || row.device,
-    type: override.data_type || row.data_type || row.device_type || "int",
-    scale: override.scale_factor ?? row.scale_factor,
-    unit: override.unit ?? row.unit ?? "",
+    device: row.device,
+    type: row.data_type || row.device_type || "int",
+    scale: row.scale_factor,
+    unit: row.unit ?? "",
     group_name: row.group_name || "",
     sort_order: row.sort_order,
     stringLength: row.string_length || "",
@@ -97,6 +141,9 @@ function normalizeMachineConfigRegister(row = {}, index = 0) {
     enabled: row.is_active === undefined ? true : Boolean(row.is_active),
     min: row.min_value ?? null,
     max: row.max_value ?? null,
+    minDevice: row.min_device || "",
+    maxDevice: row.max_device || "",
+    alarmDevice: row.alarm_device || "",
     warning_min: row.warning_min ?? null,
     warning_max: row.warning_max ?? null,
     show_on_monitor: row.show_on_monitor === undefined ? true : Boolean(row.show_on_monitor),
@@ -251,6 +298,7 @@ async function loadMachineConfigRegistersByConfigIds(machineConfigIds = []) {
     SELECT id, machine_config_id, parameter_name, display_label, device,
            string_device, string_length, data_type, scale_factor, unit,
            group_name, sort_order, computed_key, min_value, max_value,
+           min_device, max_device, alarm_device,
            warning_min, warning_max, alarm_enabled, show_on_monitor,
            show_to_operator, log_history, is_active
     FROM dbo.plc_machine_config_registers WITH (NOLOCK)

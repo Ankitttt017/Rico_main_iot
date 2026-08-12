@@ -333,6 +333,7 @@ function getUiGroupPresentation(label, machineKind, index) {
 
 function buildConfiguredGroups(machineKind, machine = {}, readings = {}) {
   const machineHiddenFields = getMachineSpecificHiddenMonitorFields(machineKind);
+  const seenNames = new Set();
   const configured = getMachineRegisterConfig(machine)
     .filter((item) => !item || typeof item !== "object" || (item.enabled !== false && item.show_on_monitor !== false))
     .map((item) => ({
@@ -343,10 +344,13 @@ function buildConfiguredGroups(machineKind, machine = {}, readings = {}) {
     }))
     .filter((item) => {
       const normalizedName = normalizeMonitorFieldName(item.name);
-      return item.name
-        && !isHiddenDbField(item.name)
-        && !UI_CARD_HIDDEN_NAMES.has(item.name)
-        && !machineHiddenFields.has(normalizedName);
+      if (!item.name) return false;
+      if (isHiddenDbField(item.name)) return false;
+      if (UI_CARD_HIDDEN_NAMES.has(item.name)) return false;
+      if (machineHiddenFields.has(normalizedName)) return false;
+      if (seenNames.has(normalizedName)) return false;
+      seenNames.add(normalizedName);
+      return true;
     });
 
   const configuredNames = new Set(configured.map((item) => normalizeMonitorFieldName(item.name)));

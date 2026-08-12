@@ -95,6 +95,104 @@ function normalizeMachineType(value) {
     .slice(0, 40) || "generic";
 }
 
+const DEFAULT_UBE_REGISTERS = [
+  {"name":"Sr. No","type":"int","computed":"serial","enabled":true,"show_on_monitor":false,"log_history":true,"group":"Production","unit":""},
+  {"name":"Part Name","stringDevice":"D100-D110","stringLength":11,"type":"text","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Production","unit":""},
+  {"name":"SHOT TIME","type":"text","computed":"shotTime","enabled":true,"show_on_monitor":true,"log_history":true,"group":"Production","unit":""},
+  {"name":"SHOT NO.","device":"D1120","type":"int","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Production","unit":""},
+  {"name":"CYCLE TIME sec.","device":"D1127","type":"decimal","scale":0.1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Production","unit":"sec"},
+  {"name":"HIGH SHOT COUNT","device":"D947","type":"int","scale":1,"enabled":true,"show_on_monitor":false,"log_history":true,"group":"Production","unit":""},
+  {"name":"NG COUNTER","device":"D955","type":"int","scale":1,"enabled":true,"show_on_monitor":false,"log_history":true,"group":"Production","unit":""},
+  {"name":"DIE-CLOSE CORE IN TIME sec","device":"D1128","type":"decimal","scale":0.1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Cycle Timings","unit":"sec"},
+  {"name":"POURING TIME sec","device":"D1129","type":"decimal","scale":0.1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Cycle Timings","unit":"sec"},
+  {"name":"SHOT FWD TIME sec","device":"D1130","type":"decimal","scale":0.1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Cycle Timings","unit":"sec"},
+  {"name":"CURING TIME sec","device":"D1137","type":"decimal","scale":0.1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Cycle Timings","unit":"sec"},
+  {"name":"DIE OPEN CORE OUT TIME sec","device":"D1132","type":"decimal","scale":0.1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Cycle Timings","unit":"sec"},
+  {"name":"EJECTOR TIME sec","device":"D1133","type":"decimal","scale":0.1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Cycle Timings","unit":"sec"},
+  {"name":"EXTRACT TIME sec","device":"D1134","type":"decimal","scale":0.1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Cycle Timings","unit":"sec"},
+  {"name":"SPRAY TIME sec","device":"D1135","type":"decimal","scale":0.1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Cycle Timings","unit":"sec"},
+  {"name":"V1 m/sec","device":"D6900","type":"decimal","scale":0.01,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Shot Setup","unit":"m/sec"},
+  {"name":"V2 m/sec","device":"D6902","type":"decimal","scale":0.01,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Shot Setup","unit":"m/sec"},
+  {"name":"V3 m/sec","device":"D6904","type":"decimal","scale":0.01,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Shot Setup","unit":"m/sec"},
+  {"name":"V4 m/sec","device":"D6906","type":"decimal","scale":0.01,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Shot Setup","unit":"m/sec"},
+  {"name":"ACCEL. POINT mm","device":"D6908","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Shot Setup","unit":"mm"},
+  {"name":"DEACEL. POINT mm","device":"D6910","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Shot Setup","unit":"mm"},
+  {"name":"INTEN. TIME msec","device":"D6914","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Shot Setup","unit":"msec"},
+  {"name":"BISCUIT THICKNESS mm","device":"D6916","type":"decimal","scale":0.1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Shot Setup","unit":"mm"},
+  {"name":"METAL PRESS. Mpa","device":"D6912","type":"decimal","scale":0.1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Pressure & Tonnage","unit":"MPa"},
+  {"name":"CLAMP TONNAGE(HE.LOW) %","device":"D6918","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Pressure & Tonnage","unit":"%"},
+  {"name":"CLAMP TONNAGE(HE.LOW) MN","device":"D6920","type":"decimal","scale":0.01,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Pressure & Tonnage","unit":"MN"},
+  {"name":"CLAMP TONNAGE(OP.UP) %","device":"D6922","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Pressure & Tonnage","unit":"%"},
+  {"name":"CLAMP TONNAGE(OP.LOW) %","device":"D6924","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Pressure & Tonnage","unit":"%"},
+  {"name":"CLAMP TONNAGE(HE.UP) %","device":"D6926","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Pressure & Tonnage","unit":"%"},
+  {"name":"CLAMP FORCE (%)","device":"D1044","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Pressure & Tonnage","unit":"%"},
+  {"name":"CLAMP TONNAGE (T)","device":"D1045","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Pressure & Tonnage","unit":"T"},
+  {"name":"SHOT ACC. PRESSURE","device":"D1700","type":"decimal","scale":0.01,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Pressure & Tonnage","unit":"MPa"},
+  {"name":"INTENSIFICATION ACC. PRESSURE","device":"D1701","type":"decimal","scale":0.01,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Pressure & Tonnage","unit":"MPa"},
+  {"name":"JET COOLING PRESSURE kgf/cm2","device":"D6954","type":"decimal","scale":0.1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Pressure & Tonnage","unit":"kgf/cm2"},
+  {"name":"VACUUM PRESSURE mbar","device":"D6928","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Pressure & Tonnage","unit":"mbar"},
+  {"name":"COOLING WATER FLOW RATE (MOV.) L/min","device":"D6930","type":"decimal","scale":0.1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Temperature & Flow","unit":"L/min"},
+  {"name":"COOLING WATER FLOW RATE (STA.) L/min","device":"D6932","type":"decimal","scale":0.1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Temperature & Flow","unit":"L/min"},
+  {"name":"FURNACE METAL TEMP. C","device":"D6934","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Temperature & Flow","unit":"C"},
+  {"name":"Fixed Die Temp (F-1)","device":"D1400","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Temperature & Flow","unit":"C"},
+  {"name":"Fixed Die Temp (F-2)","device":"D1401","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Temperature & Flow","unit":"C"},
+  {"name":"Moving Die Temp (M-1)","device":"D1402","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Temperature & Flow","unit":"C"},
+  {"name":"Moving Die Temp (M-2)","device":"D1403","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Temperature & Flow","unit":"C"},
+  {"name":"Slide Temp -1 (S-1)","device":"D1404","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Temperature & Flow","unit":"C"},
+  {"name":"FIX. 1 Flow (Lpm)","device":"D1410","type":"decimal","scale":0.1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Temperature & Flow","unit":"Lpm"},
+  {"name":"FIX. 2 Flow (Lpm)","device":"D1411","type":"decimal","scale":0.1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Temperature & Flow","unit":"Lpm"},
+  {"name":"FIX. 3 Flow (Lpm)","device":"D1412","type":"decimal","scale":0.1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Temperature & Flow","unit":"Lpm"},
+  {"name":"Mov. 1 Flow (Lpm)","device":"D1413","type":"decimal","scale":0.1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Temperature & Flow","unit":"Lpm"},
+  {"name":"Mov. 2 Flow (Lpm)","device":"D1414","type":"decimal","scale":0.1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Temperature & Flow","unit":"Lpm"},
+  {"name":"Mov. 3 Flow (Lpm)","device":"D1415","type":"decimal","scale":0.1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Temperature & Flow","unit":"Lpm"},
+  {"name":"Vacuum pressure (mmHg)","device":"D1416","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Temperature & Flow","unit":"mmHg"},
+  {"name":"Cycle Start","device":"M840","type":"int","scale":1,"enabled":true,"show_on_monitor":false,"log_history":true,"group":"Machine Signals","unit":""},
+  {"name":"Cycle End","device":"M4598","type":"int","scale":1,"enabled":true,"show_on_monitor":false,"log_history":true,"group":"Machine Signals","unit":""},
+  {"name":"AVERAGE DIE CLAMP TONNAGE COUNT","device":"D7472","type":"int","scale":1,"enabled":true,"show_on_monitor":false,"log_history":true,"group":"Machine Signals","unit":""},
+  {"name":"Time for stroke(ms)","device":"D10470","type":"int","scale":1,"enabled":true,"show_on_monitor":false,"log_history":true,"group":"Machine Signals","unit":"ms"},
+  {"name":"Stroke (mm)","device":"D10356","type":"decimal","scale":1,"enabled":true,"show_on_monitor":false,"log_history":true,"group":"Machine Signals","unit":"mm"},
+  {"name":"Shot Status","device":"D1301","type":"int","scale":1,"enabled":true,"show_on_monitor":false,"log_history":true,"group":"Machine Signals","unit":""}
+];
+
+const UBE_KNOWN_SCALE_MAP = new Map([
+  ["cycle_time_sec", 0.1],
+  ["die_close_core_in_time_sec", 0.1],
+  ["pouring_time_sec", 0.1],
+  ["shot_fwd_time_sec", 0.1],
+  ["curing_time_sec", 0.1],
+  ["die_open_core_out_time_sec", 0.1],
+  ["ejector_time_sec", 0.1],
+  ["extract_time_sec", 0.1],
+  ["spray_time_sec", 0.1],
+  ["v1_m_sec", 0.01],
+  ["v2_m_sec", 0.01],
+  ["v3_m_sec", 0.01],
+  ["v4_m_sec", 0.01],
+  ["biscuit_thickness_mm", 0.1],
+  ["metal_press_mpa", 0.1],
+  ["clamp_tonnage_he_low_mn", 0.01],
+  ["shot_acc_pressure", 0.01],
+  ["intensification_acc_pressure", 0.01],
+  ["jet_cooling_pressure_kgf_cm2", 0.1],
+  ["cooling_water_flow_rate_mov_l_min", 0.1],
+  ["cooling_water_flow_rate_sta_l_min", 0.1],
+  ["fix_1_flow_lpm", 0.1],
+  ["fix_2_flow_lpm", 0.1],
+  ["fix_3_flow_lpm", 0.1],
+  ["mov_1_flow_lpm", 0.1],
+  ["mov_2_flow_lpm", 0.1],
+  ["mov_3_flow_lpm", 0.1],
+]);
+
+function getKnownUbeScale(name) {
+  const norm = String(name || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return UBE_KNOWN_SCALE_MAP.get(norm) ?? null;
+}
+
 const UBE_PART_NAME_REGISTER = {
   id: "part-name-d100",
   name: "Part Name",
@@ -154,15 +252,31 @@ function normalizeRegistersForMachineType(registers = [], type = "generic") {
 }
 
 function normalizeRegisterRow(row = {}) {
+  const name = cleanText(row.parameter_name);
+  const knownScale = getKnownUbeScale(name);
+
+  let type = normalizeRegisterType(row.data_type);
+  if (knownScale !== null && knownScale !== 1 && (type === "int" || !row.data_type)) {
+    type = "decimal";
+  }
+
+  let scale = cleanNumber(row.scale_factor, null);
+  if ((scale === null || scale === 1) && knownScale !== null) {
+    scale = knownScale;
+  } else if (scale === null) {
+    scale = 1;
+  }
+
   return {
     id: `${cleanInt(row.machine_config_id, 0)}-${cleanInt(row.sort_order, 0)}-${cleanInt(row.id, 0)}`,
-    name: cleanText(row.parameter_name),
+    name,
     display_label: cleanText(row.display_label || row.parameter_name),
     device: normalizeRegisterAddress(row.device),
     stringDevice: normalizeRegisterAddress(row.string_device),
     stringLength: cleanInt(row.string_length, ""),
-    type: normalizeRegisterType(row.data_type),
-    scale: cleanNumber(row.scale_factor, 1),
+    type,
+    scale,
+    scaleOperation: cleanText(row.scale_operation) || "multiply",
     computed: cleanText(row.computed_key) || "",
     group_name: cleanText(row.group_name) || "",
     sort_order: cleanInt(row.sort_order, 0),
@@ -171,6 +285,9 @@ function normalizeRegisterRow(row = {}) {
     max: cleanNumber(row.max_value),
     warning_min: cleanNumber(row.warning_min),
     warning_max: cleanNumber(row.warning_max),
+    minDevice: normalizeRegisterAddress(row.min_device),
+    maxDevice: normalizeRegisterAddress(row.max_device),
+    alarmDevice: normalizeRegisterAddress(row.alarm_device),
     unit: cleanText(row.unit) || "",
     show_on_monitor: row.show_on_monitor === undefined ? true : Boolean(row.show_on_monitor),
     show_to_operator: row.show_to_operator === undefined ? false : Boolean(row.show_to_operator),
@@ -233,6 +350,24 @@ async function ensureSchema() {
           );
         END;
       `);
+        await db.run(`
+          IF OBJECT_ID(N'dbo.alarms', N'U') IS NULL
+          BEGIN
+            CREATE TABLE dbo.alarms (
+              id BIGINT IDENTITY(1,1) NOT NULL CONSTRAINT PK_alarms PRIMARY KEY,
+              machine_config_id INT NULL,
+              machine_id BIGINT NULL,
+              machine_key NVARCHAR(80) NULL,
+              machine_name NVARCHAR(160) NULL,
+              ip_address VARCHAR(50) NULL,
+              parameter_name NVARCHAR(200) NULL,
+              alarm_device NVARCHAR(80) NULL,
+              alarm_enabled BIT NOT NULL CONSTRAINT DF_alarms_alarm_enabled DEFAULT 0,
+              created_at DATETIME2(3) NOT NULL CONSTRAINT DF_alarms_created DEFAULT SYSUTCDATETIME(),
+              updated_at DATETIME2(3) NOT NULL CONSTRAINT DF_alarms_updated DEFAULT SYSUTCDATETIME()
+            );
+          END;
+        `);
       await db.run(`
         IF COL_LENGTH('dbo.plc_machine_configs', 'register_config_json') IS NULL
         BEGIN
@@ -286,6 +421,9 @@ async function ensureSchema() {
             computed_key NVARCHAR(80) NULL,
             min_value DECIMAL(18,4) NULL,
             max_value DECIMAL(18,4) NULL,
+            min_device NVARCHAR(80) NULL,
+            max_device NVARCHAR(80) NULL,
+            alarm_device NVARCHAR(80) NULL,
             warning_min DECIMAL(18,4) NULL,
             warning_max DECIMAL(18,4) NULL,
             alarm_enabled BIT NOT NULL CONSTRAINT DF_plc_machine_config_registers_alarm DEFAULT 0,
@@ -296,6 +434,42 @@ async function ensureSchema() {
             created_at DATETIME2(3) NOT NULL CONSTRAINT DF_plc_machine_config_registers_created DEFAULT SYSUTCDATETIME(),
             updated_at DATETIME2(3) NOT NULL CONSTRAINT DF_plc_machine_config_registers_updated DEFAULT SYSUTCDATETIME(),
             CONSTRAINT FK_plc_machine_config_registers_config
+              FOREIGN KEY (machine_config_id) REFERENCES dbo.plc_machine_configs(id) ON DELETE CASCADE
+          );
+        END;
+      `);
+      await db.run(`
+        IF COL_LENGTH('dbo.plc_machine_config_registers', 'min_device') IS NULL
+          ALTER TABLE dbo.plc_machine_config_registers ADD min_device NVARCHAR(80) NULL;
+        IF COL_LENGTH('dbo.plc_machine_config_registers', 'max_device') IS NULL
+          ALTER TABLE dbo.plc_machine_config_registers ADD max_device NVARCHAR(80) NULL;
+        IF COL_LENGTH('dbo.plc_machine_config_registers', 'alarm_device') IS NULL
+          ALTER TABLE dbo.plc_machine_config_registers ADD alarm_device NVARCHAR(80) NULL;
+        IF COL_LENGTH('dbo.plc_machine_config_registers', 'scale_factor') IS NULL
+          ALTER TABLE dbo.plc_machine_config_registers ADD scale_factor DECIMAL(18,6) NOT NULL CONSTRAINT DF_plc_machine_config_registers_scale DEFAULT 1;
+        IF COL_LENGTH('dbo.plc_machine_config_registers', 'scale_operation') IS NULL
+          ALTER TABLE dbo.plc_machine_config_registers ADD scale_operation NVARCHAR(16) NOT NULL CONSTRAINT DF_plc_machine_config_registers_scale_op DEFAULT N'multiply';
+
+        IF OBJECT_ID(N'dbo.ube_set_parameters', N'U') IS NULL
+        BEGIN
+          CREATE TABLE dbo.ube_set_parameters (
+            id BIGINT IDENTITY(1,1) NOT NULL CONSTRAINT PK_ube_set_parameters PRIMARY KEY,
+            machine_config_id INT NOT NULL,
+            machine_id BIGINT NULL,
+            machine_key NVARCHAR(80) NULL,
+            machine_name NVARCHAR(160) NULL,
+            ip_address VARCHAR(50) NULL,
+            parameter_name NVARCHAR(200) NOT NULL,
+            value_device NVARCHAR(80) NULL,
+            min_device NVARCHAR(80) NULL,
+            max_device NVARCHAR(80) NULL,
+            alarm_device NVARCHAR(80) NULL,
+            alarm_enabled BIT NOT NULL CONSTRAINT DF_ube_set_parameters_alarm DEFAULT 0,
+            sort_order INT NOT NULL CONSTRAINT DF_ube_set_parameters_sort DEFAULT 0,
+            is_active BIT NOT NULL CONSTRAINT DF_ube_set_parameters_active DEFAULT 1,
+            created_at DATETIME2(3) NOT NULL CONSTRAINT DF_ube_set_parameters_created DEFAULT SYSUTCDATETIME(),
+            updated_at DATETIME2(3) NOT NULL CONSTRAINT DF_ube_set_parameters_updated DEFAULT SYSUTCDATETIME(),
+            CONSTRAINT FK_ube_set_parameters_config
               FOREIGN KEY (machine_config_id) REFERENCES dbo.plc_machine_configs(id) ON DELETE CASCADE
           );
         END;
@@ -418,7 +592,7 @@ function normalizeMachine(row = {}) {
 }
 
 function registersForType(_type = "generic") {
-  if (normalizeMachineType(_type) === "ube") return [UBE_PART_NAME_REGISTER];
+  if (normalizeMachineType(_type) === "ube") return DEFAULT_UBE_REGISTERS;
   return [];
 }
 
@@ -426,20 +600,34 @@ function normalizeRegisters(input) {
   if (!Array.isArray(input)) return null;
   return input
     .map((item, index) => {
-      const type = normalizeRegisterType(item.type);
+      const name = cleanText(item.name);
+      const knownScale = getKnownUbeScale(name);
+
+      let type = normalizeRegisterType(item.type);
+      if (knownScale !== null && knownScale !== 1 && (type === "int" || !item.type)) {
+        type = "decimal";
+      }
+
       const device = normalizeRegisterAddress(item.device);
       const stringDevice = normalizeRegisterAddress(item.stringDevice || item.string_device);
       const textDevice = stringDevice || (type === "text" ? device : "");
 
+      let scale = item.scale === "" || item.scale === null || item.scale === undefined ? null : Number(item.scale);
+      if ((scale === null || scale === 1) && knownScale !== null) {
+        scale = knownScale;
+      } else if (scale === null) {
+        scale = 1;
+      }
+
       return {
-        id: cleanText(item.id) || `${cleanText(item.name) || "register"}-${index}`,
-        name: cleanText(item.name),
+        id: cleanText(item.id) || `${name || "register"}-${index}`,
+        name,
         display_label: cleanText(item.display_label || item.displayLabel || item.label),
         device: type === "text" ? "" : device,
         stringDevice: textDevice,
         stringLength: cleanInt(item.stringLength ?? item.string_length, ""),
         type,
-        scale: item.scale === "" || item.scale === null || item.scale === undefined ? 1 : Number(item.scale),
+        scale,
         computed: cleanText(item.computed) || "",
         group_name: cleanText(item.group_name || item.groupName || item.group || item.category || item.section || item.tab),
         sort_order: cleanInt(item.sort_order ?? item.sortOrder, index + 1),
@@ -448,6 +636,9 @@ function normalizeRegisters(input) {
         max: cleanNumber(item.max ?? item.maximum),
         warning_min: cleanNumber(item.warning_min ?? item.warningMin),
         warning_max: cleanNumber(item.warning_max ?? item.warningMax),
+        minDevice: normalizeRegisterAddress(item.minDevice || item.min_device || item.min_address),
+        maxDevice: normalizeRegisterAddress(item.maxDevice || item.max_device || item.max_address),
+        alarmDevice: normalizeRegisterAddress(item.alarmDevice || item.alarm_device || item.alarm_address),
         unit: cleanText(item.unit) || "",
         show_on_monitor: cleanBool(item.show_on_monitor ?? item.showOnMonitor, true),
         show_to_operator: cleanBool(item.show_to_operator ?? item.showToOperator, false),
@@ -481,10 +672,10 @@ async function syncMachineConfigRegisters(machineConfigId, payload = {}, registe
       INSERT INTO dbo.plc_machine_config_registers
         (machine_config_id, machine_id, machine_key, machine_name, machine_type, ip_address,
          parameter_name, display_label, device, string_device, string_length, data_type,
-         scale_factor, unit, group_name, sort_order, computed_key,
-         min_value, max_value, warning_min, warning_max, alarm_enabled,
+         scale_factor, scale_operation, unit, group_name, sort_order, computed_key,
+         min_value, max_value, min_device, max_device, alarm_device, warning_min, warning_max, alarm_enabled,
          show_on_monitor, show_to_operator, log_history, is_active)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       id,
       payload.machine_id,
@@ -499,12 +690,16 @@ async function syncMachineConfigRegisters(machineConfigId, payload = {}, registe
       cleanInt(register.stringLength ?? register.string_length),
       register.type || "int",
       register.scale === "" || register.scale === null || register.scale === undefined ? 1 : Number(register.scale),
+      register.scaleOperation || register.scale_operation || "multiply",
       register.unit || "",
       register.group_name || register.group || "",
       cleanInt(register.sort_order ?? register.sortOrder, index + 1),
       register.computed || "",
       register.min ?? null,
       register.max ?? null,
+      register.minDevice || register.min_device || "",
+      register.maxDevice || register.max_device || "",
+      register.alarmDevice || register.alarm_device || "",
       register.warning_min ?? null,
       register.warning_max ?? null,
       Number(Boolean(register.alarm_enabled ?? register.alarmEnabled)),
@@ -513,6 +708,62 @@ async function syncMachineConfigRegisters(machineConfigId, payload = {}, registe
       register.log_history === undefined ? 1 : Number(Boolean(register.log_history)),
       register.enabled === undefined ? 1 : Number(Boolean(register.enabled)),
     ]));
+  }
+
+  if (normalizeMachineType(payload.machine_type) === "ube" && await tableExists("dbo.ube_set_parameters")) {
+    await withDeadlockRetry(() => db.run(
+      "DELETE FROM dbo.ube_set_parameters WHERE machine_config_id = ?",
+      [id]
+    ));
+    for (const [index, register] of registers.entries()) {
+      await withDeadlockRetry(() => db.run(`
+        INSERT INTO dbo.ube_set_parameters
+          (machine_config_id, machine_id, machine_key, machine_name, ip_address,
+           parameter_name, value_device, min_device, max_device, alarm_device,
+           alarm_enabled, sort_order, is_active)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        id,
+        payload.machine_id,
+        payload.machine_key,
+        payload.machine_name,
+        payload.ip_address,
+        register.name,
+        register.device || register.stringDevice || register.string_device || "",
+        register.minDevice || register.min_device || "",
+        register.maxDevice || register.max_device || "",
+        register.alarmDevice || register.alarm_device || "",
+        Number(Boolean(register.alarm_enabled ?? register.alarmEnabled)),
+        cleanInt(register.sort_order ?? register.sortOrder, index + 1),
+        register.enabled === undefined ? 1 : Number(Boolean(register.enabled)),
+      ]));
+    }
+  }
+  // Sync alarm entries into dbo.alarms (new table)
+  if (await tableExists("dbo.alarms")) {
+    await withDeadlockRetry(() => db.run(
+      "DELETE FROM dbo.alarms WHERE machine_config_id = ?",
+      [id]
+    ));
+    for (const [index, register] of registers.entries()) {
+      const alarmDev = register.alarmDevice || register.alarm_device || "";
+      const alarmEnabled = Number(Boolean(register.alarm_enabled ?? register.alarmEnabled));
+      if (!alarmDev && !alarmEnabled) continue;
+      await withDeadlockRetry(() => db.run(`
+        INSERT INTO dbo.alarms
+          (machine_config_id, machine_id, machine_key, machine_name, ip_address, parameter_name, alarm_device, alarm_enabled)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        id,
+        payload.machine_id,
+        payload.machine_key,
+        payload.machine_name,
+        payload.ip_address,
+        register.name || register.parameter || "",
+        alarmDev,
+        alarmEnabled,
+      ]));
+    }
   }
 }
 
@@ -539,6 +790,9 @@ async function getRegisterConfigsByMachineIds(machineConfigIds = []) {
       computed_key,
       min_value,
       max_value,
+      min_device,
+      max_device,
+      alarm_device,
       warning_min,
       warning_max,
       alarm_enabled,
@@ -664,6 +918,10 @@ async function saveMachineRecord(input = {}) {
     notes: cleanText(input.notes),
   };
 
+  if (type === "ube" && (!payload.register_config_json || payload.register_config_json === "[]" || payload.register_config_json === "null")) {
+    payload.register_config_json = JSON.stringify(DEFAULT_UBE_REGISTERS);
+  }
+
   if (id) {
     const { rows } = await db.query(
       "SELECT TOP 1 id FROM dbo.plc_machine_configs WHERE id = ?",
@@ -699,9 +957,10 @@ async function saveMachineRecord(input = {}) {
         WHERE id = ?
       `, [payload.machine_name, payload.ip_address, String(payload.port), payload.protocol, payload.machine_id]));
     }
-    if (hasRegisterConfigInput) {
-      await syncMachineConfigRegisters(id, payload, normalizedRegisterConfig || []);
-    }
+    const registersToSync = hasRegisterConfigInput
+      ? (normalizedRegisterConfig || [])
+      : (type === "ube" ? DEFAULT_UBE_REGISTERS : []);
+    await syncMachineConfigRegisters(id, payload, registersToSync);
     await syncMachineNameReferences({
       ip: payload.ip_address,
       machineKey: payload.machine_key,
@@ -738,9 +997,10 @@ async function saveMachineRecord(input = {}) {
       WHERE id = ?
     `, [payload.machine_name, payload.ip_address, String(payload.port), payload.protocol, payload.machine_id]));
   }
-  if (hasRegisterConfigInput) {
-    await syncMachineConfigRegisters(insertedId, payload, normalizedRegisterConfig || []);
-  }
+  const insertedRegisters = hasRegisterConfigInput
+    ? (normalizedRegisterConfig || [])
+    : (type === "ube" ? DEFAULT_UBE_REGISTERS : []);
+  await syncMachineConfigRegisters(insertedId, payload, insertedRegisters);
   await syncMachineNameReferences({
     ip: payload.ip_address,
     machineKey: payload.machine_key,
@@ -869,4 +1129,6 @@ module.exports = {
   saveMachine,
   deleteMachine,
   testConnection,
+  DEFAULT_UBE_REGISTERS,
+  getKnownUbeScale,
 };

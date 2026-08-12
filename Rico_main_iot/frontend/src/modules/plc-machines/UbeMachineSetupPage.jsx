@@ -203,7 +203,15 @@ async function parseExcelRegisterImport(file) {
   const workbook = XLSX.read(data, { type: "array" });
   const sheetName = workbook.SheetNames[0];
   if (!sheetName) return [];
-  return XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "" });
+  const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "" });
+  return rows.map((row) => {
+    const normalizedRow = {};
+    for (const [key, value] of Object.entries(row)) {
+      const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+      normalizedRow[normalizedKey] = value;
+    }
+    return normalizedRow;
+  });
 }
 
 async function parsePdfRegisterImport(file) {
@@ -271,6 +279,9 @@ function normalizeImportedRegisters(rows = []) {
         show_to_operator: row.show_to_operator ?? row.showToOperator ?? false,
         log_history: row.log_history ?? row.logHistory ?? true,
         alarm_enabled: row.alarm_enabled ?? row.alarmEnabled ?? false,
+        minDevice: row.minDevice || row.min_device || row.min_address || row.minimum_address || "",
+        maxDevice: row.maxDevice || row.max_device || row.max_address || row.maximum_address || "",
+        alarmDevice: row.alarmDevice || row.alarm_device || row.alarm_address || "",
       };
     })
     .filter(Boolean);
@@ -393,10 +404,10 @@ export function MachineForm({
               </label>
             </div>
           )}
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-4">
             {showMachineSelector && (
-              <label className="md:col-span-2 xl:col-span-3">
-                <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-slate-400">Select Machine</span>
+              <label className="md:col-span-3 lg:col-span-4">
+                <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-slate-400">Machine</span>
                 <SearchableSelect
                   value={draft.machine_id ? String(draft.machine_id) : ""}
                   options={machineOptions}
@@ -411,7 +422,7 @@ export function MachineForm({
               </label>
             )}
             <label>
-              <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-slate-400">Machine Type</span>
+              <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-slate-400">Type</span>
               <select className={inputClass} value={getMachineType(draft)} onChange={(event) => setMachineType(event.target.value)}>
                 <option value="ube">Die Casting / PLC</option>
                 <option value="gauge">Gauge</option>
@@ -419,15 +430,15 @@ export function MachineForm({
               </select>
             </label>
             <label>
-              <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-slate-400">Selected Machine Name</span>
+              <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-slate-400">Machine</span>
               <input className={inputClass} value={draft.machine_name} onChange={(event) => setField("machine_name", event.target.value)} placeholder="Select a machine asset above" />
             </label>
             <label>
-              <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-slate-400">PLC IP Address</span>
+              <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-slate-400">IP Address</span>
               <input className={inputClass} value={draft.ip_address} onChange={(event) => setField("ip_address", event.target.value)} />
             </label>
             <label>
-              <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-slate-400">PLC Port</span>
+              <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-slate-400">Port</span>
               <input className={inputClass} type="number" min="1" max="65535" value={draft.port || ""} onChange={(event) => setField("port", event.target.value)} />
             </label>
             <label>
@@ -526,6 +537,11 @@ export function RegisterConfigTable({ registers, setRegisters, maxHeightClass = 
         unit: "",
         min: "",
         max: "",
+        minDevice: "",
+        maxDevice: "",
+        alarmDevice: "",
+        scale: 1,
+        scaleOperation: "multiply",
         warning_min: "",
         warning_max: "",
         show_on_monitor: true,
@@ -556,12 +572,15 @@ export function RegisterConfigTable({ registers, setRegisters, maxHeightClass = 
         <table className="min-w-[960px] w-full table-fixed text-left text-xs">
           <colgroup>
             <col className="w-[58px]" />
-            <col className="w-[260px]" />
-            <col className="w-[180px]" />
+            <col className="w-[220px]" />
             <col className="w-[150px]" />
+            <col className="w-[120px]" />
             <col className="w-[86px]" />
             <col className="w-[86px]" />
             <col className="w-[86px]" />
+            <col className="w-[80px]" />
+            <col className="w-[90px]" />
+            <col className="w-[140px]" />
             <col className="w-[70px]" />
             <col className="w-[64px]" />
           </colgroup>
@@ -572,8 +591,11 @@ export function RegisterConfigTable({ registers, setRegisters, maxHeightClass = 
               <th className="px-3 py-3">PLC Address</th>
               <th className="px-3 py-3">Type</th>
               <th className="px-3 py-3">Unit</th>
-              <th className="px-3 py-3">Min</th>
-              <th className="px-3 py-3">Max</th>
+              <th className="px-3 py-3">Min PLC Address</th>
+              <th className="px-3 py-3">Max PLC Address</th>
+              <th className="px-3 py-3">Op</th>
+              <th className="px-3 py-3">Scale</th>
+              <th className="px-3 py-3">Alarm Address</th>
               <th className="px-3 py-3 text-center">Alarm</th>
               <th className="px-3 py-3"></th>
             </tr>
@@ -581,7 +603,7 @@ export function RegisterConfigTable({ registers, setRegisters, maxHeightClass = 
           <tbody className="divide-y divide-slate-100">
             {!registers.length && (
               <tr>
-                <td colSpan="9" className="px-4 py-8 text-center text-sm font-bold text-slate-400">
+                <td colSpan="10" className="px-4 py-8 text-center text-sm font-bold text-slate-400">
                   No data registers added yet.
                 </td>
               </tr>
@@ -614,10 +636,22 @@ export function RegisterConfigTable({ registers, setRegisters, maxHeightClass = 
                   <input className={inputClass} value={register.unit || ""} onChange={(event) => setRegisterField(index, "unit", event.target.value)} />
                 </td>
                 <td className="px-3 py-2">
-                  <input className={inputClass} type="number" value={register.min ?? ""} onChange={(event) => setRegisterField(index, "min", event.target.value)} />
+                  <input className={inputClass} value={register.minDevice || register.min_device || ""} onChange={(event) => setRegisterField(index, "minDevice", event.target.value)} placeholder="D4300" />
                 </td>
                 <td className="px-3 py-2">
-                  <input className={inputClass} type="number" value={register.max ?? ""} onChange={(event) => setRegisterField(index, "max", event.target.value)} />
+                  <input className={inputClass} value={register.maxDevice || register.max_device || ""} onChange={(event) => setRegisterField(index, "maxDevice", event.target.value)} placeholder="D4250" />
+                </td>
+                <td className="px-3 py-2">
+                  <select className={inputClass} value={register.scaleOperation || register.scale_operation || "multiply"} onChange={(event) => setRegisterField(index, "scaleOperation", event.target.value)}>
+                    <option value="multiply">Multiply</option>
+                    <option value="divide">Divide</option>
+                  </select>
+                </td>
+                <td className="px-3 py-2">
+                  <input className={inputClass} type="number" step="any" value={register.scale === undefined ? register.scale_factor || 1 : register.scale} onChange={(event) => setRegisterField(index, "scale", event.target.value)} placeholder="1" />
+                </td>
+                <td className="px-3 py-2">
+                  <input className={inputClass} value={register.alarmDevice || register.alarm_device || ""} onChange={(event) => setRegisterField(index, "alarmDevice", event.target.value)} placeholder="A100 / D430" />
                 </td>
                 <td className="px-3 py-2 text-center">
                   <input className="h-4 w-4 rounded border-slate-300 text-blue-600" type="checkbox" checked={register.alarm_enabled === true} onChange={(event) => setRegisterField(index, "alarm_enabled", event.target.checked)} />
