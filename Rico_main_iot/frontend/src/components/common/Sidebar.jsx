@@ -8,6 +8,7 @@ import {
   Building2,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Cpu,
   LayoutDashboard,
   LayoutGrid,
@@ -58,6 +59,7 @@ const navSections = [
     title: "Administration",
     items: [
       { label: "User & Role Access", to: "/access-control", icon: Users, permission: "roles:manage" },
+      { label: "Shift Management", to: "/shift-management", icon: Clock, permission: "system:config" },
       { label: "System Settings", to: "/system-settings", icon: Settings, permission: "system:config" },
     ],
   },

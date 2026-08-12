@@ -535,7 +535,6 @@ export function RegisterConfigTable({ registers, setRegisters, maxHeightClass = 
         max: "",
         minDevice: "",
         maxDevice: "",
-        alarmDevice: "",
         scale: 1,
         scaleOperation: "multiply",
         warning_min: "",
@@ -565,18 +564,17 @@ export function RegisterConfigTable({ registers, setRegisters, maxHeightClass = 
         </button>
       </div>
       <div className={`${maxHeightClass} overflow-auto`}>
-        <table className="min-w-[960px] w-full table-fixed text-left text-xs">
+        <table className="min-w-[900px] w-full table-fixed text-left text-xs">
           <colgroup>
             <col className="w-[58px]" />
             <col className="w-[220px]" />
-            <col className="w-[150px]" />
+            <col className="w-[140px]" />
             <col className="w-[120px]" />
             <col className="w-[86px]" />
-            <col className="w-[86px]" />
-            <col className="w-[86px]" />
+            <col className="w-[110px]" />
+            <col className="w-[110px]" />
+            <col className="w-[64px]" />
             <col className="w-[80px]" />
-            <col className="w-[90px]" />
-            <col className="w-[140px]" />
             <col className="w-[70px]" />
             <col className="w-[64px]" />
           </colgroup>
@@ -591,7 +589,6 @@ export function RegisterConfigTable({ registers, setRegisters, maxHeightClass = 
               <th className="px-3 py-3">Max PLC Address</th>
               <th className="px-3 py-3">Op</th>
               <th className="px-3 py-3">Scale</th>
-              <th className="px-3 py-3">Alarm Address</th>
               <th className="px-3 py-3 text-center">Alarm</th>
               <th className="px-3 py-3"></th>
             </tr>
@@ -599,7 +596,7 @@ export function RegisterConfigTable({ registers, setRegisters, maxHeightClass = 
           <tbody className="divide-y divide-slate-100">
             {!registers.length && (
               <tr>
-                <td colSpan="10" className="px-4 py-8 text-center text-sm font-bold text-slate-400">
+                <td colSpan="11" className="px-4 py-8 text-center text-sm font-bold text-slate-400">
                   No data registers added yet.
                 </td>
               </tr>
@@ -613,7 +610,7 @@ export function RegisterConfigTable({ registers, setRegisters, maxHeightClass = 
                   <input className={inputClass} value={register.name || ""} onChange={(event) => setRegisterField(index, "name", event.target.value)} />
                 </td>
                 <td className="px-3 py-2">
-                  <input className={inputClass} value={getRegisterAddress(register)} onChange={(event) => setRegisterAddress(index, event.target.value)} placeholder="D2258 / M110 / R2250" />
+                  <input className={inputClass} value={getRegisterAddress(register)} onChange={(event) => setRegisterAddress(index, event.target.value)} placeholder="D2258 / M110" />
                 </td>
                 <td className="px-3 py-2">
                   <select className={inputClass} value={register.type || "int"} onChange={(event) => setRegisterType(index, event.target.value)}>
@@ -632,22 +629,21 @@ export function RegisterConfigTable({ registers, setRegisters, maxHeightClass = 
                   <input className={inputClass} value={register.unit || ""} onChange={(event) => setRegisterField(index, "unit", event.target.value)} />
                 </td>
                 <td className="px-3 py-2">
-                  <input className={inputClass} value={register.minDevice || register.min_device || ""} onChange={(event) => setRegisterField(index, "minDevice", event.target.value)} placeholder="D4300" />
+                  <input className={inputClass} value={register.minDevice || register.min_device || ""} onChange={(event) => setRegisterField(index, "minDevice", event.target.value)} placeholder="" />
                 </td>
                 <td className="px-3 py-2">
-                  <input className={inputClass} value={register.maxDevice || register.max_device || ""} onChange={(event) => setRegisterField(index, "maxDevice", event.target.value)} placeholder="D4250" />
+                  <input className={inputClass} value={register.maxDevice || register.max_device || ""} onChange={(event) => setRegisterField(index, "maxDevice", event.target.value)} placeholder="" />
                 </td>
                 <td className="px-3 py-2">
                   <select className={inputClass} value={register.scaleOperation || register.scale_operation || "multiply"} onChange={(event) => setRegisterField(index, "scaleOperation", event.target.value)}>
-                    <option value="multiply">Multiply</option>
-                    <option value="divide">Divide</option>
+                    <option value="multiply">*</option>
+                    <option value="divide">/</option>
+                    <option value="add">+</option>
+                    <option value="subtract">-</option>
                   </select>
                 </td>
                 <td className="px-3 py-2">
                   <input className={inputClass} type="number" step="any" value={register.scale === undefined ? register.scale_factor || 1 : register.scale} onChange={(event) => setRegisterField(index, "scale", event.target.value)} placeholder="1" />
-                </td>
-                <td className="px-3 py-2">
-                  <input className={inputClass} value={register.alarmDevice || register.alarm_device || ""} onChange={(event) => setRegisterField(index, "alarmDevice", event.target.value)} placeholder="A100 / D430" />
                 </td>
                 <td className="px-3 py-2 text-center">
                   <input className="h-4 w-4 rounded border-slate-300 text-blue-600" type="checkbox" checked={register.alarm_enabled === true} onChange={(event) => setRegisterField(index, "alarm_enabled", event.target.checked)} />

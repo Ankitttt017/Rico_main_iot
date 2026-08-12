@@ -18,6 +18,7 @@ const pageMeta = {
   "/ube-machine-setup": { title: "PLC Config / Tags", subtitle: "PLC connection, register mapping and limits", searchPlaceholder: "Search UBE tag...", searchPath: "/ube-machine-setup" },
   "/plc-report": { title: "Production Reports", subtitle: "Machine production history and exports", hideSearch: true },
   "/access-control": { title: "User & Role Access", subtitle: "Role wise screen access and traceability permissions", hideSearch: true },
+  "/shift-management": { title: "Shift Management", subtitle: "Configure plant shifts, operating timings and break rules", hideSearch: true },
   "/system-settings": { title: "System Settings", subtitle: "Application configuration and preferences", hideSearch: true },
 };
 

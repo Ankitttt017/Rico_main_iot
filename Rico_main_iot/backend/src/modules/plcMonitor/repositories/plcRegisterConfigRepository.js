@@ -74,19 +74,16 @@ function normalizeRegister(register = {}, index = 0) {
   const stringDevice = String(register.stringDevice || register.string_device || "").trim().toUpperCase();
   const stringLength = register.stringLength ?? register.string_length ?? "";
 
-  const knownScale = getKnownUbeScale(name);
   let scale = register.scale === "" || register.scale === null || register.scale === undefined
-    ? null
+    ? (register.scale_factor === undefined || register.scale_factor === null ? null : Number(register.scale_factor))
     : Number(register.scale);
 
-  if ((scale === null || scale === 1) && knownScale !== null) {
-    scale = knownScale;
-  } else if (scale === null) {
-    scale = 1;
+  if (scale === null || Number.isNaN(scale)) {
+    scale = knownScale !== null ? knownScale : 1;
   }
 
   let type = String(register.type || register.readMethod || register.read_method || "int").trim().toLowerCase();
-  if (knownScale !== null && knownScale !== 1 && (type === "int" || !type)) {
+  if (scale !== 1 && (type === "int" || !type)) {
     type = "decimal";
   }
 
@@ -99,6 +96,9 @@ function normalizeRegister(register = {}, index = 0) {
     stringLength,
     type,
     scale,
+    scaleOperation: register.scaleOperation || register.scale_operation || "multiply",
+    minDevice: register.minDevice || register.min_device || "",
+    maxDevice: register.maxDevice || register.max_device || "",
     enabled: register.enabled === undefined ? true : Boolean(register.enabled),
   };
 }

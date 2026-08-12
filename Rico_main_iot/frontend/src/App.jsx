@@ -19,6 +19,7 @@ const OperationsMasterPage = lazy(() => import("./modules/operations/pages/Opera
 const PlcMonitorPage = lazy(() => import("./modules/plc-monitor/pages/PlcMonitorPage"));
 const PlcReportPage = lazy(() => import("./modules/plc-report/pages/PlcReportPage"));
 const UserAccessPage = lazy(() => import("./modules/access/pages/UserAccessPage"));
+const ShiftManagementPage = lazy(() => import("./modules/shifts/pages/ShiftManagementPage"));
 const UnderDevelopmentPage = lazy(() => import("./pages/UnderDevelopmentPage"));
 
 const PageLoader = () => (
@@ -247,6 +248,15 @@ const App = () => {
               path="/access-control"
               element={
                 requirePermission("roles:manage", <UserAccessPage
+                  onLogout={handleLogout}
+                  currentUser={currentUser}
+                />)
+              }
+            />
+            <Route
+              path="/shift-management"
+              element={
+                requirePermission("system:config", <ShiftManagementPage
                   onLogout={handleLogout}
                   currentUser={currentUser}
                 />)

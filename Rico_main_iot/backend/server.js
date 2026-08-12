@@ -13,6 +13,7 @@ const departmentRoutes = require("./src/modules/departments/department.routes");
 const authRoutes = require("./src/modules/auth/auth.routes");
 const workstationRoutes = require("./src/modules/workstation/workstation.routes");
 const plcMachineConfigRoutes = require("./src/modules/plcMachineConfigs/plcMachineConfig.routes");
+const shiftRoutes = require("./src/modules/shifts/shift.routes");
 const createPlcMonitorRoutes = require("./src/modules/plcMonitor/routes/plcMonitorRoutes");
 const { startPlcMonitor } = require("./src/modules/plcMonitor/services/plcMonitorService");
 
@@ -45,6 +46,7 @@ app.use("/api/locations", locationRoutes);
 app.use("/api/departments", departmentRoutes);
 app.use("/api/lines", lineRoutes);
 app.use("/api/plc-machine-configs", plcMachineConfigRoutes);
+app.use("/api/shifts", shiftRoutes);
 
 const plcMonitor = String(process.env.PLC_MONITOR_ENABLED || "true").toLowerCase() === "false"
   ? {

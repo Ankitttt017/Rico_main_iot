@@ -611,12 +611,10 @@ function normalizeRegisters(input) {
       const stringDevice = normalizeRegisterAddress(item.stringDevice || item.string_device);
       const textDevice = stringDevice || (type === "text" ? device : "");
 
-      let scale = item.scale === "" || item.scale === null || item.scale === undefined ? null : Number(item.scale);
-      if ((scale === null || scale === 1) && knownScale !== null) {
-        scale = knownScale;
-      } else if (scale === null) {
-        scale = 1;
-      }
+      let scale = item.scale === "" || item.scale === null || item.scale === undefined
+        ? (item.scale_factor === undefined || item.scale_factor === null ? 1 : Number(item.scale_factor))
+        : Number(item.scale);
+      if (Number.isNaN(scale)) scale = 1;
 
       return {
         id: cleanText(item.id) || `${name || "register"}-${index}`,
@@ -627,6 +625,7 @@ function normalizeRegisters(input) {
         stringLength: cleanInt(item.stringLength ?? item.string_length, ""),
         type,
         scale,
+        scaleOperation: cleanText(item.scaleOperation || item.scale_operation) || "multiply",
         computed: cleanText(item.computed) || "",
         group_name: cleanText(item.group_name || item.groupName || item.group || item.category || item.section || item.tab),
         sort_order: cleanInt(item.sort_order ?? item.sortOrder, index + 1),
