@@ -59,14 +59,8 @@ const TWO_DIGIT_FIELDS = new Set([
 ]);
 
 const DISPLAY_DIVIDE_BY_TEN_FIELDS = new Set([
-  "clamp_tonnage_he_low_mn",
-  "clamp_tonnage_he_up_pct",
-  "clamp_tonnage_op_low_pct",
-  "clamp_tonnage_op_up_pct",
-  "cooling_water_mov",
-  "cooling_water_sta",
-  "furnace_metal_temp",
-  "jet_cooling_pressure",
+  "cycle_time",
+  "die_close_core_in_time",
   "pouring_time",
   "shot_fwd_time",
   "curing_time",
@@ -74,6 +68,23 @@ const DISPLAY_DIVIDE_BY_TEN_FIELDS = new Set([
   "ejector_time",
   "extract_time",
   "spray_time",
+  "metal_pressure",
+  "biscuit_thickness",
+  "cooling_water_mov",
+  "cooling_water_sta",
+  "furnace_metal_temp",
+  "jet_cooling_pressure",
+  "clamp_tonnage_he_up_pct",
+  "clamp_tonnage_op_low_pct",
+  "clamp_tonnage_op_up_pct",
+]);
+
+const DISPLAY_DIVIDE_BY_HUNDRED_FIELDS = new Set([
+  "v1_speed",
+  "v2_speed",
+  "v3_speed",
+  "v4_speed",
+  "clamp_tonnage_he_low_mn",
 ]);
 
 const DISPLAY_DIVIDE_BY_HUNDRED_LIMITS = new Set([
@@ -85,6 +96,8 @@ const DISPLAY_DIVIDE_BY_HUNDRED_LIMITS = new Set([
   "v3_speed_lower_limit",
   "v4_speed_upper_limit",
   "v4_speed_lower_limit",
+  "clamp_tonnage_he_low_mn_upper_limit",
+  "clamp_tonnage_he_low_mn_lower_limit",
 ]);
 
 function getNumericDisplayValue(value) {
@@ -95,12 +108,43 @@ function getNumericDisplayValue(value) {
 function getScaledDisplayValue(normalizedName, value) {
   const numericValue = getNumericDisplayValue(value);
   if (numericValue === null) return value;
-  if (DISPLAY_DIVIDE_BY_HUNDRED_LIMITS.has(normalizedName)) return numericValue / 100;
+
+  // 1. Speeds & MN Tonnage (Divide by 100)
+  if (
+    DISPLAY_DIVIDE_BY_HUNDRED_LIMITS.has(normalizedName) ||
+    DISPLAY_DIVIDE_BY_HUNDRED_FIELDS.has(normalizedName) ||
+    normalizedName.startsWith("v1_speed") ||
+    normalizedName.startsWith("v2_speed") ||
+    normalizedName.startsWith("v3_speed") ||
+    normalizedName.startsWith("v4_speed") ||
+    normalizedName === "clamp_tonnage_he_low_mn"
+  ) {
+    if (normalizedName.endsWith("_upper_limit") || normalizedName.endsWith("_lower_limit")) {
+      return Number((numericValue / 100).toFixed(2));
+    }
+    if (numericValue >= 10) {
+      return Number((numericValue / 100).toFixed(2));
+    }
+    return numericValue;
+  }
+
+  // 2. Cycle Timings & Pressures (Divide by 10)
   for (const baseName of DISPLAY_DIVIDE_BY_TEN_FIELDS) {
-    if (normalizedName === `${baseName}_upper_limit` || normalizedName === `${baseName}_lower_limit`) {
-      return numericValue / 10;
+    if (
+      normalizedName === baseName ||
+      normalizedName === `${baseName}_upper_limit` ||
+      normalizedName === `${baseName}_lower_limit`
+    ) {
+      if (normalizedName.endsWith("_upper_limit") || normalizedName.endsWith("_lower_limit")) {
+        return Number((numericValue / 10).toFixed(1));
+      }
+      if (numericValue > 15 && Number.isInteger(numericValue)) {
+        return Number((numericValue / 10).toFixed(1));
+      }
+      return numericValue;
     }
   }
+
   return value;
 }
 

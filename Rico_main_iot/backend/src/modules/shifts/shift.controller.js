@@ -3,11 +3,9 @@
 const db = require("../../config/db");
 
 async function ensureShiftsTable() {
-  const { rows } = await db.query(
-    "SELECT CASE WHEN OBJECT_ID('dbo.shifts', 'U') IS NULL THEN 0 ELSE 1 END AS table_exists"
-  );
-  if (Number(rows[0]?.table_exists || 0) === 0) {
-    await db.query(`
+  await db.query(`
+    IF OBJECT_ID('dbo.shifts', 'U') IS NULL
+    BEGIN
       CREATE TABLE dbo.shifts (
         id INT IDENTITY(1,1) PRIMARY KEY,
         shift_code NVARCHAR(50) NOT NULL UNIQUE,
@@ -25,26 +23,87 @@ async function ensureShiftsTable() {
         is_active BIT DEFAULT 1,
         created_at DATETIME DEFAULT GETDATE(),
         updated_at DATETIME DEFAULT GETDATE()
-      )
-    `);
+      );
+    END
+    ELSE
+    BEGIN
+      IF COLUMNPROPERTY(OBJECT_ID('dbo.shifts'), 'shift_code', 'ColumnId') IS NULL ALTER TABLE dbo.shifts ADD shift_code NVARCHAR(50) NULL;
+      IF COLUMNPROPERTY(OBJECT_ID('dbo.shifts'), 'shift_name', 'ColumnId') IS NULL ALTER TABLE dbo.shifts ADD shift_name NVARCHAR(100) NULL;
+      IF COLUMNPROPERTY(OBJECT_ID('dbo.shifts'), 'start_time', 'ColumnId') IS NULL ALTER TABLE dbo.shifts ADD start_time NVARCHAR(10) NULL;
+      IF COLUMNPROPERTY(OBJECT_ID('dbo.shifts'), 'end_time', 'ColumnId') IS NULL ALTER TABLE dbo.shifts ADD end_time NVARCHAR(10) NULL;
+      IF COLUMNPROPERTY(OBJECT_ID('dbo.shifts'), 'break_1_name', 'ColumnId') IS NULL ALTER TABLE dbo.shifts ADD break_1_name NVARCHAR(100) NULL;
+      IF COLUMNPROPERTY(OBJECT_ID('dbo.shifts'), 'break_1_start', 'ColumnId') IS NULL ALTER TABLE dbo.shifts ADD break_1_start NVARCHAR(10) NULL;
+      IF COLUMNPROPERTY(OBJECT_ID('dbo.shifts'), 'break_1_end', 'ColumnId') IS NULL ALTER TABLE dbo.shifts ADD break_1_end NVARCHAR(10) NULL;
+      IF COLUMNPROPERTY(OBJECT_ID('dbo.shifts'), 'break_2_name', 'ColumnId') IS NULL ALTER TABLE dbo.shifts ADD break_2_name NVARCHAR(100) NULL;
+      IF COLUMNPROPERTY(OBJECT_ID('dbo.shifts'), 'break_2_start', 'ColumnId') IS NULL ALTER TABLE dbo.shifts ADD break_2_start NVARCHAR(10) NULL;
+      IF COLUMNPROPERTY(OBJECT_ID('dbo.shifts'), 'break_2_end', 'ColumnId') IS NULL ALTER TABLE dbo.shifts ADD break_2_end NVARCHAR(10) NULL;
+      IF COLUMNPROPERTY(OBJECT_ID('dbo.shifts'), 'grace_period_mins', 'ColumnId') IS NULL ALTER TABLE dbo.shifts ADD grace_period_mins INT DEFAULT 10;
+      IF COLUMNPROPERTY(OBJECT_ID('dbo.shifts'), 'overtime_allowed', 'ColumnId') IS NULL ALTER TABLE dbo.shifts ADD overtime_allowed BIT DEFAULT 1;
+      IF COLUMNPROPERTY(OBJECT_ID('dbo.shifts'), 'is_active', 'ColumnId') IS NULL ALTER TABLE dbo.shifts ADD is_active BIT DEFAULT 1;
+      IF COLUMNPROPERTY(OBJECT_ID('dbo.shifts'), 'created_at', 'ColumnId') IS NULL ALTER TABLE dbo.shifts ADD created_at DATETIME DEFAULT GETDATE();
+      IF COLUMNPROPERTY(OBJECT_ID('dbo.shifts'), 'updated_at', 'ColumnId') IS NULL ALTER TABLE dbo.shifts ADD updated_at DATETIME DEFAULT GETDATE();
+      IF COLUMNPROPERTY(OBJECT_ID('dbo.shifts'), 'breaks_json', 'ColumnId') IS NULL ALTER TABLE dbo.shifts ADD breaks_json NVARCHAR(MAX) NULL;
 
-    // Insert Default 3 Industrial Shifts
+      -- Fix legacy camelCase NOT NULL columns if they exist in pre-existing table
+      IF COLUMNPROPERTY(OBJECT_ID('dbo.shifts'), 'createdAt', 'ColumnId') IS NOT NULL
+      BEGIN
+        ALTER TABLE dbo.shifts ALTER COLUMN createdAt DATETIME NULL;
+      END
+      IF COLUMNPROPERTY(OBJECT_ID('dbo.shifts'), 'updatedAt', 'ColumnId') IS NOT NULL
+      BEGIN
+        ALTER TABLE dbo.shifts ALTER COLUMN updatedAt DATETIME NULL;
+      END
+    END
+  `);
+
+  const { rows: countRows } = await db.query("SELECT COUNT(*) AS total FROM dbo.shifts");
+  if (Number(countRows[0]?.total || 0) === 0) {
+    const defaultBreaksA = JSON.stringify([
+      { id: 1, name: "Tea Break 1", start_time: "09:00", end_time: "09:15", type: "tea" },
+      { id: 2, name: "Lunch Break", start_time: "11:30", end_time: "12:00", type: "meal" },
+    ]);
+    const defaultBreaksB = JSON.stringify([
+      { id: 1, name: "Tea Break 2", start_time: "17:00", end_time: "17:15", type: "tea" },
+      { id: 2, name: "Dinner Break", start_time: "19:30", end_time: "20:00", type: "meal" },
+    ]);
+    const defaultBreaksC = JSON.stringify([
+      { id: 1, name: "Night Tea", start_time: "01:00", end_time: "01:15", type: "tea" },
+      { id: 2, name: "Snack Break", start_time: "04:00", end_time: "04:30", type: "meal" },
+    ]);
+
     await db.query(`
-      INSERT INTO dbo.shifts (shift_code, shift_name, start_time, end_time, break_1_name, break_1_start, break_1_end, break_2_name, break_2_start, break_2_end, grace_period_mins, overtime_allowed, is_active)
+      INSERT INTO dbo.shifts (shift_code, shift_name, start_time, end_time, break_1_name, break_1_start, break_1_end, break_2_name, break_2_start, break_2_end, grace_period_mins, overtime_allowed, is_active, breaks_json)
       VALUES 
-      ('SHIFT_A', 'Shift A (Morning)', '06:00', '14:00', 'Tea Break 1', '09:00', '09:15', 'Lunch Break', '11:30', '12:00', 10, 1, 1),
-      ('SHIFT_B', 'Shift B (Evening)', '14:00', '22:00', 'Tea Break 2', '17:00', '17:15', 'Dinner Break', '19:30', '20:00', 10, 1, 1),
-      ('SHIFT_C', 'Shift C (Night)',   '22:00', '06:00', 'Night Tea',   '01:00', '01:15', 'Snack Break',  '04:00', '04:30', 10, 1, 1)
+      ('SHIFT_A', 'Shift A (Morning)', '06:00', '14:00', 'Tea Break 1', '09:00', '09:15', 'Lunch Break', '11:30', '12:00', 10, 1, 1, '${defaultBreaksA}'),
+      ('SHIFT_B', 'Shift B (Evening)', '14:00', '22:00', 'Tea Break 2', '17:00', '17:15', 'Dinner Break', '19:30', '20:00', 10, 1, 1, '${defaultBreaksB}'),
+      ('SHIFT_C', 'Shift C (Night)',   '22:00', '06:00', 'Night Tea',   '01:00', '01:15', 'Snack Break',  '04:00', '04:30', 10, 1, 1, '${defaultBreaksC}')
     `);
   }
 }
 
+function formatTimeString(val) {
+  if (val === null || val === undefined) return "";
+  if (val instanceof Date) {
+    const hrs = String(val.getHours()).padStart(2, "0");
+    const mins = String(val.getMinutes()).padStart(2, "0");
+    return `${hrs}:${mins}`;
+  }
+  const str = String(val).trim();
+  if (str.includes("T")) {
+    const timePart = str.split("T")[1];
+    if (timePart) return timePart.substring(0, 5);
+  }
+  return str.substring(0, 5);
+}
+
 function calculateShiftDuration(start, end) {
-  if (!start || !end) return "8h 00m";
-  const [sH, sM] = start.split(":").map(Number);
-  const [eH, eM] = end.split(":").map(Number);
-  let startMins = sH * 60 + sM;
-  let endMins = eH * 60 + eM;
+  const startStr = formatTimeString(start);
+  const endStr = formatTimeString(end);
+  if (!startStr || !endStr || !startStr.includes(":") || !endStr.includes(":")) return "8h 00m";
+  const [sH, sM] = startStr.split(":").map(Number);
+  const [eH, eM] = endStr.split(":").map(Number);
+  let startMins = (sH || 0) * 60 + (sM || 0);
+  let endMins = (eH || 0) * 60 + (eM || 0);
   if (endMins <= startMins) {
     endMins += 24 * 60; // Next day shift
   }
@@ -55,13 +114,15 @@ function calculateShiftDuration(start, end) {
 }
 
 function isCurrentShift(start, end) {
-  if (!start || !end) return false;
+  const startStr = formatTimeString(start);
+  const endStr = formatTimeString(end);
+  if (!startStr || !endStr || !startStr.includes(":") || !endStr.includes(":")) return false;
   const now = new Date();
   const currentMins = now.getHours() * 60 + now.getMinutes();
-  const [sH, sM] = start.split(":").map(Number);
-  const [eH, eM] = end.split(":").map(Number);
-  const startMins = sH * 60 + sM;
-  let endMins = eH * 60 + eM;
+  const [sH, sM] = startStr.split(":").map(Number);
+  const [eH, eM] = endStr.split(":").map(Number);
+  const startMins = (sH || 0) * 60 + (sM || 0);
+  let endMins = (eH || 0) * 60 + (eM || 0);
 
   if (endMins < startMins) {
     // Overnight shift (e.g. 22:00 to 06:00)
@@ -77,17 +138,64 @@ async function getAllShifts(_req, res) {
       SELECT id, shift_code, shift_name, start_time, end_time,
              break_1_name, break_1_start, break_1_end,
              break_2_name, break_2_start, break_2_end,
-             grace_period_mins, overtime_allowed, is_active,
+             breaks_json, grace_period_mins, overtime_allowed, is_active,
              created_at, updated_at
       FROM dbo.shifts WITH (NOLOCK)
       ORDER BY id ASC
     `);
 
-    const shifts = rows.map((shift) => ({
-      ...shift,
-      duration: calculateShiftDuration(shift.start_time, shift.end_time),
-      is_current: isCurrentShift(shift.start_time, shift.end_time) && Boolean(shift.is_active),
-    }));
+    const shifts = rows.map((shift) => {
+      const startTime = formatTimeString(shift.start_time);
+      const endTime = formatTimeString(shift.end_time);
+
+      let breaks = [];
+      if (shift.breaks_json) {
+        try {
+          breaks = typeof shift.breaks_json === "string" ? JSON.parse(shift.breaks_json) : shift.breaks_json;
+        } catch {
+          breaks = [];
+        }
+      }
+
+      if (!Array.isArray(breaks) || breaks.length === 0) {
+        if (shift.break_1_name) {
+          breaks.push({
+            id: 1,
+            name: shift.break_1_name,
+            start_time: formatTimeString(shift.break_1_start),
+            end_time: formatTimeString(shift.break_1_end),
+            type: "tea",
+          });
+        }
+        if (shift.break_2_name) {
+          breaks.push({
+            id: 2,
+            name: shift.break_2_name,
+            start_time: formatTimeString(shift.break_2_start),
+            end_time: formatTimeString(shift.break_2_end),
+            type: "meal",
+          });
+        }
+      } else {
+        breaks = breaks.map((b, idx) => ({
+          ...b,
+          id: b.id || idx + 1,
+          start_time: formatTimeString(b.start_time),
+          end_time: formatTimeString(b.end_time),
+        }));
+      }
+
+      return {
+        ...shift,
+        shift_code: shift.shift_code || `SHIFT_${shift.id}`,
+        shift_name: shift.shift_name || `Shift ${shift.id}`,
+        start_time: startTime,
+        end_time: endTime,
+        breaks,
+        duration: calculateShiftDuration(startTime, endTime),
+        is_current: isCurrentShift(startTime, endTime) && Boolean(shift.is_active),
+      };
+    });
 
     const activeShift = shifts.find((s) => s.is_current) || null;
 
@@ -110,6 +218,7 @@ async function createShift(req, res) {
       shift_name,
       start_time,
       end_time,
+      breaks = [],
       break_1_name,
       break_1_start,
       break_1_end,
@@ -141,20 +250,41 @@ async function createShift(req, res) {
       });
     }
 
+    const breaksArr = Array.isArray(breaks) ? breaks : [];
+    const b1 = breaksArr[0] || {};
+    const b2 = breaksArr[1] || {};
+
+    const b1Name = b1.name || break_1_name || null;
+    const b1Start = b1.start_time || break_1_start || null;
+    const b1End = b1.end_time || break_1_end || null;
+
+    const b2Name = b2.name || break_2_name || null;
+    const b2Start = b2.start_time || break_2_start || null;
+    const b2End = b2.end_time || break_2_end || null;
+
+    const breaksJsonStr = JSON.stringify(breaksArr);
+
     await db.query(`
-      INSERT INTO dbo.shifts (shift_code, shift_name, start_time, end_time, break_1_name, break_1_start, break_1_end, break_2_name, break_2_start, break_2_end, grace_period_mins, overtime_allowed, is_active)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO dbo.shifts (
+        shift_code, shift_name, start_time, end_time,
+        break_1_name, break_1_start, break_1_end,
+        break_2_name, break_2_start, break_2_end,
+        breaks_json, grace_period_mins, overtime_allowed, is_active,
+        created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE(), GETDATE())
     `, [
       codeUpper,
       String(shift_name).trim(),
       String(start_time).trim(),
       String(end_time).trim(),
-      break_1_name ? String(break_1_name).trim() : null,
-      break_1_start ? String(break_1_start).trim() : null,
-      break_1_end ? String(break_1_end).trim() : null,
-      break_2_name ? String(break_2_name).trim() : null,
-      break_2_start ? String(break_2_start).trim() : null,
-      break_2_end ? String(break_2_end).trim() : null,
+      b1Name,
+      b1Start,
+      b1End,
+      b2Name,
+      b2Start,
+      b2End,
+      breaksJsonStr,
       Number(grace_period_mins) || 10,
       overtime_allowed ? 1 : 0,
       is_active ? 1 : 0,
@@ -179,6 +309,7 @@ async function updateShift(req, res) {
       shift_name,
       start_time,
       end_time,
+      breaks = [],
       break_1_name,
       break_1_start,
       break_1_end,
@@ -192,6 +323,20 @@ async function updateShift(req, res) {
 
     const codeUpper = String(shift_code).trim().toUpperCase();
 
+    const breaksArr = Array.isArray(breaks) ? breaks : [];
+    const b1 = breaksArr[0] || {};
+    const b2 = breaksArr[1] || {};
+
+    const b1Name = b1.name || break_1_name || null;
+    const b1Start = b1.start_time || break_1_start || null;
+    const b1End = b1.end_time || break_1_end || null;
+
+    const b2Name = b2.name || break_2_name || null;
+    const b2Start = b2.start_time || break_2_start || null;
+    const b2End = b2.end_time || break_2_end || null;
+
+    const breaksJsonStr = JSON.stringify(breaksArr);
+
     await db.query(`
       UPDATE dbo.shifts
       SET shift_code = ?,
@@ -204,6 +349,7 @@ async function updateShift(req, res) {
           break_2_name = ?,
           break_2_start = ?,
           break_2_end = ?,
+          breaks_json = ?,
           grace_period_mins = ?,
           overtime_allowed = ?,
           is_active = ?,
@@ -214,12 +360,13 @@ async function updateShift(req, res) {
       String(shift_name).trim(),
       String(start_time).trim(),
       String(end_time).trim(),
-      break_1_name ? String(break_1_name).trim() : null,
-      break_1_start ? String(break_1_start).trim() : null,
-      break_1_end ? String(break_1_end).trim() : null,
-      break_2_name ? String(break_2_name).trim() : null,
-      break_2_start ? String(break_2_start).trim() : null,
-      break_2_end ? String(break_2_end).trim() : null,
+      b1Name,
+      b1Start,
+      b1End,
+      b2Name,
+      b2Start,
+      b2End,
+      breaksJsonStr,
       Number(grace_period_mins) || 10,
       overtime_allowed ? 1 : 0,
       is_active ? 1 : 0,

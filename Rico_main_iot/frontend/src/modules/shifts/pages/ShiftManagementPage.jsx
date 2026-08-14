@@ -5,7 +5,6 @@ import {
   Plus,
   Search,
   CheckCircle2,
-  XCircle,
   Edit2,
   Trash2,
   RefreshCw,
@@ -18,7 +17,9 @@ import {
   Calendar,
   Check,
   X,
-  Play,
+  Utensils,
+  Wrench,
+  ChevronRight,
 } from "lucide-react";
 import toast from "react-hot-toast";
 
@@ -46,12 +47,10 @@ export default function ShiftManagementPage({ onLogout, currentUser }) {
     shift_name: "",
     start_time: "06:00",
     end_time: "14:00",
-    break_1_name: "Tea Break 1",
-    break_1_start: "09:00",
-    break_1_end: "09:15",
-    break_2_name: "Lunch Break",
-    break_2_start: "11:30",
-    break_2_end: "12:00",
+    breaks: [
+      { id: 1, name: "Tea Break 1", start_time: "09:00", end_time: "09:15", type: "tea" },
+      { id: 2, name: "Lunch Break", start_time: "11:30", end_time: "12:00", type: "meal" },
+    ],
     grace_period_mins: 10,
     overtime_allowed: true,
     is_active: true,
@@ -89,12 +88,10 @@ export default function ShiftManagementPage({ onLogout, currentUser }) {
       shift_name: `Shift ${String.fromCharCode(65 + shifts.length)}`,
       start_time: "06:00",
       end_time: "14:00",
-      break_1_name: "Tea Break",
-      break_1_start: "09:00",
-      break_1_end: "09:15",
-      break_2_name: "Lunch Break",
-      break_2_start: "11:30",
-      break_2_end: "12:00",
+      breaks: [
+        { id: Date.now(), name: "Tea Break", start_time: "09:00", end_time: "09:15", type: "tea" },
+        { id: Date.now() + 1, name: "Lunch Break", start_time: "11:30", end_time: "12:00", type: "meal" },
+      ],
       grace_period_mins: 10,
       overtime_allowed: true,
       is_active: true,
@@ -104,22 +101,73 @@ export default function ShiftManagementPage({ onLogout, currentUser }) {
 
   const openEditModal = (shift) => {
     setEditingShift(shift);
+    let initialBreaks = [];
+    if (Array.isArray(shift.breaks) && shift.breaks.length > 0) {
+      initialBreaks = shift.breaks.map((b, i) => ({ ...b, id: b.id || Date.now() + i }));
+    } else {
+      if (shift.break_1_name) {
+        initialBreaks.push({
+          id: Date.now(),
+          name: shift.break_1_name,
+          start_time: shift.break_1_start || "09:00",
+          end_time: shift.break_1_end || "09:15",
+          type: "tea",
+        });
+      }
+      if (shift.break_2_name) {
+        initialBreaks.push({
+          id: Date.now() + 1,
+          name: shift.break_2_name,
+          start_time: shift.break_2_start || "11:30",
+          end_time: shift.break_2_end || "12:00",
+          type: "meal",
+        });
+      }
+    }
+
     setFormData({
       shift_code: shift.shift_code || "",
       shift_name: shift.shift_name || "",
       start_time: shift.start_time || "06:00",
       end_time: shift.end_time || "14:00",
-      break_1_name: shift.break_1_name || "",
-      break_1_start: shift.break_1_start || "",
-      break_1_end: shift.break_1_end || "",
-      break_2_name: shift.break_2_name || "",
-      break_2_start: shift.break_2_start || "",
-      break_2_end: shift.break_2_end || "",
+      breaks: initialBreaks,
       grace_period_mins: shift.grace_period_mins ?? 10,
       overtime_allowed: Boolean(shift.overtime_allowed),
       is_active: Boolean(shift.is_active),
     });
     setIsModalOpen(true);
+  };
+
+  // Dynamic Breaks Management
+  const handleAddBreak = () => {
+    setFormData((prev) => ({
+      ...prev,
+      breaks: [
+        ...prev.breaks,
+        {
+          id: Date.now(),
+          name: `Break ${prev.breaks.length + 1}`,
+          start_time: "10:00",
+          end_time: "10:15",
+          type: "tea",
+        },
+      ],
+    }));
+  };
+
+  const handleUpdateBreak = (index, field, value) => {
+    setFormData((prev) => {
+      const updated = [...prev.breaks];
+      updated[index] = { ...updated[index], [field]: value };
+      return { ...prev, breaks: updated };
+    });
+  };
+
+  const handleRemoveBreak = (index) => {
+    setFormData((prev) => ({
+      ...prev,
+      breaks: prev.breaks.filter((_, i) => i !== index),
+    }));
   };
 
   const handleSaveShift = async (e) => {
@@ -134,10 +182,20 @@ export default function ShiftManagementPage({ onLogout, currentUser }) {
       const url = editingShift ? `${API_BASE_URL}/shifts/${editingShift.id}` : `${API_BASE_URL}/shifts`;
       const method = editingShift ? "PUT" : "POST";
 
+      const payload = {
+        ...formData,
+        break_1_name: formData.breaks[0]?.name || null,
+        break_1_start: formData.breaks[0]?.start_time || null,
+        break_1_end: formData.breaks[0]?.end_time || null,
+        break_2_name: formData.breaks[1]?.name || null,
+        break_2_start: formData.breaks[1]?.start_time || null,
+        break_2_end: formData.breaks[1]?.end_time || null,
+      };
+
       const response = await fetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(formData),
+        body: JSON.stringify(payload),
       });
 
       const data = await response.json();
@@ -230,7 +288,7 @@ export default function ShiftManagementPage({ onLogout, currentUser }) {
             </div>
             <h1 className="mt-1 text-2xl font-black tracking-tight text-slate-900">Shift Management</h1>
             <p className="text-xs font-semibold text-slate-500">
-              Configure production shifts, working hours, break schedules & grace timings across operations.
+              Configure production shifts, working hours, customizable break schedules & grace timings.
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -266,7 +324,7 @@ export default function ShiftManagementPage({ onLogout, currentUser }) {
                   Currently Running Shift
                 </div>
                 <h2 className="text-2xl font-black text-white">{activeShift.shift_name} ({activeShift.shift_code})</h2>
-                <div className="flex flex-wrap items-center gap-4 text-xs font-bold text-slate-300">
+                <div className="flex flex-wrap items-center gap-3 text-xs font-bold text-slate-300">
                   <span className="flex items-center gap-1.5 bg-white/10 px-3 py-1 rounded-md">
                     <Clock className="h-3.5 w-3.5 text-blue-400" />
                     {activeShift.start_time} - {activeShift.end_time} ({activeShift.duration})
@@ -275,18 +333,18 @@ export default function ShiftManagementPage({ onLogout, currentUser }) {
                     <Timer className="h-3.5 w-3.5 text-emerald-400" />
                     Grace Period: {activeShift.grace_period_mins} mins
                   </span>
-                  {activeShift.break_1_name && (
+                  {Array.isArray(activeShift.breaks) && activeShift.breaks.length > 0 && (
                     <span className="flex items-center gap-1.5 bg-white/10 px-3 py-1 rounded-md">
                       <Coffee className="h-3.5 w-3.5 text-amber-400" />
-                      {activeShift.break_1_name}: {activeShift.break_1_start} - {activeShift.break_1_end}
+                      {activeShift.breaks.length} Configured Breaks
                     </span>
                   )}
                 </div>
               </div>
               <div className="flex items-center gap-3">
                 <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-center backdrop-blur-md min-w-[140px]">
-                  <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">Total Shift Mins</p>
-                  <p className="text-xl font-black text-emerald-400">480 mins</p>
+                  <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">Total Duration</p>
+                  <p className="text-xl font-black text-emerald-400">{activeShift.duration}</p>
                 </div>
                 <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-center backdrop-blur-md min-w-[140px]">
                   <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">Status</p>
@@ -381,7 +439,7 @@ export default function ShiftManagementPage({ onLogout, currentUser }) {
                   <th className="px-4 py-3.5">Shift Info</th>
                   <th className="px-4 py-3.5">Operating Hours</th>
                   <th className="px-4 py-3.5">Duration</th>
-                  <th className="px-4 py-3.5">Breaks & Schedule</th>
+                  <th className="px-4 py-3.5">Breaks & Schedules</th>
                   <th className="px-4 py-3.5 text-center">Grace Period</th>
                   <th className="px-4 py-3.5 text-center">Overtime</th>
                   <th className="px-4 py-3.5 text-center">Status</th>
@@ -433,20 +491,23 @@ export default function ShiftManagementPage({ onLogout, currentUser }) {
                         {shift.duration}
                       </td>
                       <td className="px-4 py-3.5">
-                        <div className="space-y-1">
-                          {shift.break_1_name ? (
-                            <div className="flex items-center gap-1.5 text-[11px] text-slate-600">
-                              <Coffee className="h-3 w-3 text-amber-500" />
-                              <span className="font-bold">{shift.break_1_name}:</span> {shift.break_1_start} - {shift.break_1_end}
-                            </div>
+                        <div className="space-y-1.5">
+                          {Array.isArray(shift.breaks) && shift.breaks.length > 0 ? (
+                            shift.breaks.map((b, idx) => (
+                              <div key={idx} className="flex items-center gap-1.5 text-[11px] text-slate-700 bg-slate-50 border border-slate-200/60 px-2 py-0.5 rounded-md w-fit">
+                                {b.type === "meal" ? (
+                                  <Utensils className="h-3 w-3 text-orange-500" />
+                                ) : b.type === "maintenance" ? (
+                                  <Wrench className="h-3 w-3 text-blue-500" />
+                                ) : (
+                                  <Coffee className="h-3 w-3 text-amber-500" />
+                                )}
+                                <span className="font-bold">{b.name}:</span>
+                                <span className="font-mono">{b.start_time} - {b.end_time}</span>
+                              </div>
+                            ))
                           ) : (
-                            <span className="text-slate-400 italic">No Break 1</span>
-                          )}
-                          {shift.break_2_name && (
-                            <div className="flex items-center gap-1.5 text-[11px] text-slate-600">
-                              <Coffee className="h-3 w-3 text-orange-500" />
-                              <span className="font-bold">{shift.break_2_name}:</span> {shift.break_2_start} - {shift.break_2_end}
-                            </div>
+                            <span className="text-slate-400 italic text-[11px]">No break scheduled</span>
                           )}
                         </div>
                       </td>
@@ -502,195 +563,239 @@ export default function ShiftManagementPage({ onLogout, currentUser }) {
         </div>
       </div>
 
-      {/* Modal for Create / Edit */}
+      {/* Expanded Widescreen Modal for Create / Edit */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl space-y-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-              <div>
-                <h3 className="text-lg font-black text-slate-900">
-                  {editingShift ? "Edit Shift Details" : "Create New Shift"}
-                </h3>
-                <p className="text-xs font-bold text-slate-400">
-                  Define working schedule, breaks and operational parameters for this shift.
-                </p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 sm:p-6 backdrop-blur-md">
+          <div className="w-full max-w-4xl lg:max-w-5xl rounded-3xl bg-white p-6 sm:p-8 shadow-2xl space-y-6 max-h-[92vh] overflow-y-auto border border-slate-100">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-slate-100 pb-5">
+              <div className="flex items-center gap-3">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+                  <Clock className="h-6 w-6" />
+                </div>
+                <div>
+                  <h3 className="text-xl font-black text-slate-900">
+                    {editingShift ? "Edit Shift Configuration" : "Create New Production Shift"}
+                  </h3>
+                  <p className="text-xs font-bold text-slate-400">
+                    Configure shift code, operating timings, customizable breaks, and overtime parameters.
+                  </p>
+                </div>
               </div>
               <button
                 onClick={() => setIsModalOpen(false)}
-                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                className="rounded-xl p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition"
               >
-                <X className="h-5 w-5" />
+                <X className="h-6 w-6" />
               </button>
             </div>
 
-            <form onSubmit={handleSaveShift} className="space-y-4">
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div>
-                  <label className="block text-xs font-black uppercase text-slate-700 mb-1">Shift Code *</label>
-                  <input
-                    type="text"
-                    required
-                    value={formData.shift_code}
-                    onChange={(e) => setFormData({ ...formData, shift_code: e.target.value.toUpperCase() })}
-                    placeholder="e.g. SHIFT_A"
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold focus:border-blue-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-black uppercase text-slate-700 mb-1">Shift Name *</label>
-                  <input
-                    type="text"
-                    required
-                    value={formData.shift_name}
-                    onChange={(e) => setFormData({ ...formData, shift_name: e.target.value })}
-                    placeholder="e.g. Shift A (Morning)"
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold focus:border-blue-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div>
-                  <label className="block text-xs font-black uppercase text-slate-700 mb-1">Start Time (24h) *</label>
-                  <input
-                    type="time"
-                    required
-                    value={formData.start_time}
-                    onChange={(e) => setFormData({ ...formData, start_time: e.target.value })}
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold focus:border-blue-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-black uppercase text-slate-700 mb-1">End Time (24h) *</label>
-                  <input
-                    type="time"
-                    required
-                    value={formData.end_time}
-                    onChange={(e) => setFormData({ ...formData, end_time: e.target.value })}
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold focus:border-blue-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              {/* Break 1 Section */}
-              <div className="rounded-xl border border-slate-100 bg-slate-50/50 p-4 space-y-3">
-                <span className="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-                  <Coffee className="h-3.5 w-3.5 text-amber-500" /> Break Schedule 1
-                </span>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <form onSubmit={handleSaveShift} className="space-y-6">
+              {/* Basic Information */}
+              <div className="rounded-2xl border border-slate-200/80 bg-slate-50/40 p-5 space-y-4">
+                <h4 className="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-2">
+                  <ChevronRight className="h-4 w-4 text-blue-600" /> Basic Shift Details
+                </h4>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-500 mb-1">Break Name</label>
+                    <label className="block text-xs font-black uppercase text-slate-700 mb-1">Shift Code *</label>
                     <input
                       type="text"
-                      value={formData.break_1_name}
-                      onChange={(e) => setFormData({ ...formData, break_1_name: e.target.value })}
-                      placeholder="e.g. Tea Break"
-                      className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium focus:border-blue-500 focus:outline-none"
+                      required
+                      value={formData.shift_code}
+                      onChange={(e) => setFormData({ ...formData, shift_code: e.target.value.toUpperCase() })}
+                      placeholder="e.g. SHIFT_A"
+                      className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-xs font-bold focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-500/10 bg-white"
                     />
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-500 mb-1">Start Time</label>
-                    <input
-                      type="time"
-                      value={formData.break_1_start}
-                      onChange={(e) => setFormData({ ...formData, break_1_start: e.target.value })}
-                      className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium focus:border-blue-500 focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-500 mb-1">End Time</label>
-                    <input
-                      type="time"
-                      value={formData.break_1_end}
-                      onChange={(e) => setFormData({ ...formData, break_1_end: e.target.value })}
-                      className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium focus:border-blue-500 focus:outline-none"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* Break 2 Section */}
-              <div className="rounded-xl border border-slate-100 bg-slate-50/50 p-4 space-y-3">
-                <span className="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-                  <Coffee className="h-3.5 w-3.5 text-orange-500" /> Break Schedule 2 (Meal)
-                </span>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-500 mb-1">Break Name</label>
+                    <label className="block text-xs font-black uppercase text-slate-700 mb-1">Shift Name *</label>
                     <input
                       type="text"
-                      value={formData.break_2_name}
-                      onChange={(e) => setFormData({ ...formData, break_2_name: e.target.value })}
-                      placeholder="e.g. Lunch Break"
-                      className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium focus:border-blue-500 focus:outline-none"
+                      required
+                      value={formData.shift_name}
+                      onChange={(e) => setFormData({ ...formData, shift_name: e.target.value })}
+                      placeholder="e.g. Shift A (Morning)"
+                      className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-xs font-bold focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-500/10 bg-white"
                     />
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-500 mb-1">Start Time</label>
+                    <label className="block text-xs font-black uppercase text-slate-700 mb-1">Start Time (24h) *</label>
                     <input
                       type="time"
-                      value={formData.break_2_start}
-                      onChange={(e) => setFormData({ ...formData, break_2_start: e.target.value })}
-                      className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium focus:border-blue-500 focus:outline-none"
+                      required
+                      value={formData.start_time}
+                      onChange={(e) => setFormData({ ...formData, start_time: e.target.value })}
+                      className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-xs font-bold focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-500/10 bg-white"
                     />
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-500 mb-1">End Time</label>
+                    <label className="block text-xs font-black uppercase text-slate-700 mb-1">End Time (24h) *</label>
                     <input
                       type="time"
-                      value={formData.break_2_end}
-                      onChange={(e) => setFormData({ ...formData, break_2_end: e.target.value })}
-                      className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium focus:border-blue-500 focus:outline-none"
+                      required
+                      value={formData.end_time}
+                      onChange={(e) => setFormData({ ...formData, end_time: e.target.value })}
+                      className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-xs font-bold focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-500/10 bg-white"
                     />
                   </div>
                 </div>
               </div>
 
-              {/* Grace & Overtime Rules */}
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div>
-                  <label className="block text-xs font-black uppercase text-slate-700 mb-1">Grace Period (Minutes)</label>
-                  <input
-                    type="number"
-                    value={formData.grace_period_mins}
-                    onChange={(e) => setFormData({ ...formData, grace_period_mins: e.target.value })}
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold focus:border-blue-500 focus:outline-none"
-                  />
+              {/* Dynamic Break Schedules Section */}
+              <div className="rounded-2xl border border-slate-200/80 bg-slate-50/40 p-5 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-2">
+                      <Coffee className="h-4 w-4 text-amber-500" /> Break Schedules ({formData.breaks.length})
+                    </h4>
+                    <p className="text-[11px] font-medium text-slate-400">
+                      Add, modify, or delete break schedules (Tea Breaks, Lunch, Maintenance, Handovers).
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleAddBreak}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-100 transition border border-blue-200/60"
+                  >
+                    <Plus className="h-3.5 w-3.5 stroke-[3]" /> Add Break Schedule
+                  </button>
                 </div>
-                <div className="flex items-center gap-6 pt-5">
-                  <label className="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer">
+
+                {formData.breaks.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-slate-300 p-6 text-center text-slate-400 bg-white">
+                    <p className="text-xs font-bold">No breaks configured for this shift.</p>
+                    <button
+                      type="button"
+                      onClick={handleAddBreak}
+                      className="mt-2 text-xs font-bold text-blue-600 underline hover:text-blue-700"
+                    >
+                      + Add a Break
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {formData.breaks.map((b, index) => (
+                      <div
+                        key={b.id || index}
+                        className="flex flex-col gap-3 rounded-xl border border-slate-200/80 bg-white p-3.5 shadow-sm sm:flex-row sm:items-center sm:justify-between"
+                      >
+                        <div className="flex items-center gap-2 font-bold text-xs text-slate-400 w-8">
+                          #{index + 1}
+                        </div>
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-4 flex-1">
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-400 mb-1">Break Name</label>
+                            <input
+                              type="text"
+                              required
+                              value={b.name}
+                              onChange={(e) => handleUpdateBreak(index, "name", e.target.value)}
+                              placeholder="e.g. Tea Break 1"
+                              className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold focus:border-blue-500 focus:outline-none"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-400 mb-1">Type</label>
+                            <select
+                              value={b.type || "tea"}
+                              onChange={(e) => handleUpdateBreak(index, "type", e.target.value)}
+                              className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold focus:border-blue-500 focus:outline-none bg-white"
+                            >
+                              <option value="tea">Tea Break</option>
+                              <option value="meal">Meal / Lunch</option>
+                              <option value="maintenance">Maintenance Check</option>
+                              <option value="general">General Break</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-400 mb-1">Start Time</label>
+                            <input
+                              type="time"
+                              required
+                              value={b.start_time}
+                              onChange={(e) => handleUpdateBreak(index, "start_time", e.target.value)}
+                              className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold focus:border-blue-500 focus:outline-none"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-400 mb-1">End Time</label>
+                            <input
+                              type="time"
+                              required
+                              value={b.end_time}
+                              onChange={(e) => handleUpdateBreak(index, "end_time", e.target.value)}
+                              className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold focus:border-blue-500 focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveBreak(index)}
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 transition shrink-0 self-end sm:self-center"
+                          title="Delete this Break"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Operational Controls & Rules */}
+              <div className="rounded-2xl border border-slate-200/80 bg-slate-50/40 p-5 space-y-4">
+                <h4 className="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-2">
+                  <Timer className="h-4 w-4 text-emerald-600" /> Shift Rules & Status
+                </h4>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                  <div>
+                    <label className="block text-xs font-black uppercase text-slate-700 mb-1">Grace Period (Minutes)</label>
                     <input
-                      type="checkbox"
-                      checked={formData.overtime_allowed}
-                      onChange={(e) => setFormData({ ...formData, overtime_allowed: e.target.checked })}
-                      className="h-4 w-4 rounded border-slate-300 text-blue-600"
+                      type="number"
+                      value={formData.grace_period_mins}
+                      onChange={(e) => setFormData({ ...formData, grace_period_mins: e.target.value })}
+                      className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-xs font-bold focus:border-blue-500 focus:outline-none bg-white"
                     />
-                    Overtime Allowed
-                  </label>
-                  <label className="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={formData.is_active}
-                      onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
-                      className="h-4 w-4 rounded border-slate-300 text-blue-600"
-                    />
-                    Active Shift
-                  </label>
+                  </div>
+                  <div className="flex items-center gap-3 pt-5">
+                    <label className="flex items-center gap-2.5 text-xs font-extrabold text-slate-700 cursor-pointer bg-white border border-slate-200 px-4 py-2.5 rounded-xl w-full">
+                      <input
+                        type="checkbox"
+                        checked={formData.overtime_allowed}
+                        onChange={(e) => setFormData({ ...formData, overtime_allowed: e.target.checked })}
+                        className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      Overtime Allowed
+                    </label>
+                  </div>
+                  <div className="flex items-center gap-3 pt-5">
+                    <label className="flex items-center gap-2.5 text-xs font-extrabold text-slate-700 cursor-pointer bg-white border border-slate-200 px-4 py-2.5 rounded-xl w-full">
+                      <input
+                        type="checkbox"
+                        checked={formData.is_active}
+                        onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
+                        className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      Active Shift
+                    </label>
+                  </div>
                 </div>
               </div>
 
-              <div className="flex items-center justify-end gap-3 border-t border-slate-100 pt-4">
+              {/* Actions Footer */}
+              <div className="flex items-center justify-end gap-3 border-t border-slate-100 pt-5">
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50"
+                  className="rounded-xl border border-slate-200 px-5 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-100 transition"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="rounded-lg bg-blue-600 px-5 py-2 text-xs font-bold text-white shadow-md shadow-blue-500/20 hover:bg-blue-700"
+                  className="rounded-xl bg-blue-600 px-6 py-2.5 text-xs font-bold text-white shadow-lg shadow-blue-500/20 hover:bg-blue-700 active:scale-95 transition"
                 >
                   {submitting ? "Saving..." : editingShift ? "Save Changes" : "Create Shift"}
                 </button>
@@ -702,26 +807,26 @@ export default function ShiftManagementPage({ onLogout, currentUser }) {
 
       {/* Delete Confirmation Modal */}
       {deleteTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl space-y-4 text-center">
-            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-red-600">
-              <Trash2 className="h-6 w-6" />
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl space-y-4 text-center border border-slate-100">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-red-100 text-red-600">
+              <Trash2 className="h-7 w-7" />
             </div>
-            <h3 className="text-lg font-black text-slate-900">Delete Shift</h3>
+            <h3 className="text-xl font-black text-slate-900">Delete Shift</h3>
             <p className="text-xs font-bold text-slate-500">
-              Are you sure you want to delete <span className="text-slate-900">{deleteTarget.shift_name}</span> ({deleteTarget.shift_code})? This action cannot be undone.
+              Are you sure you want to delete <span className="text-slate-900 font-extrabold">{deleteTarget.shift_name}</span> ({deleteTarget.shift_code})? This action cannot be undone.
             </p>
             <div className="flex items-center justify-center gap-3 pt-2">
               <button
                 onClick={() => setDeleteTarget(null)}
-                className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50"
+                className="rounded-xl border border-slate-200 px-5 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50"
               >
                 Cancel
               </button>
               <button
                 onClick={handleDeleteShift}
                 disabled={deleting}
-                className="rounded-lg bg-red-600 px-5 py-2 text-xs font-bold text-white shadow-md shadow-red-500/20 hover:bg-red-700"
+                className="rounded-xl bg-red-600 px-6 py-2.5 text-xs font-bold text-white shadow-lg shadow-red-500/20 hover:bg-red-700"
               >
                 {deleting ? "Deleting..." : "Confirm Delete"}
               </button>

@@ -535,14 +535,19 @@ function scaleValue(parameter, value) {
     return Number(n.toFixed(2));
   }
 
-  if (parameter.type === "int") return Number.parseInt(value, 10) || 0;
-  if (parameter.type === "dword") return Number.parseInt(value, 10) || 0;
-  if (parameter.type === "real32") return Number(Number(value).toFixed(3));
-
   const n = Number(value);
   if (!Number.isFinite(n)) return null;
   const scale = parameter.scale ?? 1;
-  return Number((n * scale).toFixed(2));
+
+  if (scale !== 1) {
+    return Number((n * scale).toFixed(2));
+  }
+
+  if (parameter.type === "int") return Number.parseInt(value, 10) || 0;
+  if (parameter.type === "dword") return Number.parseInt(value, 10) || 0;
+  if (parameter.type === "real32") return Number(n.toFixed(3));
+
+  return Number(n.toFixed(2));
 }
 
 function isStringRegisterType(type) {
