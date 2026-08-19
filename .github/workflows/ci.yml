@@ -32,8 +32,10 @@ jobs:
 
       - name: Install native SQL driver prerequisites
         run: |
-          sudo apt-get update
-          sudo apt-get install -y unixodbc-dev
+          sudo sed -i 's/azure.archive.ubuntu.com/archive.ubuntu.com/g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null || true
+          sudo apt-get update -o Acquire::http::Timeout="10" -o Acquire::Retries="2"
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends unixodbc-dev
+
 
       - name: Install and build frontend
         working-directory: Rico_main_iot/frontend
