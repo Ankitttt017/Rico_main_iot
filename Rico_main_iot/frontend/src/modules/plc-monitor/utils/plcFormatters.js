@@ -220,20 +220,34 @@ export function getReadingShotNumber(readings = {}) {
 
 export function buildShotTimeFromRow(row = {}) {
   if (row.shot_time) return formatTimeOnly(row.shot_time);
-  const parts = [row.shot_hour, row.shot_minute, row.shot_second].map((value) => pad2(value));
-  if (parts.every(Boolean)) return parts.join(":");
-  const timestamp = row.shot_datetime || row.recorded_at || row.created_at;
+  if (row["SHOT TIME"]) return formatTimeOnly(row["SHOT TIME"]);
+
+  const hour = row.shot_hour ?? row["SHOT HOUR"] ?? row["Shot Hour"] ?? row.hour ?? row["HOUR"];
+  const minute = row.shot_minute ?? row["SHOT MINUTE"] ?? row["Shot Minute"] ?? row.minute ?? row["MINUTE"];
+  const second = row.shot_second ?? row["SHOT SECOND"] ?? row["Shot Second"] ?? row.second ?? row["SECOND"];
+
+  if (hour !== undefined && minute !== undefined && hour !== null && minute !== null && hour !== "" && minute !== "") {
+    return `${pad2(hour)}:${pad2(minute)}:${pad2(second || 0)}`;
+  }
+  const timestamp = row.shot_datetime || row["SHOT DATETIME"] || row.recorded_at || row.created_at;
   return timestamp ? formatTimeOnly(timestamp) : "";
 }
 
 export function buildShotDateFromRow(row = {}) {
   if (row.shot_date) return formatDateOnly(row.shot_date);
-  const yearValue = Number(row.shot_year);
-  const year = Number.isFinite(yearValue)
-    ? String(yearValue < 100 ? 2000 + Math.trunc(Math.abs(yearValue)) : Math.trunc(yearValue))
-    : "";
-  const parts = [row.shot_month, row.shot_day].map((value) => pad2(value));
-  return year && parts.every(Boolean) ? `${year}-${parts[0]}-${parts[1]}` : "";
+  if (row["SHOT DATE"]) return formatDateOnly(row["SHOT DATE"]);
+
+  const yearVal = row.shot_year ?? row["SHOT YEAR"] ?? row["Shot Year"] ?? row.year ?? row["YEAR"];
+  const monthVal = row.shot_month ?? row["SHOT MONTH"] ?? row["Shot Month"] ?? row.month ?? row["MONTH"];
+  const dayVal = row.shot_day ?? row["SHOT DAY"] ?? row["Shot Day"] ?? row.day ?? row["DAY"];
+
+  const yearNum = Number(yearVal);
+  if (Number.isFinite(yearNum) && monthVal !== undefined && dayVal !== undefined && monthVal !== null && dayVal !== null && monthVal !== "" && dayVal !== "") {
+    const fullYear = yearNum < 100 ? 2000 + Math.trunc(Math.abs(yearNum)) : Math.trunc(yearNum);
+    return `${fullYear}-${pad2(monthVal)}-${pad2(dayVal)}`;
+  }
+  const timestamp = row.shot_datetime || row["SHOT DATETIME"] || row.recorded_at || row.created_at;
+  return timestamp ? formatDateOnly(timestamp) : "";
 }
 
 export function buildProductionDateFromRow(row = {}) {

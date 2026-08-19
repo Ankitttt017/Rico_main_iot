@@ -113,6 +113,7 @@ function normalizePlcRegister(row = {}, index = 0) {
     device: row.device,
     type: row.data_type || row.device_type || "int",
     scale: row.scale_factor,
+    scaleOperation: row.scale_operation,
     unit: row.unit ?? "",
     group_name: row.group_name || "",
     sort_order: row.sort_order,
@@ -134,6 +135,7 @@ function normalizeMachineConfigRegister(row = {}, index = 0) {
     stringLength: row.string_length || "",
     type: row.data_type || "int",
     scale: row.scale_factor,
+    scaleOperation: row.scale_operation,
     unit: row.unit || "",
     group_name: row.group_name || "",
     sort_order: row.sort_order,
@@ -296,7 +298,7 @@ async function loadMachineConfigRegistersByConfigIds(machineConfigIds = []) {
   const placeholders = ids.map(() => "?").join(", ");
   const { rows } = await db.query(`
     SELECT id, machine_config_id, parameter_name, display_label, device,
-           string_device, string_length, data_type, scale_factor, unit,
+           string_device, string_length, data_type, scale_factor, scale_operation, unit,
            group_name, sort_order, computed_key, min_value, max_value,
            min_device, max_device, alarm_device,
            warning_min, warning_max, alarm_enabled, show_on_monitor,

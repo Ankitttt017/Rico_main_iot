@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
-import { Activity, CheckCircle2, FileSpreadsheet, Pencil, Plus, Power, RefreshCw, Save, Trash2, Upload, X } from "lucide-react";
+import { Activity, CheckCircle2, Download, FileSpreadsheet, Pencil, Plus, Power, RefreshCw, Save, Trash2, Upload, X } from "lucide-react";
 import * as XLSX from "xlsx";
 import SearchableSelect from "../../components/common/SearchableSelect";
 import AppLayout from "../../components/common/AppLayout";
@@ -242,45 +242,208 @@ async function parsePdfRegisterImport(file) {
   return parseRegisterImport(lines.join("\n"));
 }
 
+export function normalizeScaleOperation(rawOp) {
+  const op = String(rawOp || "").trim().toLowerCase();
+  if (
+    op === "/" ||
+    op === "divide" ||
+    op === "devide" ||
+    op.includes("div") ||
+    op.includes("slash") ||
+    op.includes("by")
+  ) {
+    return "divide";
+  }
+  if (
+    op === "+" ||
+    op === "add" ||
+    op.includes("plus") ||
+    op.includes("sum")
+  ) {
+    return "add";
+  }
+  if (
+    op === "-" ||
+    op === "subtract" ||
+    op.includes("sub") ||
+    op.includes("min")
+  ) {
+    return "subtract";
+  }
+  return "multiply";
+}
+
 function normalizeImportedRegisters(rows = []) {
   return rows
     .map((row, index) => {
-      const name = row.name || row.parameter || row.parameter_name || row.register || row.label || "";
-      const device = row.device || row.plc_device || row.address || "";
-      const type = normalizeRegisterType(row.type || row.data_type || "int");
-      const enabledValue = row.enabled ?? row.use ?? row.active ?? true;
+      const name = String(row.parameter || row.name || row.parameter_name || row.register || row.label || row.item || "").trim();
+      const device = String(row.plc_address || row.device || row.plc_device || row.address || row.string_device || row.stringdevice || "").trim().toUpperCase();
+      const type = normalizeRegisterType(row.type || row.data_type || row.datatype || "int");
+      const enabledValue = row.use ?? row.enabled ?? row.active ?? row.is_active ?? true;
       const enabled = typeof enabledValue === "boolean"
         ? enabledValue
         : !["0", "false", "no", "n", "off"].includes(String(enabledValue).trim().toLowerCase());
 
       if (!name && !device) return null;
+
+      const scaleOperation = normalizeScaleOperation(
+        row.op || row.operation || row.scale_operation || row.scaleoperation || row.operator || "*"
+      );
+
+      const unit = String(row.unit ?? row.units ?? row.uom ?? "").trim();
+      const minDevice = String(
+        row.min_plc_address ||
+        row.min_plc_addr ||
+        row.min_device ||
+        row.mindevice ||
+        row.min_address ||
+        row.minimum_address ||
+        row.min_plc ||
+        ""
+      ).trim().toUpperCase();
+      const maxDevice = String(
+        row.max_plc_address ||
+        row.max_plc_addr ||
+        row.max_device ||
+        row.maxdevice ||
+        row.max_address ||
+        row.maximum_address ||
+        row.max_plc ||
+        ""
+      ).trim().toUpperCase();
+
+      let scale = 1;
+      const rawScale = row.scale ?? row.scale_factor ?? row.scalefactor ?? row.multiplier;
+      if (rawScale !== undefined && rawScale !== null && String(rawScale).trim() !== "") {
+        const parsed = parseFloat(rawScale);
+        if (Number.isFinite(parsed)) scale = parsed;
+      }
+
+      const alarmValue = row.alarm ?? row.alarm_enabled ?? row.alarmenabled ?? row.alarm_enable ?? false;
+      const alarm_enabled = typeof alarmValue === "boolean"
+        ? alarmValue
+        : ["1", "true", "yes", "y", "on"].includes(String(alarmValue).trim().toLowerCase());
+
       return {
         id: row.id || `import-${Date.now()}-${index}`,
         name,
-        device: type === "text" ? "" : String(device || "").trim().toUpperCase(),
+        device: type === "text" ? "" : device,
         stringDevice: type === "text"
           ? String(row.stringDevice || row.string_device || device || "").trim().toUpperCase()
           : String(row.stringDevice || row.string_device || "").trim().toUpperCase(),
         stringLength: row.stringLength || row.string_length || row.length || "",
         type,
-        scale: row.scale || 1,
-        computed: row.computed || "",
+        unit,
+        minDevice,
+        maxDevice,
+        scaleOperation,
+        scale,
+        alarm_enabled,
         enabled,
+        computed: row.computed || "",
         min: row.min ?? row.minimum ?? "",
         max: row.max ?? row.maximum ?? "",
         warning_min: row.warning_min ?? row.warningMin ?? "",
         warning_max: row.warning_max ?? row.warningMax ?? "",
-        unit: row.unit || "",
         show_on_monitor: row.show_on_monitor ?? row.showOnMonitor ?? true,
         show_to_operator: row.show_to_operator ?? row.showToOperator ?? false,
         log_history: row.log_history ?? row.logHistory ?? true,
-        alarm_enabled: row.alarm_enabled ?? row.alarmEnabled ?? false,
-        minDevice: row.minDevice || row.min_device || row.min_address || row.minimum_address || "",
-        maxDevice: row.maxDevice || row.max_device || row.max_address || row.maximum_address || "",
         alarmDevice: row.alarmDevice || row.alarm_device || row.alarm_address || "",
       };
     })
     .filter(Boolean);
+}
+
+export function downloadRegisterTemplate(format = "csv") {
+  const sampleRows = [
+    { Use: 1, Parameter: "Part Name", "PLC Address": "D100-D110", Type: "STRING / ASCII", Unit: "", "Min PLC Address": "", "Max PLC Address": "", Op: "*", Scale: 1, Alarm: 0, Enabled: 1 },
+    { Use: 1, Parameter: "SHOT HOUR", "PLC Address": "D2103", Type: "INT16", Unit: "", "Min PLC Address": "", "Max PLC Address": "", Op: "*", Scale: 1, Alarm: 0, Enabled: 1 },
+    { Use: 1, Parameter: "SHOT MINUTE", "PLC Address": "D2104", Type: "INT16", Unit: "", "Min PLC Address": "", "Max PLC Address": "", Op: "*", Scale: 1, Alarm: 0, Enabled: 1 },
+    { Use: 1, Parameter: "SHOT SECOND", "PLC Address": "D2105", Type: "INT16", Unit: "", "Min PLC Address": "", "Max PLC Address": "", Op: "*", Scale: 1, Alarm: 0, Enabled: 1 },
+    { Use: 1, Parameter: "SHOT YEAR", "PLC Address": "D2100", Type: "INT16", Unit: "", "Min PLC Address": "", "Max PLC Address": "", Op: "*", Scale: 1, Alarm: 0, Enabled: 1 },
+    { Use: 1, Parameter: "SHOT MONTH", "PLC Address": "D2101", Type: "INT16", Unit: "", "Min PLC Address": "", "Max PLC Address": "", Op: "*", Scale: 1, Alarm: 0, Enabled: 1 },
+    { Use: 1, Parameter: "SHOT DAY", "PLC Address": "D2102", Type: "INT16", Unit: "", "Min PLC Address": "", "Max PLC Address": "", Op: "*", Scale: 1, Alarm: 0, Enabled: 1 },
+    { Use: 1, Parameter: "DIE-CLOSE CORE IN TIME sec", "PLC Address": "D1128", Type: "DEC / scaled D", Unit: "sec", "Min PLC Address": "", "Max PLC Address": "", Op: "*", Scale: 0.1, Alarm: 0, Enabled: 1 },
+    { Use: 1, Parameter: "POURING TIME sec", "PLC Address": "D1129", Type: "DEC / scaled D", Unit: "sec", "Min PLC Address": "", "Max PLC Address": "", Op: "*", Scale: 0.1, Alarm: 0, Enabled: 1 },
+    { Use: 1, Parameter: "SHOT FWD TIME sec", "PLC Address": "D1130", Type: "DEC / scaled D", Unit: "sec", "Min PLC Address": "", "Max PLC Address": "", Op: "*", Scale: 0.1, Alarm: 0, Enabled: 1 },
+  ];
+
+  if (format === "excel" || format === "xlsx") {
+    const ws = XLSX.utils.json_to_sheet(sampleRows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Register Template");
+    XLSX.writeFile(wb, "plc_register_template.xlsx");
+    toast.success("Excel template downloaded.");
+  } else {
+    const worksheet = XLSX.utils.json_to_sheet(sampleRows);
+    const csvContent = XLSX.utils.sheet_to_csv(worksheet);
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "plc_register_template.csv";
+    link.click();
+    toast.success("CSV template downloaded.");
+  }
+}
+
+export function exportCurrentRegisters(registers = [], machineName = "data_registers", format = "csv") {
+  if (!registers || !registers.length) {
+    toast.error("No data registers to export.");
+    return;
+  }
+
+  const exportRows = registers.map((reg) => {
+    let opSymbol = "*";
+    const op = String(reg.scaleOperation || reg.scale_operation || "*").trim().toLowerCase();
+    if (op === "divide" || op === "/") opSymbol = "/";
+    else if (op === "add" || op === "+") opSymbol = "+";
+    else if (op === "subtract" || op === "-") opSymbol = "-";
+
+    const isEnabled = reg.enabled !== false ? 1 : 0;
+    return {
+      Use: isEnabled,
+      Parameter: reg.name || "",
+      "PLC Address": reg.device || reg.stringDevice || "",
+      Type: reg.type || "int",
+      Unit: reg.unit || "",
+      "Min PLC Address": reg.minDevice || reg.min_device || "",
+      "Max PLC Address": reg.maxDevice || reg.max_device || "",
+      Op: opSymbol,
+      Scale: reg.scale ?? 1,
+      Alarm: reg.alarm_enabled ? 1 : 0,
+      Enabled: isEnabled,
+    };
+  });
+
+  const safeFileName = String(machineName || "data_registers")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+  if (format === "excel" || format === "xlsx") {
+    const ws = XLSX.utils.json_to_sheet(exportRows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Data Registers");
+    XLSX.writeFile(wb, `${safeFileName}_registers.xlsx`);
+    toast.success(`${registers.length} registers exported to Excel.`);
+  } else if (format === "json") {
+    const jsonStr = JSON.stringify(registers, null, 2);
+    const blob = new Blob([jsonStr], { type: "application/json" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `${safeFileName}_registers.json`;
+    link.click();
+    toast.success(`${registers.length} registers exported to JSON.`);
+  } else {
+    const worksheet = XLSX.utils.json_to_sheet(exportRows);
+    const csvContent = XLSX.utils.sheet_to_csv(worksheet);
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `${safeFileName}_registers.csv`;
+    link.click();
+    toast.success(`${registers.length} registers exported to CSV.`);
+  }
 }
 
 export function MachineForm({
@@ -431,7 +594,15 @@ export function MachineForm({
             </label>
             <label>
               <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-slate-400">IP Address</span>
-              <input className={inputClass} value={draft.ip_address} onChange={(event) => setField("ip_address", event.target.value)} />
+              <input
+                className={inputClass}
+                value={draft.ip_address || ""}
+                onChange={(event) => {
+                  const val = event.target.value.replace(/[^\d.]/g, "");
+                  setField("ip_address", val);
+                }}
+                placeholder="192.168.117.201"
+              />
             </label>
             <label>
               <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-slate-400">Port</span>
@@ -472,11 +643,33 @@ export function MachineForm({
                 <span>Type</span>
                 <span>Limits</span>
               </div>
-              <label className="mt-3 inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2.5 text-sm font-black text-white hover:bg-blue-700">
-                <Upload className="h-4 w-4" />
-                Import File
-                <input type="file" accept=".csv,.tsv,.txt,.json,.xls,.xlsx,.pdf" className="hidden" onChange={importRegisters} />
-              </label>
+              <div className="mt-3 flex flex-col gap-2">
+                <label className="inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2.5 text-sm font-black text-white hover:bg-blue-700">
+                  <Upload className="h-4 w-4" />
+                  Import File
+                  <input type="file" accept=".csv,.tsv,.txt,.json,.xls,.xlsx,.pdf" className="hidden" onChange={importRegisters} />
+                </label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => downloadRegisterTemplate("csv")}
+                    className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 shadow-sm"
+                    title="Download CSV format template"
+                  >
+                    <Download className="h-3.5 w-3.5 text-blue-600" />
+                    Sample CSV
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => downloadRegisterTemplate("xlsx")}
+                    className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 shadow-sm"
+                    title="Download Excel format template"
+                  >
+                    <Download className="h-3.5 w-3.5 text-emerald-600" />
+                    Sample Excel
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -558,10 +751,34 @@ export function RegisterConfigTable({ registers, setRegisters, maxHeightClass = 
           <h2 className="text-sm font-black text-slate-900">Data Registers</h2>
           <p className="mt-1 text-xs font-bold text-slate-400">{registers.length} saved rows for this machine.</p>
         </div>
-        <button type="button" onClick={addRegister} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-xs font-black text-white hover:bg-slate-800">
-          <Plus className="h-3.5 w-3.5" />
-          Add Register
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {registers.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => exportCurrentRegisters(registers, "data_registers", "csv")}
+                className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 shadow-sm"
+                title="Export current registers as CSV"
+              >
+                <Download className="h-3.5 w-3.5 text-blue-600" />
+                Export CSV
+              </button>
+              <button
+                type="button"
+                onClick={() => exportCurrentRegisters(registers, "data_registers", "xlsx")}
+                className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 shadow-sm"
+                title="Export current registers as Excel"
+              >
+                <Download className="h-3.5 w-3.5 text-emerald-600" />
+                Export Excel
+              </button>
+            </div>
+          )}
+          <button type="button" onClick={addRegister} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-xs font-black text-white hover:bg-slate-800">
+            <Plus className="h-3.5 w-3.5" />
+            Add Register
+          </button>
+        </div>
       </div>
       <div className={`${maxHeightClass} overflow-auto`}>
         <table className="min-w-[900px] w-full table-fixed text-left text-xs">
@@ -635,7 +852,7 @@ export function RegisterConfigTable({ registers, setRegisters, maxHeightClass = 
                   <input className={inputClass} value={register.maxDevice || register.max_device || ""} onChange={(event) => setRegisterField(index, "maxDevice", event.target.value)} placeholder="" />
                 </td>
                 <td className="px-3 py-2">
-                  <select className={inputClass} value={register.scaleOperation || register.scale_operation || "multiply"} onChange={(event) => setRegisterField(index, "scaleOperation", event.target.value)}>
+                  <select className={inputClass} value={normalizeScaleOperation(register.scaleOperation || register.scale_operation)} onChange={(event) => setRegisterField(index, "scaleOperation", event.target.value)}>
                     <option value="multiply">*</option>
                     <option value="divide">/</option>
                     <option value="add">+</option>

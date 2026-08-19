@@ -519,9 +519,41 @@ function buildEmitPayload(machine, data) {
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // NORMALIZE / SCALE
+function normalizeScaleOperation(rawOp) {
+  const op = String(rawOp || "").trim().toLowerCase();
+  if (
+    op === "/" ||
+    op === "divide" ||
+    op === "devide" ||
+    op.includes("div") ||
+    op.includes("slash") ||
+    op.includes("by")
+  ) {
+    return "divide";
+  }
+  if (
+    op === "+" ||
+    op === "add" ||
+    op.includes("plus") ||
+    op.includes("sum")
+  ) {
+    return "add";
+  }
+  if (
+    op === "-" ||
+    op === "subtract" ||
+    op.includes("sub") ||
+    op.includes("min")
+  ) {
+    return "subtract";
+  }
+  return "multiply";
+}
+
 function scaleValue(parameter, value) {
   if (value === null || value === undefined) return null;
   if (isStringRegisterType(parameter.type)) return String(value);
+
   const normalizedName = String(parameter.name || "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_");
@@ -529,25 +561,37 @@ function scaleValue(parameter, value) {
     normalizedName === "biscuit_thickness_mm" ||
     normalizedName === "biscuit_thickness" ||
     (normalizedName.includes("biscuit") && normalizedName.includes("thickness"));
-  if (isBiscuitThickness) {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return null;
-    return Number(n.toFixed(2));
-  }
 
   const n = Number(value);
   if (!Number.isFinite(n)) return null;
-  const scale = parameter.scale ?? 1;
 
-  if (scale !== 1) {
-    return Number((n * scale).toFixed(2));
+  if (isBiscuitThickness) {
+    return Number(n.toFixed(2));
   }
 
-  if (parameter.type === "int") return Number.parseInt(value, 10) || 0;
-  if (parameter.type === "dword") return Number.parseInt(value, 10) || 0;
-  if (parameter.type === "real32") return Number(n.toFixed(3));
+  const scale = Number(parameter.scale ?? parameter.scale_factor ?? 1);
+  const op = normalizeScaleOperation(parameter.scaleOperation || parameter.scale_operation || parameter.op || "*");
 
-  return Number(n.toFixed(2));
+  let calculated = n;
+  if (Number.isFinite(scale)) {
+    if (op === "divide") {
+      calculated = scale !== 0 ? n / scale : n;
+    } else if (op === "add") {
+      calculated = n + scale;
+    } else if (op === "subtract") {
+      calculated = n - scale;
+    } else {
+      calculated = n * scale;
+    }
+  }
+
+  const type = String(parameter.type || "").toLowerCase();
+  if (type === "real32") return Number(calculated.toFixed(3));
+  if ((type === "int" || type === "dword") && (op === "multiply" || op === "add" || op === "subtract") && Number.isInteger(scale) && Number.isInteger(n)) {
+    return Number.parseInt(calculated, 10) || 0;
+  }
+
+  return Number(calculated.toFixed(2));
 }
 
 function isStringRegisterType(type) {
@@ -3262,6 +3306,53 @@ function startPlcMonitor(io) {
         readings[name] = null;
       }
     }
+
+    // Prioritize PLC registers for Date & Time if configured (SHOT YEAR, SHOT MONTH, SHOT DAY, SHOT HOUR, SHOT MINUTE, SHOT SECOND)
+    const getPlcVal = (...keys) => {
+      for (const k of keys) {
+        if (readings[k] !== undefined && readings[k] !== null && readings[k] !== "") {
+          const num = Number(readings[k]);
+          if (Number.isFinite(num)) return num;
+        }
+      }
+      return null;
+    };
+
+    const plcYear = getPlcVal("SHOT YEAR", "shot_year", "Shot Year", "YEAR", "Year", "year");
+    const plcMonth = getPlcVal("SHOT MONTH", "shot_month", "Shot Month", "MONTH", "Month", "month");
+    const plcDay = getPlcVal("SHOT DAY", "shot_day", "Shot Day", "DAY", "Day", "day");
+    const plcHour = getPlcVal("SHOT HOUR", "shot_hour", "Shot Hour", "HOUR", "Hour", "hour");
+    const plcMinute = getPlcVal("SHOT MINUTE", "shot_minute", "Shot Minute", "MINUTE", "Minute", "minute");
+    const plcSecond = getPlcVal("SHOT SECOND", "shot_second", "Shot Second", "SECOND", "Second", "second");
+
+    const effectiveYear = plcYear !== null ? (plcYear < 100 ? 2000 + plcYear : plcYear) : shotYearRaw;
+    const effectiveMonth = plcMonth !== null ? plcMonth : shotMonthRaw;
+    const effectiveDay = plcDay !== null ? plcDay : shotDayRaw;
+    const effectiveHour = plcHour !== null ? plcHour : shotHour;
+    const effectiveMinute = plcMinute !== null ? plcMinute : shotMinute;
+    const effectiveSecond = plcSecond !== null ? plcSecond : shotSecond;
+
+    const calcShotDate = buildShotDateValue(effectiveYear, effectiveMonth, effectiveDay) || shotDate;
+    const calcShotTime = buildShotTimeValue(effectiveHour, effectiveMinute, effectiveSecond) || shotTime;
+    const calcShotDateTime = buildShotDateTimeValue(effectiveYear, effectiveMonth, effectiveDay, effectiveHour, effectiveMinute, effectiveSecond) || shotDateTime;
+    const calcProdDate = getProductionDate(calcShotDate, calcShotTime) || calcShotDate;
+
+    readings.shot_date = calcProdDate;
+    readings.production_date = calcProdDate;
+    readings.shot_time = calcShotTime;
+    readings.shot_datetime = calcShotDateTime;
+    readings.shot_year = pad2(effectiveYear);
+    readings.shot_month = pad2(effectiveMonth);
+    readings.shot_day = pad2(effectiveDay);
+    readings.shot_hour = pad2(effectiveHour);
+    readings.shot_minute = pad2(effectiveMinute);
+    readings.shot_second = pad2(effectiveSecond);
+
+    readings["SHOT DATE"] = calcProdDate;
+    readings["SHOT TIME"] = calcShotTime;
+    readings["Shot Date"] = calcProdDate;
+    readings["Shot Time"] = calcShotTime;
+
     readings.shot_number = readings["SHOT NO."] ?? null;
     readings.ok_shot = readings["HIGH SHOT COUNT"] ?? null;
     readings.ng_counter = readings["NG COUNTER"] ?? null;

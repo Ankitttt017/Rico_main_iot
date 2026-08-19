@@ -61,6 +61,37 @@ function normalizeRegisterType(value) {
   return "int";
 }
 
+function normalizeScaleOperation(rawOp) {
+  const op = String(rawOp || "").trim().toLowerCase();
+  if (
+    op === "/" ||
+    op === "divide" ||
+    op === "devide" ||
+    op.includes("div") ||
+    op.includes("slash") ||
+    op.includes("by")
+  ) {
+    return "divide";
+  }
+  if (
+    op === "+" ||
+    op === "add" ||
+    op.includes("plus") ||
+    op.includes("sum")
+  ) {
+    return "add";
+  }
+  if (
+    op === "-" ||
+    op === "subtract" ||
+    op.includes("sub") ||
+    op.includes("min")
+  ) {
+    return "subtract";
+  }
+  return "multiply";
+}
+
 function normalizeRegisterAddress(value) {
   return String(value || "").trim().toUpperCase();
 }
@@ -276,7 +307,7 @@ function normalizeRegisterRow(row = {}) {
     stringLength: cleanInt(row.string_length, ""),
     type,
     scale,
-    scaleOperation: cleanText(row.scale_operation) || "multiply",
+    scaleOperation: normalizeScaleOperation(row.scale_operation || row.scaleOperation || "multiply"),
     computed: cleanText(row.computed_key) || "",
     group_name: cleanText(row.group_name) || "",
     sort_order: cleanInt(row.sort_order, 0),
@@ -625,7 +656,7 @@ function normalizeRegisters(input) {
         stringLength: cleanInt(item.stringLength ?? item.string_length, ""),
         type,
         scale,
-        scaleOperation: cleanText(item.scaleOperation || item.scale_operation) || "multiply",
+        scaleOperation: normalizeScaleOperation(item.scaleOperation || item.scale_operation || "multiply"),
         computed: cleanText(item.computed) || "",
         group_name: cleanText(item.group_name || item.groupName || item.group || item.category || item.section || item.tab),
         sort_order: cleanInt(item.sort_order ?? item.sortOrder, index + 1),
@@ -688,7 +719,7 @@ async function syncMachineConfigRegisters(machineConfigId, payload = {}, registe
       cleanInt(register.stringLength ?? register.string_length),
       register.type || "int",
       register.scale === "" || register.scale === null || register.scale === undefined ? 1 : Number(register.scale),
-      register.scaleOperation || register.scale_operation || "multiply",
+      normalizeScaleOperation(register.scaleOperation || register.scale_operation || "multiply"),
       register.unit || "",
       register.group_name || register.group || "",
       cleanInt(register.sort_order ?? register.sortOrder, index + 1),
@@ -782,6 +813,7 @@ async function getRegisterConfigsByMachineIds(machineConfigIds = []) {
       string_length,
       data_type,
       scale_factor,
+      scale_operation,
       unit,
       group_name,
       sort_order,

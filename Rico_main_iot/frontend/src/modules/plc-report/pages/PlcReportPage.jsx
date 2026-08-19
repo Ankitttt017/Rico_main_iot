@@ -72,6 +72,10 @@ const HIDDEN_COLUMNS = new Set([
   "has_data",
   "is_online",
   "error",
+  "running_mode",
+  "manual_mode",
+  "auto_bit",
+  "manual",
 ]);
 
 const LEAK_TEST_HIDDEN_COLUMNS = new Set([
@@ -92,6 +96,8 @@ const LEAK_TEST_HIDDEN_COLUMNS = new Set([
   "dry_duration_sec",
   "manual_duration_sec",
   "wey_duration_sec",
+  "running_mode",
+  "manual",
 ]);
 
 const SERIAL_COLUMN = "serial_number";
@@ -122,7 +128,6 @@ const PREFERRED_COLUMNS = [
   "recorded_at",
   "plc_ip",
   "plc_port",
-  "scan_data",
   "part_name",
   "shot_date",
   "shot_time",
@@ -143,8 +148,6 @@ const LEAK_TEST_PREFERRED_COLUMNS = [
   "gall_1",
   "gall_2",
   "cycle_time",
-  "running_mode",
-  "manual",
 ];
 
 const SHOT_STATUS = {
@@ -966,7 +969,7 @@ function formatReportCell(row, key, rowIndex = 0, rowCount = 0, rows = []) {
   if (key === TESTING_MODE_COLUMN) return getTestingModeValue(row);
   if (key === "scan_time") return formatTimeParts24Hour(getRowTimeParts(row));
   if (normalizeColumnKey(key) === "scan_data") {
-    return formatValue(row.scan_data || row.part_scan_data || row.part_qr_code || row.part_name, key);
+    return formatValue(row.scan_data || row.part_scan_data || row.part_qr_code, key);
   }
   if (normalizeColumnKey(key) === "clamp_force_pct") {
     return formatValue(getReportDisplayValue(row, key), key);
@@ -1272,14 +1275,19 @@ function isHiddenForReport(key, hideLeakTestFields = false, isGauge = false) {
 }
 
 function orderUbeLimitColumns(columns = []) {
-  const available = new Set(columns);
-  const used = new Set();
+  const availableMap = new Map();
+  columns.forEach((col) => {
+    const norm = normalizeColumnKey(col);
+    if (!availableMap.has(norm)) availableMap.set(norm, col);
+  });
+
+  const usedNorms = new Set();
   const ordered = [];
 
-  const push = (key) => {
-    if (available.has(key) && !used.has(key)) {
-      ordered.push(key);
-      used.add(key);
+  const pushByNorm = (normKey) => {
+    if (availableMap.has(normKey) && !usedNorms.has(normKey)) {
+      ordered.push(availableMap.get(normKey));
+      usedNorms.add(normKey);
     }
   };
 
@@ -1287,12 +1295,12 @@ function orderUbeLimitColumns(columns = []) {
     const normalizedKey = normalizeColumnKey(key);
     const baseKey = getLimitBaseKey(normalizedKey);
     if (UBE_LIMIT_BASE_SET.has(baseKey)) {
-      push(baseKey);
-      push(`${baseKey}_lower_limit`);
-      push(`${baseKey}_upper_limit`);
+      pushByNorm(baseKey);
+      pushByNorm(`${baseKey}_lower_limit`);
+      pushByNorm(`${baseKey}_upper_limit`);
       return;
     }
-    push(key);
+    pushByNorm(normalizedKey);
   });
 
   return ordered;
@@ -1303,36 +1311,72 @@ function buildColumns(rows, options = {}) {
   const isGauge = Boolean(options.isGauge);
   if (isGauge) return GAUGE_REPORT_COLUMNS;
 
-  const keys = new Set();
+  const rawKeys = new Set();
   rows.forEach((row) => {
     Object.keys(row || {}).forEach((key) => {
-      if (!isHiddenForReport(key, hideLeakTestFields, isGauge)) keys.add(key);
+      if (!isHiddenForReport(key, hideLeakTestFields, isGauge)) rawKeys.add(key);
     });
   });
+
   if (rows.length) {
-    keys.add(SERIAL_COLUMN);
-    keys.add(SHIFT_COLUMN);
+    rawKeys.add(SERIAL_COLUMN);
+    rawKeys.add(SHIFT_COLUMN);
     if (hideLeakTestFields && rows.some((row) => row?.scan_data || row?.part_qr_code || row?.part_name)) {
-      keys.add("scan_data");
+      rawKeys.add("scan_data");
     }
-    if (hideLeakTestFields) keys.add(TESTING_MODE_COLUMN);
-    if (rows.some((row) => getRowTimeParts(row))) keys.add("shot_time");
+    if (hideLeakTestFields) rawKeys.add(TESTING_MODE_COLUMN);
+    if (rows.some((row) => getRowTimeParts(row))) rawKeys.add("shot_time");
   }
+
   const preferredColumns = hideLeakTestFields ? LEAK_TEST_PREFERRED_COLUMNS : PREFERRED_COLUMNS;
-  const remainingColumns = Array.from(keys)
-    .filter((key) => !preferredColumns.includes(key))
-    .filter((key) => !PLANT_ENVIRONMENT_COLUMNS.includes(key))
+  const selectedPreferred = [];
+  const seenNormalizedKeys = new Set();
+
+  preferredColumns.forEach((prefKey) => {
+    const normPref = normalizeColumnKey(prefKey);
+    const match = Array.from(rawKeys).find((k) => normalizeColumnKey(k) === normPref);
+    if (match && !seenNormalizedKeys.has(normPref)) {
+      selectedPreferred.push(match);
+      seenNormalizedKeys.add(normPref);
+    }
+  });
+
+  // Alias deduplication: part_name covers part_name, Part Name, part_qr_code, scan_data, part_scan_data
+  if (seenNormalizedKeys.has("part_name")) {
+    seenNormalizedKeys.add("part_qr_code");
+    seenNormalizedKeys.add("scan_data");
+    seenNormalizedKeys.add("part_scan_data");
+    seenNormalizedKeys.add("partname");
+  }
+
+  const remainingColumns = [];
+  Array.from(rawKeys)
     .filter((key) => !isHiddenForReport(key, hideLeakTestFields, isGauge))
-    .sort((a, b) => labelize(a, { isLeakTest: hideLeakTestFields }).localeCompare(labelize(b, { isLeakTest: hideLeakTestFields })));
+    .filter((key) => !PLANT_ENVIRONMENT_COLUMNS.map(normalizeColumnKey).includes(normalizeColumnKey(key)))
+    .sort((a, b) => labelize(a, { isLeakTest: hideLeakTestFields }).localeCompare(labelize(b, { isLeakTest: hideLeakTestFields })))
+    .forEach((key) => {
+      const norm = normalizeColumnKey(key);
+      if (!seenNormalizedKeys.has(norm)) {
+        remainingColumns.push(key);
+        seenNormalizedKeys.add(norm);
+      }
+    });
+
   if (!hideLeakTestFields && !isGauge) {
-    const plantColumns = PLANT_ENVIRONMENT_COLUMNS.filter((key) => keys.has(key) && !isHiddenForReport(key, hideLeakTestFields, isGauge));
+    const plantColumns = PLANT_ENVIRONMENT_COLUMNS.filter((key) =>
+      Array.from(rawKeys).some((rk) => normalizeColumnKey(rk) === normalizeColumnKey(key)) &&
+      !isHiddenForReport(key, hideLeakTestFields, isGauge) &&
+      !seenNormalizedKeys.has(normalizeColumnKey(key))
+    );
     if (plantColumns.length) {
-      const vacuumIndex = remainingColumns.indexOf("vacuum_pressure");
+      const vacuumIndex = remainingColumns.findIndex((k) => normalizeColumnKey(k) === "vacuum_pressure");
       remainingColumns.splice(vacuumIndex >= 0 ? vacuumIndex + 1 : remainingColumns.length, 0, ...plantColumns);
+      plantColumns.forEach((k) => seenNormalizedKeys.add(normalizeColumnKey(k)));
     }
   }
+
   return orderUbeLimitColumns([
-    ...preferredColumns.filter((key) => keys.has(key) && !isHiddenForReport(key, hideLeakTestFields, isGauge)),
+    ...selectedPreferred,
     ...remainingColumns,
   ]);
 }
