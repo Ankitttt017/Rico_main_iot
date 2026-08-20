@@ -108,42 +108,25 @@ function getScaledDisplayValue(normalizedName, value) {
   const numericValue = getNumericDisplayValue(value);
   if (numericValue === null) return value;
 
-  // 1. Speeds & MN Tonnage (Divide by 100)
-  if (
-    DISPLAY_DIVIDE_BY_HUNDRED_LIMITS.has(normalizedName) ||
-    DISPLAY_DIVIDE_BY_HUNDRED_FIELDS.has(normalizedName) ||
-    normalizedName.startsWith("v1_speed") ||
-    normalizedName.startsWith("v2_speed") ||
-    normalizedName.startsWith("v3_speed") ||
-    normalizedName.startsWith("v4_speed") ||
-    normalizedName === "clamp_tonnage_he_low_mn"
-  ) {
-    if (normalizedName.endsWith("_upper_limit") || normalizedName.endsWith("_lower_limit")) {
-      return Number((numericValue / 100).toFixed(2));
-    }
-    if (numericValue >= 10) {
-      return Number((numericValue / 100).toFixed(2));
-    }
-    return numericValue;
-  }
-
-  // 2. Cycle Timings & Pressures (Divide by 10)
-  for (const baseName of DISPLAY_DIVIDE_BY_TEN_FIELDS) {
+  // Limits (Upper / Lower limit limits) if unscaled in config
+  if (normalizedName.endsWith("_upper_limit") || normalizedName.endsWith("_lower_limit")) {
     if (
-      normalizedName === baseName ||
-      normalizedName === `${baseName}_upper_limit` ||
-      normalizedName === `${baseName}_lower_limit`
+      DISPLAY_DIVIDE_BY_HUNDRED_LIMITS.has(normalizedName) ||
+      normalizedName.startsWith("v1_speed") ||
+      normalizedName.startsWith("v2_speed") ||
+      normalizedName.startsWith("v3_speed") ||
+      normalizedName.startsWith("v4_speed") ||
+      normalizedName.includes("clamp_tonnage_he_low_mn")
     ) {
-      if (normalizedName.endsWith("_upper_limit") || normalizedName.endsWith("_lower_limit")) {
-        return Number((numericValue / 10).toFixed(1));
-      }
-      if (numericValue > 15 && Number.isInteger(numericValue)) {
-        return Number((numericValue / 10).toFixed(1));
-      }
-      return numericValue;
+      return Number((numericValue / 100).toFixed(2));
+    }
+    const baseName = normalizedName.replace(/_(upper|lower)_limit$/, "");
+    if (DISPLAY_DIVIDE_BY_TEN_FIELDS.has(baseName)) {
+      return Number((numericValue / 10).toFixed(1));
     }
   }
 
+  // Parameter values are already scaled by backend register configuration
   return value;
 }
 

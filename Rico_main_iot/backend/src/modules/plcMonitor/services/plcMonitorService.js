@@ -4455,6 +4455,8 @@ function startPlcMonitor(io) {
         let lastSavedCycleShot = null;
         let lastDetectedShotNumber = null;
         let fallbackShotCandidate = null;
+        let lockedStartShotNumber = null;
+        let lockedStartShotTimestamp = null;
         const cycleEndQueue = [];
         let cycleEndQueueRunning = false;
         let plcOperation = Promise.resolve();
@@ -4766,10 +4768,38 @@ function startPlcMonitor(io) {
           if (cycleStartedNow) {
             cycleStartAt = new Date(loopStartedAt);
             cycleEndHandled = false;
+            lockedStartShotNumber = null;
+            lockedStartShotTimestamp = null;
+
+            // Lock shot counter at Cycle Start before PLC increment
+            try {
+              const shotDevice = findConfiguredRegisterDevice(machine, ["SHOT NO.", "Shot Number", "shot_number"]);
+              if (shotDevice) {
+                try {
+                  const snapshot = await runPlcOperation(async () => {
+                    const rawShot = await readWord(sock, shotDevice);
+                    const shotTimestamp = await readUbeShotTimestamp(sock, cycleStartAt);
+                    return { rawShot, shotTimestamp };
+                  });
+                  const numeric = Number(snapshot.rawShot);
+                  lockedStartShotNumber = Number.isFinite(numeric) ? numeric : snapshot.rawShot;
+                  if (snapshot.shotTimestamp instanceof Date && !Number.isNaN(snapshot.shotTimestamp.getTime())) {
+                    lockedStartShotTimestamp = snapshot.shotTimestamp.toISOString();
+                  }
+                } catch (e) {
+                  lockedStartShotNumber = null;
+                  lockedStartShotTimestamp = null;
+                }
+              }
+            } catch (e) {
+              lockedStartShotNumber = null;
+              lockedStartShotTimestamp = null;
+            }
+
             updateMachineState(machine, {
               connected: true,
               error: null,
-              shotStatus: `Cycle started on ${cycleStartDevice}; waiting for ${cycleEndDevice || "cycle end"}.`,
+              shotStatus: `Cycle started; shot #${lockedStartShotNumber ?? "-"} locked. Waiting for ${cycleEndDevice || "cycle end"}.`,
             });
           }
 
@@ -4784,44 +4814,47 @@ function startPlcMonitor(io) {
               connected: true,
               error: cycleStartAt ? null : `Cycle end received without ${cycleStartDevice || "cycle start"} start timestamp.`,
               shotStatus: cycleEndedNow
-                ? `Cycle ended; duration ${durationSec ?? "-"} sec. Waiting before PLC snapshot.`
-                : `Cycle end is ON; duration ${durationSec ?? "-"} sec. Waiting before PLC snapshot.`,
+                ? `Cycle ended; duration ${durationSec ?? "-"} sec. Processing cycle snapshot.`
+                : `Cycle end is ON; duration ${durationSec ?? "-"} sec. Processing cycle snapshot.`,
             });
 
-            // Read the configured SHOT NO. and shot timestamp after a brief settle delay
-            // (serialized through runPlcOperation) to capture the exact cycle-end
-            // snapshot from the PLC. This keeps report persistence aligned with the
-            // moment the end-bit fired and avoids later reads capturing a different
-            // live shot counter or shot time.
-            const ubeSettleMs = Number(process.env.PLC_UBE_CYCLE_END_SETTLE_MS || 800);
-            if (ubeSettleMs > 0) {
-              await sleep(ubeSettleMs);
-            }
+            let capturedShotNumber = lockedStartShotNumber;
+            let capturedShotTimestamp = lockedStartShotTimestamp;
 
-            let capturedShotNumber = null;
-            let capturedShotTimestamp = null;
-            try {
-              const shotDevice = findConfiguredRegisterDevice(machine, ["SHOT NO.", "Shot Number", "shot_number"]);
-              if (shotDevice) {
-                try {
-                  const snapshot = await runPlcOperation(async () => {
-                    const rawShot = await readWord(sock, shotDevice);
-                    const shotTimestamp = await readUbeShotTimestamp(sock, cycleEndAt);
-                    return { rawShot, shotTimestamp };
-                  });
-                  const numeric = Number(snapshot.rawShot);
-                  capturedShotNumber = Number.isFinite(numeric) ? numeric : snapshot.rawShot;
-                  if (snapshot.shotTimestamp instanceof Date && !Number.isNaN(snapshot.shotTimestamp.getTime())) {
-                    capturedShotTimestamp = snapshot.shotTimestamp.toISOString();
-                  }
-                } catch (e) {
-                  capturedShotNumber = null;
-                  capturedShotTimestamp = null;
-                }
+            // Fallback: If shot number was not locked at cycle start, read at cycle end with settle
+            if (capturedShotNumber === null || capturedShotNumber === undefined) {
+              const ubeSettleMs = Number(process.env.PLC_UBE_CYCLE_END_SETTLE_MS || 800);
+              if (ubeSettleMs > 0) {
+                await sleep(ubeSettleMs);
               }
-            } catch (e) {
-              capturedShotNumber = null;
-              capturedShotTimestamp = null;
+              try {
+                const shotDevice = findConfiguredRegisterDevice(machine, ["SHOT NO.", "Shot Number", "shot_number"]);
+                if (shotDevice) {
+                  try {
+                    const snapshot = await runPlcOperation(async () => {
+                      const rawShot = await readWord(sock, shotDevice);
+                      const shotTimestamp = await readUbeShotTimestamp(sock, cycleEndAt);
+                      return { rawShot, shotTimestamp };
+                    });
+                    const numeric = Number(snapshot.rawShot);
+                    let endShot = Number.isFinite(numeric) ? numeric : snapshot.rawShot;
+                    // If read at cycle end and PLC already incremented, adjust offset
+                    if (Number.isFinite(endShot) && Number.isFinite(lastSavedCycleShot) && endShot > lastSavedCycleShot + 1) {
+                      endShot = endShot - 1;
+                    }
+                    capturedShotNumber = endShot;
+                    if (snapshot.shotTimestamp instanceof Date && !Number.isNaN(snapshot.shotTimestamp.getTime())) {
+                      capturedShotTimestamp = snapshot.shotTimestamp.toISOString();
+                    }
+                  } catch (e) {
+                    capturedShotNumber = null;
+                    capturedShotTimestamp = null;
+                  }
+                }
+              } catch (e) {
+                capturedShotNumber = null;
+                capturedShotTimestamp = null;
+              }
             }
 
             enqueueUbeCycleEnd({
@@ -4835,6 +4868,8 @@ function startPlcMonitor(io) {
               lastDetectedShotNumber = capturedShotNumber;
             }
             cycleStartAt = null;
+            lockedStartShotNumber = null;
+            lockedStartShotTimestamp = null;
           } else if (!cycleSnapshotPending && loopStartedAt - lastLiveReadAt >= UBE_LIVE_READ_MS) {
             lastLiveReadAt = loopStartedAt;
             startLiveSnapshotRead();
