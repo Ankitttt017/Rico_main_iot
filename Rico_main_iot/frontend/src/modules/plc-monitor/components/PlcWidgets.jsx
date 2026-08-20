@@ -34,10 +34,45 @@ export function Spark({ data, color = "#22d3ee" }) {
   );
 }
 
+export function CycleRunIcon({ type = "running" }) {
+  if (type === "running") {
+    return (
+      <span className="cycle-anim-wrap cycle-running-icon" title="Cycle Running">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="bike-svg">
+          <circle cx="5.5" cy="17.5" r="3.5" className="wheel-spin-1" strokeDasharray="3 2" />
+          <circle cx="18.5" cy="17.5" r="3.5" className="wheel-spin-2" strokeDasharray="3 2" />
+          <path d="M15 6a1 1 0 1 0 0-2 1 1 0 0 0 0 2z" />
+          <path d="M12 17.5V14l-3-3 4-3 2 3h3" />
+          <path d="M8.5 17.5l2.5-6" />
+        </svg>
+      </span>
+    );
+  }
+  if (type === "wait") {
+    return (
+      <span className="cycle-anim-wrap cycle-waiting-icon" title="Waiting for Cycle">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="wait-pulse-svg">
+          <circle cx="12" cy="12" r="10" />
+          <polyline points="12 6 12 12 16 14" />
+        </svg>
+      </span>
+    );
+  }
+  return (
+    <span className="cycle-anim-wrap cycle-stopped-icon" title="Stopped">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="10" />
+        <rect x="9" y="9" width="6" height="6" fill="currentColor" />
+      </svg>
+    </span>
+  );
+}
+
 export const STATUS_CFG = {
-  idle: { label: "Waiting for Cycle", cls: "status-idle" },
-  running: { label: "Cycle Running", cls: "status-complete" },
-  complete: { label: "Cycle Complete", cls: "status-complete" },
+  idle: { label: "Waiting for Cycle", cls: "status-idle", iconType: "wait" },
+  running: { label: "Cycle Running", cls: "status-running", iconType: "running" },
+  complete: { label: "Cycle Complete", cls: "status-running", iconType: "running" },
+  stopped: { label: "Stopped", cls: "status-stopped", iconType: "stopped" },
 };
 
 export function formatValue(value, fallback = "-") {

@@ -7,7 +7,7 @@ import { SOCKET_URL } from "../../../services/endpoints";
 import { DEFAULT_MACHINES, MACHINE_NAMES, PLC_LATEST_POLL_MS, getMachineKey, mergeMachineList, sortMachinesBySeries } from "../constants";
 import PlcMonitorStyles from "../components/PlcMonitorStyles";
 import PlcReportModal from "../components/PlcReportModal";
-import { MetricTile, STATUS_CFG, ValueCard } from "../components/PlcWidgets";
+import { CycleRunIcon, MetricTile, STATUS_CFG, ValueCard } from "../components/PlcWidgets";
 import {
   buildProductionDateFromRow,
   buildShotDateFromRow,
@@ -983,19 +983,29 @@ function PLCDashboard() {
     };
   }, [normalizeConfig, pushSpark, rememberSelectedSnapshot]);
 
-  const st = STATUS_CFG[cycleStatus] || STATUS_CFG.idle;
+  const selectedMachineKey = plcConfig.key || plcConfig.ip;
+  const selectedMachine = machines.find((machine) => getMachineKey(machine) === selectedMachineKey || machine.ip === plcConfig.ip);
+  const selectedMachineStatus = machineStatuses[selectedMachineKey] || machineStatuses[plcConfig.ip] || {};
+  const selectedMachineOnline = Boolean(selectedMachineStatus.connected);
+
+  let effectiveStatusKey = "idle";
+  if (!monitoringRunning || !selectedMachineOnline) {
+    effectiveStatusKey = "stopped";
+  } else if (cycleStatus === "running" || cycleStatus === "complete") {
+    effectiveStatusKey = "running";
+  } else {
+    effectiveStatusKey = "idle";
+  }
+  const st = STATUS_CFG[effectiveStatusKey] || STATUS_CFG.idle;
+
   const currentReadingRow = Object.fromEntries(Object.entries(readings).map(([name, item]) => [name, item?.value ?? null]));
   const productionDate = readings.production_date?.value || buildProductionDateFromRow(currentReadingRow);
   const shotDate = readings.shot_date?.value || productionDate || buildShotDateFromRow(currentReadingRow);
   const plcShotTime = readings.shot_time?.value || buildShotTimeFromRow(currentReadingRow) || shotTime;
-  const selectedMachineKey = plcConfig.key || plcConfig.ip;
-  const selectedMachine = machines.find((machine) => getMachineKey(machine) === selectedMachineKey || machine.ip === plcConfig.ip);
   const selectedMachineContext = mergeMachineContext(selectedMachine || {}, plcConfig);
   const machineName = selectedMachineContext.name || MACHINE_NAMES[plcConfig.ip] || "Unknown Machine";
   const selectedMachineKind = inferMachineKind(selectedMachineContext, readings);
   const isLeakTestMachine = selectedMachineKind === "leaktest";
-  const selectedMachineStatus = machineStatuses[selectedMachineKey] || machineStatuses[plcConfig.ip] || {};
-  const selectedMachineOnline = Boolean(selectedMachineStatus.connected);
   const selectedPlcConnected = Boolean(selectedMachineStatus.connected || selectedMachineStatus.hasRecentData || readings.plc_ip?.value);
   const displayPartName = firstReadableValue(
     getReadingValue(readings, "part_scan_data"),
@@ -1213,13 +1223,24 @@ function PLCDashboard() {
             <div className={`process-state ${st.cls}`}>
               <div className="state-top">
                 <div className="state-label">Machine State</div>
-                <span className="status-chip">{st.label}</span>
+                <span className="status-chip">
+                  <CycleRunIcon type={st.iconType} />
+                  <span>{st.label}</span>
+                </span>
               </div>
               <div className="state-value">
-                {selectedMachineOnline ? "ONLINE" : socketConnected ? "SERVER READY" : "OFFLINE"}
+                {effectiveStatusKey === "running"
+                  ? "CYCLE RUNNING"
+                  : effectiveStatusKey === "stopped"
+                  ? "STOPPED"
+                  : selectedMachineOnline
+                  ? "ONLINE"
+                  : socketConnected
+                  ? "SERVER READY"
+                  : "OFFLINE"}
               </div>
               <div className="state-sub">
-                {machineName} | {monitoringRunning ? "RUNNING" : "STOPPED"}
+                {machineName} | {effectiveStatusKey === "running" ? "RUNNING" : effectiveStatusKey === "stopped" ? "STOPPED" : "WAITING FOR CYCLE"}
               </div>
             </div>
 

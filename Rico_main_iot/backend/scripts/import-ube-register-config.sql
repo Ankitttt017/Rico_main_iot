@@ -29,7 +29,7 @@ DECLARE @ube_register_config NVARCHAR(MAX) = N'[
   {"name":"ACCEL. POINT mm","device":"D6908","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Shot Setup","unit":"mm"},
   {"name":"DEACEL. POINT mm","device":"D6910","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Shot Setup","unit":"mm"},
   {"name":"INTEN. TIME msec","device":"D6914","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Shot Setup","unit":"msec"},
-  {"name":"BISCUIT THICKNESS mm","device":"D6916","type":"decimal","scale":0.1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Shot Setup","unit":"mm"},
+  {"name":"BISCUIT THICKNESS mm","device":"D6916","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Shot Setup","unit":"mm"},
   {"name":"METAL PRESS. Mpa","device":"D6912","type":"decimal","scale":0.1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Pressure & Tonnage","unit":"MPa"},
   {"name":"CLAMP TONNAGE(HE.LOW) %","device":"D6918","type":"decimal","scale":1,"e
   nabled":true,"show_on_monitor":true,"log_history":true,"group":"Pressure & Tonnage","unit":"%"},

@@ -69,7 +69,6 @@ const DISPLAY_DIVIDE_BY_TEN_FIELDS = new Set([
   "extract_time",
   "spray_time",
   "metal_pressure",
-  "biscuit_thickness",
   "cooling_water_mov",
   "cooling_water_sta",
   "furnace_metal_temp",

@@ -105,7 +105,7 @@ const UBE_SHOT_CHANGE_FALLBACK_ENABLED =
   String(process.env.PLC_UBE_SHOT_CHANGE_FALLBACK_ENABLED || "true").toLowerCase() !== "false";
 const UBE_SHOT_CHANGE_FALLBACK_GRACE_MS = Math.max(
   0,
-  Number(process.env.PLC_UBE_SHOT_CHANGE_FALLBACK_GRACE_MS || 1500)
+  Number(process.env.PLC_UBE_SHOT_CHANGE_FALLBACK_GRACE_MS || 12000)
 );
 const plantEnvironmentCache = {
   at: 0,
@@ -4788,11 +4788,16 @@ function startPlcMonitor(io) {
                 : `Cycle end is ON; duration ${durationSec ?? "-"} sec. Waiting before PLC snapshot.`,
             });
 
-            // Read the configured SHOT NO. and shot timestamp immediately here
+            // Read the configured SHOT NO. and shot timestamp after a brief settle delay
             // (serialized through runPlcOperation) to capture the exact cycle-end
             // snapshot from the PLC. This keeps report persistence aligned with the
             // moment the end-bit fired and avoids later reads capturing a different
             // live shot counter or shot time.
+            const ubeSettleMs = Number(process.env.PLC_UBE_CYCLE_END_SETTLE_MS || 800);
+            if (ubeSettleMs > 0) {
+              await sleep(ubeSettleMs);
+            }
+
             let capturedShotNumber = null;
             let capturedShotTimestamp = null;
             try {

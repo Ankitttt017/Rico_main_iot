@@ -31,7 +31,6 @@ const UBE_KNOWN_SCALE_MAP = new Map([
   ["v2_m_sec", 0.01],
   ["v3_m_sec", 0.01],
   ["v4_m_sec", 0.01],
-  ["biscuit_thickness_mm", 0.1],
   ["metal_press_mpa", 0.1],
   ["clamp_tonnage_he_low_mn", 0.01],
   ["shot_acc_pressure", 0.01],

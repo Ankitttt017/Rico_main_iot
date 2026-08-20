@@ -302,8 +302,11 @@ export default function PlcMonitorStyles() {
         }
 
         .status-chip {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
           border-radius: 999px;
-          padding: 5px 9px;
+          padding: 4px 10px;
           font-family: var(--mono);
           font-size: 11px;
           font-weight: 700;
@@ -312,21 +315,76 @@ export default function PlcMonitorStyles() {
           background: rgba(255,255,255,0.08);
           flex: 0 1 auto;
           line-height: 1.15;
-          max-width: 104px;
+          max-width: fit-content;
           text-align: center;
-          white-space: normal;
+          white-space: nowrap;
         }
 
+        .status-running .status-chip,
         .status-complete .status-chip {
-          color: #16a34a;
-          border-color: rgba(34,197,94,0.46);
-          background: rgba(34,197,94,0.13);
+          color: #15803d;
+          border-color: rgba(34,197,94,0.6);
+          background: rgba(34,197,94,0.14);
+          box-shadow: 0 0 10px rgba(34,197,94,0.2);
         }
 
         .status-idle .status-chip {
-          color: #ea580c;
-          border-color: rgba(249,115,22,0.42);
+          color: #c2410c;
+          border-color: rgba(249,115,22,0.5);
           background: rgba(249,115,22,0.12);
+        }
+
+        .status-stopped .status-chip {
+          color: #b91c1c;
+          border-color: rgba(239,68,68,0.5);
+          background: rgba(239,68,68,0.12);
+        }
+
+        .cycle-anim-wrap {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .cycle-running-icon {
+          color: #16a34a;
+        }
+
+        .cycle-waiting-icon {
+          color: #ea580c;
+        }
+
+        .cycle-stopped-icon {
+          color: #ef4444;
+        }
+
+        @keyframes bikeWheelSpin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+        @keyframes bikeBounce {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-2px); }
+        }
+        @keyframes waitPulse {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50% { opacity: 0.35; transform: scale(0.88); }
+        }
+
+        .bike-svg {
+          animation: bikeBounce 0.5s infinite ease-in-out;
+          transform-origin: center;
+        }
+        .wheel-spin-1 {
+          transform-origin: 5.5px 17.5px;
+          animation: bikeWheelSpin 0.7s infinite linear;
+        }
+        .wheel-spin-2 {
+          transform-origin: 18.5px 17.5px;
+          animation: bikeWheelSpin 0.7s infinite linear;
+        }
+        .wait-pulse-svg {
+          animation: waitPulse 1.4s infinite ease-in-out;
         }
 
         .metric {
