@@ -964,7 +964,7 @@ function formatValue(value, key) {
 }
 
 function formatReportCell(row, key, rowIndex = 0, rowCount = 0, rows = []) {
-  if (key === SERIAL_COLUMN) return row[SERIAL_COLUMN] || (rowIndex + 1);
+  if (key === SERIAL_COLUMN) return row[SERIAL_COLUMN] || Math.max(1, rowCount - rowIndex);
   if (key === SHIFT_COLUMN) return getRowShift(row);
   if (key === TESTING_MODE_COLUMN) return getTestingModeValue(row);
   if (key === "scan_time") return formatTimeParts24Hour(getRowTimeParts(row));
@@ -1789,11 +1789,14 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     ? Math.min(totalRecords, firstRecordNumber + reportRows.length - 1)
     : 0;
   const pagedReportRows = useMemo(
-    () => reportRows.map((row, index) => ({
-      ...row,
-      [SERIAL_COLUMN]: ((currentPage - 1) * pageSize) + index + 1,
-    })),
-    [currentPage, pageSize, reportRows]
+    () => {
+      const total = totalRecords || reportRows.length;
+      return reportRows.map((row, index) => ({
+        ...row,
+        [SERIAL_COLUMN]: Math.max(1, total - ((currentPage - 1) * pageSize) - index),
+      }));
+    },
+    [currentPage, pageSize, reportRows, totalRecords]
   );
 
   useEffect(() => {
