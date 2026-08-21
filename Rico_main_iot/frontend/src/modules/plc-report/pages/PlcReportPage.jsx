@@ -964,7 +964,7 @@ function formatValue(value, key) {
 }
 
 function formatReportCell(row, key, rowIndex = 0, rowCount = 0, rows = []) {
-  if (key === SERIAL_COLUMN) return row[SERIAL_COLUMN] || Math.max(1, rowCount - rowIndex);
+  if (key === SERIAL_COLUMN) return row[SERIAL_COLUMN] || (rowIndex + 1);
   if (key === SHIFT_COLUMN) return getRowShift(row);
   if (key === TESTING_MODE_COLUMN) return getTestingModeValue(row);
   if (key === "scan_time") return formatTimeParts24Hour(getRowTimeParts(row));
@@ -1232,23 +1232,21 @@ function getRowSortTime(row = {}) {
   return 0;
 }
 
-function sortRowsLatestFirst(nextRows, options = {}) {
-  const preferShotNumber = Boolean(options.preferShotNumber);
+function sortRowsLatestFirst(nextRows) {
   return [...nextRows].sort((a, b) => {
-    if (preferShotNumber) {
-      const aDate = getRowSortDateKey(a);
-      const bDate = getRowSortDateKey(b);
-      if (aDate && bDate && aDate !== bDate) return bDate.localeCompare(aDate);
-
-      const aShot = getRowSortShotNumber(a);
-      const bShot = getRowSortShotNumber(b);
-      if (aShot !== null && bShot !== null && aShot !== bShot) return bShot - aShot;
-      if (aShot !== null && bShot === null) return -1;
-      if (aShot === null && bShot !== null) return 1;
-    }
-
     const timeDiff = getRowSortTime(b) - getRowSortTime(a);
     if (timeDiff !== 0) return timeDiff;
+
+    const aDate = getRowSortDateKey(a);
+    const bDate = getRowSortDateKey(b);
+    if (aDate && bDate && aDate !== bDate) return bDate.localeCompare(aDate);
+
+    const aShot = getRowSortShotNumber(a);
+    const bShot = getRowSortShotNumber(b);
+    if (aShot !== null && bShot !== null && aShot !== bShot) return bShot - aShot;
+    if (aShot !== null && bShot === null) return -1;
+    if (aShot === null && bShot !== null) return 1;
+
     const aId = getNumericId(a);
     const bId = getNumericId(b);
     if (aId !== null && bId !== null && aId !== bId) return bId - aId;
@@ -1730,7 +1728,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       const nextPagination = response.data?.pagination || {};
       const nextRows = Array.isArray(response.data?.data) ? response.data.data : [];
       const currentRows = filterFutureRowsForToday(nextRows, fromDate, toDate);
-      setRows(sortRowsLatestFirst(currentRows, { preferShotNumber: !selectedMachineIsGauge && !selectedMachineIsLeak }));
+      setRows(sortRowsLatestFirst(currentRows));
       setPagination({
         page: Number(nextPagination.page || reportPage || 1),
         pageSize: Number(nextPagination.pageSize || REPORT_RESULT_LIMIT),
@@ -1779,8 +1777,8 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   );
 
   const reportRows = useMemo(
-    () => sortRowsLatestFirst(filteredRows, { preferShotNumber: !selectedMachineIsGauge && !selectedMachineIsLeak }),
-    [filteredRows, selectedMachineIsGauge, selectedMachineIsLeak]
+    () => sortRowsLatestFirst(filteredRows),
+    [filteredRows]
   );
   const currentPage = Math.max(1, Number(pagination.page || reportPage || 1));
   const totalPages = Math.max(1, Number(pagination.totalPages || 1));
@@ -1793,11 +1791,9 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   const pagedReportRows = useMemo(
     () => reportRows.map((row, index) => ({
       ...row,
-      [SERIAL_COLUMN]: totalRecords
-        ? Math.max(1, totalRecords - ((currentPage - 1) * pageSize) - index)
-        : Math.max(1, reportRows.length - index),
+      [SERIAL_COLUMN]: ((currentPage - 1) * pageSize) + index + 1,
     })),
-    [currentPage, pageSize, reportRows, totalRecords]
+    [currentPage, pageSize, reportRows]
   );
 
   useEffect(() => {
@@ -1925,7 +1921,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     });
     const exportRows = Array.isArray(response.data?.data) ? response.data.data : [];
     const currentRows = filterFutureRowsForToday(exportRows, fromDate, toDate);
-    return sortRowsLatestFirst(currentRows, { preferShotNumber: !selectedMachineIsGauge && !selectedMachineIsLeak });
+    return sortRowsLatestFirst(currentRows);
   }, [activeResultFilterValue, filtersApplied, fromDate, searchText, selectedMachine, selectedMachineIsGauge, selectedMachineIsLeak, shiftFilter, toDate]);
 
   const downloadPdf = async () => {
