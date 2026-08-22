@@ -4870,11 +4870,7 @@ function startPlcMonitor(io) {
                       return { rawShot, shotTimestamp };
                     });
                     const numeric = Number(snapshot.rawShot);
-                    let endShot = Number.isFinite(numeric) ? numeric : snapshot.rawShot;
-                    // If read at cycle end and PLC already incremented, adjust offset
-                    if (Number.isFinite(endShot) && Number.isFinite(lastSavedCycleShot) && endShot > lastSavedCycleShot + 1) {
-                      endShot = endShot - 1;
-                    }
+                    const endShot = Number.isFinite(numeric) ? numeric : snapshot.rawShot;
                     capturedShotNumber = endShot;
                     if (snapshot.shotTimestamp instanceof Date && !Number.isNaN(snapshot.shotTimestamp.getTime())) {
                       capturedShotTimestamp = snapshot.shotTimestamp.toISOString();
@@ -4927,17 +4923,12 @@ function startPlcMonitor(io) {
                       ? snapshot.shotTimestamp.toISOString()
                       : null;
 
-                  const activeCycleRunning =
-                    cycleStartAt !== null &&
-                    Date.now() - cycleStartAt.getTime() < UBE_MAX_RUNNING_CYCLE_MS;
-
                   if (
                     lastDetectedShotNumber !== null &&
                     Number.isFinite(currentShotNumber) &&
                     Number.isFinite(lastDetectedShotNumber) &&
                     currentShotNumber > lastDetectedShotNumber &&
-                    !cycleEndHandled &&
-                    !activeCycleRunning
+                    !cycleEndHandled
                   ) {
                     const nowMs = Date.now();
                     const sameCandidate =
@@ -4955,7 +4946,7 @@ function startPlcMonitor(io) {
                       updateMachineState(machine, {
                         connected: true,
                         error: null,
-                        shotStatus: `Shot change seen; waiting ${UBE_SHOT_CHANGE_FALLBACK_GRACE_MS}ms for cycle end bit before fallback save.`,
+                        shotStatus: `Shot change seen (${lastDetectedShotNumber} -> ${currentShotNumber}); waiting ${UBE_SHOT_CHANGE_FALLBACK_GRACE_MS}ms for cycle end bit before fallback save.`,
                       });
                     } else if (nowMs - fallbackShotCandidate.firstSeenAt >= UBE_SHOT_CHANGE_FALLBACK_GRACE_MS) {
                       console.log(
@@ -4986,7 +4977,10 @@ function startPlcMonitor(io) {
                       lastDetectedShotNumber = currentShotNumber;
                       fallbackShotCandidate = null;
                     }
-                  } else if (Number.isFinite(currentShotNumber)) {
+                  } else if (
+                    Number.isFinite(currentShotNumber) &&
+                    (lastDetectedShotNumber === null || currentShotNumber < lastDetectedShotNumber)
+                  ) {
                     lastDetectedShotNumber = currentShotNumber;
                     fallbackShotCandidate = null;
                   }
