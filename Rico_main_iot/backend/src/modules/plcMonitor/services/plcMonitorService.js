@@ -111,7 +111,7 @@ const UBE_SHOT_CHANGE_FALLBACK_ENABLED =
   String(process.env.PLC_UBE_SHOT_CHANGE_FALLBACK_ENABLED || "true").toLowerCase() !== "false";
 const UBE_SHOT_CHANGE_FALLBACK_GRACE_MS = Math.max(
   0,
-  Number(process.env.PLC_UBE_SHOT_CHANGE_FALLBACK_GRACE_MS || 75000)
+  Number(process.env.PLC_UBE_SHOT_CHANGE_FALLBACK_GRACE_MS || 15000)
 );
 const dedicatedSocketFailedMachines = new Set();
 const plantEnvironmentCache = {
@@ -4620,11 +4620,28 @@ function startPlcMonitor(io) {
                   !saveResult?.skipped &&
                   Number.isFinite(numericShot) &&
                   Number.isFinite(lastSavedCycleShot) &&
-                  numericShot > lastSavedCycleShot + 1
+                  numericShot > lastSavedCycleShot + 1 &&
+                  numericShot - lastSavedCycleShot <= 50
                 ) {
                   console.warn(
-                    `PLC Cycle End missed shot warning ${machine.ip}: last=${lastSavedCycleShot}, current=${numericShot}, missing=${lastSavedCycleShot + 1}..${numericShot - 1}`
+                    `PLC Cycle End missed shot backfilling ${machine.ip}: last=${lastSavedCycleShot}, current=${numericShot}, missing=${lastSavedCycleShot + 1}..${numericShot - 1}`
                   );
+                  for (let missingShot = lastSavedCycleShot + 1; missingShot < numericShot; missingShot += 1) {
+                    try {
+                      const missingReadings = {
+                        ...(payload.rawReadings || {}),
+                        shot_number: missingShot,
+                        "SHOT NO.": missingShot,
+                      };
+                      await persistUbeReading(
+                        machine,
+                        payload.partName || machine.partName || "",
+                        missingReadings
+                      );
+                    } catch (e) {
+                      console.error(`Backfill failed for shot ${missingShot}:`, e.message);
+                    }
+                  }
                 }
                 if (!saveResult?.skipped && Number.isFinite(numericShot)) {
                   lastSavedCycleShot = numericShot;
