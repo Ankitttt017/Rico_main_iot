@@ -4781,6 +4781,9 @@ function startPlcMonitor(io) {
           }
           const cycleStartedNow = cycleStart === 1 && lastCycleStartBit !== 1;
           const cycleEndedNow = cycleEnd === 1 && lastCycleEndBit !== 1;
+          if (cycleEnd === 0 && lastCycleEndBit === 1) {
+            cycleEndHandled = false;
+          }
           const shouldCaptureCycle = cycleEnd === 1 && !cycleEndHandled;
           const cycleSnapshotPending = Boolean(cycleStartAt) || cycleStart === 1 || cycleEnd === 1;
 
@@ -4927,9 +4930,9 @@ function startPlcMonitor(io) {
                     lastDetectedShotNumber !== null &&
                     Number.isFinite(currentShotNumber) &&
                     Number.isFinite(lastDetectedShotNumber) &&
-                    currentShotNumber > lastDetectedShotNumber &&
-                    !cycleEndHandled
+                    currentShotNumber > lastDetectedShotNumber
                   ) {
+                    cycleEndHandled = false;
                     const nowMs = Date.now();
                     const sameCandidate =
                       fallbackShotCandidate &&
