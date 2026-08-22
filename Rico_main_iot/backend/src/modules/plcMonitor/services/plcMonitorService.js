@@ -101,12 +101,19 @@ const UBE_CYCLE_END_DEBOUNCE_MS = Math.max(
   500,
   Number(process.env.PLC_UBE_CYCLE_END_DEBOUNCE_MS || 3000)
 );
+const UBE_ENABLE_DEDICATED_SOCKET =
+  String(process.env.PLC_UBE_ENABLE_DEDICATED_SOCKET || "false").toLowerCase() === "true";
+const UBE_MAX_RUNNING_CYCLE_MS = Math.max(
+  30000,
+  Number(process.env.PLC_UBE_MAX_RUNNING_CYCLE_MS || 90000)
+);
 const UBE_SHOT_CHANGE_FALLBACK_ENABLED =
   String(process.env.PLC_UBE_SHOT_CHANGE_FALLBACK_ENABLED || "true").toLowerCase() !== "false";
 const UBE_SHOT_CHANGE_FALLBACK_GRACE_MS = Math.max(
   0,
-  Number(process.env.PLC_UBE_SHOT_CHANGE_FALLBACK_GRACE_MS || 12000)
+  Number(process.env.PLC_UBE_SHOT_CHANGE_FALLBACK_GRACE_MS || 75000)
 );
+const dedicatedSocketFailedMachines = new Set();
 const plantEnvironmentCache = {
   at: 0,
   data: null,
@@ -4468,6 +4475,9 @@ function startPlcMonitor(io) {
         };
 
         const readUbeSnapshotOnDedicatedSocket = async (options, label = "snapshot") => {
+          if (!UBE_ENABLE_DEDICATED_SOCKET || dedicatedSocketFailedMachines.has(machine.ip)) {
+            throw new Error("dedicated socket disabled or unavailable");
+          }
           let snapshotSock = null;
           try {
             snapshotSock = await withTimeout(
@@ -4476,6 +4486,9 @@ function startPlcMonitor(io) {
               `UBE ${label} connect ${machine.ip}:${machine.port}`
             );
             return await readAll(machine, snapshotSock, options);
+          } catch (err) {
+            dedicatedSocketFailedMachines.add(machine.ip);
+            throw err;
           } finally {
             closeSocket(snapshotSock);
           }
@@ -4496,9 +4509,11 @@ function startPlcMonitor(io) {
               try {
                 payload = await readUbeSnapshotOnDedicatedSocket(snapshotOptions, "cycle snapshot");
               } catch (snapshotError) {
-                console.log(
-                  `PLC Cycle End dedicated snapshot ${machine.ip}: ${snapshotError.message}; using monitor socket`
-                );
+                if (UBE_ENABLE_DEDICATED_SOCKET && !dedicatedSocketFailedMachines.has(machine.ip)) {
+                  console.log(
+                    `PLC Cycle End dedicated snapshot ${machine.ip}: ${snapshotError.message}; using monitor socket`
+                  );
+                }
                 payload = await runPlcOperation(() => readAll(machine, sock, snapshotOptions));
               }
               // If we captured a fast shot-number snapshot at the moment the cycle-end
@@ -4702,10 +4717,14 @@ function startPlcMonitor(io) {
               try {
                 await readUbeSnapshotOnDedicatedSocket(liveOptions, "live snapshot");
               } catch (dedicatedError) {
-                if (!isPlcConnectionError(dedicatedError)) throw dedicatedError;
-                console.log(
-                  `PLC live snapshot dedicated connection unavailable ${machine.ip}: ${dedicatedError.message}; using monitor socket`
-                );
+                if (UBE_ENABLE_DEDICATED_SOCKET && !dedicatedSocketFailedMachines.has(machine.ip) && !isPlcConnectionError(dedicatedError)) {
+                  throw dedicatedError;
+                }
+                if (UBE_ENABLE_DEDICATED_SOCKET && !dedicatedSocketFailedMachines.has(machine.ip)) {
+                  console.log(
+                    `PLC live snapshot dedicated connection unavailable ${machine.ip}: ${dedicatedError.message}; using monitor socket`
+                  );
+                }
                 await runPlcOperation(() => readAll(machine, sock, liveOptions));
               }
               consecutiveReadFailures = 0;
@@ -4821,6 +4840,20 @@ function startPlcMonitor(io) {
             let capturedShotNumber = lockedStartShotNumber;
             let capturedShotTimestamp = lockedStartShotTimestamp;
 
+            // If capturedShotNumber is stale (already processed or <= lastSavedCycleShot), reset it
+            if (
+              capturedShotNumber !== null &&
+              capturedShotNumber !== undefined &&
+              Number.isFinite(Number(capturedShotNumber)) &&
+              Number.isFinite(Number(lastSavedCycleShot)) &&
+              Number(capturedShotNumber) <= Number(lastSavedCycleShot)
+            ) {
+              capturedShotNumber = null;
+              capturedShotTimestamp = null;
+              lockedStartShotNumber = null;
+              lockedStartShotTimestamp = null;
+            }
+
             // Fallback: If shot number was not locked at cycle start, read at cycle end with settle
             if (capturedShotNumber === null || capturedShotNumber === undefined) {
               const ubeSettleMs = Number(process.env.PLC_UBE_CYCLE_END_SETTLE_MS || 800);
@@ -4894,12 +4927,17 @@ function startPlcMonitor(io) {
                       ? snapshot.shotTimestamp.toISOString()
                       : null;
 
+                  const activeCycleRunning =
+                    cycleStartAt !== null &&
+                    Date.now() - cycleStartAt.getTime() < UBE_MAX_RUNNING_CYCLE_MS;
+
                   if (
                     lastDetectedShotNumber !== null &&
                     Number.isFinite(currentShotNumber) &&
                     Number.isFinite(lastDetectedShotNumber) &&
                     currentShotNumber > lastDetectedShotNumber &&
-                    !cycleEndHandled
+                    !cycleEndHandled &&
+                    !activeCycleRunning
                   ) {
                     const nowMs = Date.now();
                     const sameCandidate =
@@ -4943,6 +4981,8 @@ function startPlcMonitor(io) {
                         trigger: "shot-number-change-fallback",
                       });
                       cycleStartAt = null;
+                      lockedStartShotNumber = null;
+                      lockedStartShotTimestamp = null;
                       lastDetectedShotNumber = currentShotNumber;
                       fallbackShotCandidate = null;
                     }
