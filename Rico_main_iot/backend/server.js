@@ -50,15 +50,15 @@ app.use("/api/shifts", shiftRoutes);
 
 const plcMonitor = String(process.env.PLC_MONITOR_ENABLED || "true").toLowerCase() === "false"
   ? {
-      getStatus: () => ({ running: false, disabled: true }),
-      getLatestReadings: async () => [],
-      getReadingHistory: async () => [],
-      getConnectionEvents: async () => [],
-      getReportColumns: () => [],
-      buildReadingsExcelXml: () => "",
-      buildConnectionEventsExcelXml: () => "",
-      restart: async () => ({ ok: false, disabled: true }),
-    }
+    getStatus: () => ({ running: false, disabled: true }),
+    getLatestReadings: async () => [],
+    getReadingHistory: async () => [],
+    getConnectionEvents: async () => [],
+    getReportColumns: () => [],
+    buildReadingsExcelXml: () => "",
+    buildConnectionEventsExcelXml: () => "",
+    restart: async () => ({ ok: false, disabled: true }),
+  }
   : startPlcMonitor(io);
 app.use("/api/plc-monitor", createPlcMonitorRoutes(plcMonitor));
 
