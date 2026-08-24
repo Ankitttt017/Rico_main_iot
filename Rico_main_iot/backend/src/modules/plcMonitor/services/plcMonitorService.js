@@ -4851,7 +4851,7 @@ function startPlcMonitor(io) {
               : null;
             updateMachineState(machine, {
               connected: true,
-              error: cycleStartAt ? null : `Cycle end received without ${cycleStartDevice || "cycle start"} start timestamp.`,
+              error: null,
               shotStatus: cycleEndedNow
                 ? `Cycle ended; duration ${durationSec ?? "-"} sec. Processing cycle snapshot.`
                 : `Cycle end is ON; duration ${durationSec ?? "-"} sec. Processing cycle snapshot.`,
@@ -4860,26 +4860,11 @@ function startPlcMonitor(io) {
             let capturedShotNumber = lockedStartShotNumber;
             let capturedShotTimestamp = lockedStartShotTimestamp;
 
-            // If capturedShotNumber is stale (already processed or <= lastSavedCycleShot), reset it
-            if (
-              capturedShotNumber !== null &&
-              capturedShotNumber !== undefined &&
-              Number.isFinite(Number(capturedShotNumber)) &&
-              Number.isFinite(Number(lastSavedCycleShot)) &&
-              Number(capturedShotNumber) <= Number(lastSavedCycleShot)
-            ) {
-              capturedShotNumber = null;
-              capturedShotTimestamp = null;
-              lockedStartShotNumber = null;
-              lockedStartShotTimestamp = null;
+            // Take 1000ms delay at Cycle End to allow PLC registers to settle completely
+            const ubeSettleMs = Number(process.env.PLC_UBE_CYCLE_END_SETTLE_MS || 1000);
+            if (ubeSettleMs > 0) {
+              await sleep(ubeSettleMs);
             }
-
-            // Fallback: If shot number was not locked at cycle start, read at cycle end with settle
-            if (capturedShotNumber === null || capturedShotNumber === undefined) {
-              const ubeSettleMs = Number(process.env.PLC_UBE_CYCLE_END_SETTLE_MS || 800);
-              if (ubeSettleMs > 0) {
-                await sleep(ubeSettleMs);
-              }
               try {
                 const shotDevice = findConfiguredRegisterDevice(machine, ["SHOT NO.", "Shot Number", "shot_number"]);
                 if (shotDevice) {
