@@ -111,7 +111,7 @@ const UBE_SHOT_CHANGE_FALLBACK_ENABLED =
   String(process.env.PLC_UBE_SHOT_CHANGE_FALLBACK_ENABLED || "true").toLowerCase() !== "false";
 const UBE_SHOT_CHANGE_FALLBACK_GRACE_MS = Math.max(
   0,
-  Number(process.env.PLC_UBE_SHOT_CHANGE_FALLBACK_GRACE_MS || 15000)
+  Number(process.env.PLC_UBE_SHOT_CHANGE_FALLBACK_GRACE_MS || 60000)
 );
 const dedicatedSocketFailedMachines = new Set();
 const plantEnvironmentCache = {
@@ -4968,7 +4968,7 @@ function startPlcMonitor(io) {
                         error: null,
                         shotStatus: `Shot change seen (${lastDetectedShotNumber} -> ${currentShotNumber}); waiting ${UBE_SHOT_CHANGE_FALLBACK_GRACE_MS}ms for cycle end bit before fallback save.`,
                       });
-                    } else if (nowMs - fallbackShotCandidate.firstSeenAt >= UBE_SHOT_CHANGE_FALLBACK_GRACE_MS) {
+                    } else if (cycleStart !== 1 && nowMs - fallbackShotCandidate.firstSeenAt >= UBE_SHOT_CHANGE_FALLBACK_GRACE_MS) {
                       console.log(
                         `PLC Cycle End fallback triggered ${machine.ip}: last=${lastDetectedShotNumber}, current=${currentShotNumber}`
                       );
