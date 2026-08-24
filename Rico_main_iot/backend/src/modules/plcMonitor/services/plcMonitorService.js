@@ -4808,6 +4808,7 @@ function startPlcMonitor(io) {
             cycleEndHandled = false;
             lockedStartShotNumber = null;
             lockedStartShotTimestamp = null;
+            console.log(`[PLC TRIGGER] Cycle Start (M840) DETECTED for ${machine.ip} at ${cycleStartAt.toISOString()}`);
 
             // Lock shot counter at Cycle Start before PLC increment
             try {
@@ -4834,6 +4835,8 @@ function startPlcMonitor(io) {
               lockedStartShotTimestamp = null;
             }
 
+            console.log(`[PLC TRIGGER] Cycle Start Locked Shot #${lockedStartShotNumber} for ${machine.ip}`);
+
             updateMachineState(machine, {
               connected: true,
               error: null,
@@ -4845,6 +4848,7 @@ function startPlcMonitor(io) {
             fallbackShotCandidate = null;
             cycleEndHandled = true;
             const cycleEndAt = new Date();
+            console.log(`[PLC TRIGGER] Cycle End (M4598) DETECTED for ${machine.ip} at ${cycleEndAt.toISOString()}`);
             const durationSec = cycleStartAt
               ? Number(((cycleEndAt - cycleStartAt) / 1000).toFixed(2))
               : null;
