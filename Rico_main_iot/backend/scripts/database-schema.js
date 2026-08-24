@@ -134,11 +134,65 @@ async function verifySchema() {
   console.log(`Verified ${REQUIRED_TABLES.length} tables and ${REQUIRED_INDEXES.length} indexes.`);
 }
 
+async function checkSchemaQuietly() {
+  try {
+    const [{ rows: columnRows }, { rows: indexRows }] = await Promise.all([
+      db.query(`
+        SELECT t.name AS table_name, c.name AS column_name
+        FROM sys.tables t
+        INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
+        INNER JOIN sys.columns c ON c.object_id = t.object_id
+        WHERE s.name = 'dbo'
+      `),
+      db.query(`
+        SELECT i.name AS index_name
+        FROM sys.indexes i
+        INNER JOIN sys.tables t ON t.object_id = i.object_id
+        INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
+        WHERE s.name = 'dbo' AND i.name IS NOT NULL
+      `),
+    ]);
+
+    const columnsByTable = new Map();
+    for (const row of columnRows) {
+      if (!columnsByTable.has(row.table_name)) columnsByTable.set(row.table_name, new Set());
+      columnsByTable.get(row.table_name).add(row.column_name);
+    }
+
+    const missingTables = REQUIRED_TABLES.filter((table) => !columnsByTable.has(table));
+    if (missingTables.length > 0) return false;
+
+    for (const [table, columns] of Object.entries(REQUIRED_COLUMNS)) {
+      const actual = columnsByTable.get(table);
+      if (!actual) return false;
+      for (const column of columns) {
+        if (!actual.has(column)) return false;
+      }
+    }
+
+    const actualIndexes = new Set(indexRows.map((row) => row.index_name));
+    const missingIndexes = REQUIRED_INDEXES.filter((index) => !actualIndexes.has(index));
+    if (missingIndexes.length > 0) return false;
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function main() {
-  if (process.argv.includes("--init")) {
-    console.log("Applying database schema...");
-    await db.initializeSchema();
-    console.log("Database schema applied.");
+  const forceInit = process.argv.includes("--force");
+  const hasInitFlag = process.argv.includes("--init");
+
+  if (hasInitFlag || forceInit) {
+    const isAlreadyComplete = !forceInit && (await checkSchemaQuietly());
+    if (isAlreadyComplete) {
+      console.log("Database schema is already up-to-date; skipping heavy schema initialization.");
+    } else {
+      console.log("Applying database schema...");
+      await db.initializeSchema();
+      console.log("Database schema applied.");
+    }
   }
   await verifySchema();
 }
