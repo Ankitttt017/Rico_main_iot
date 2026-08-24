@@ -111,7 +111,7 @@ const UBE_SHOT_CHANGE_FALLBACK_ENABLED =
   String(process.env.PLC_UBE_SHOT_CHANGE_FALLBACK_ENABLED || "true").toLowerCase() !== "false";
 const UBE_SHOT_CHANGE_FALLBACK_GRACE_MS = Math.max(
   0,
-  Number(process.env.PLC_UBE_SHOT_CHANGE_FALLBACK_GRACE_MS || 60000)
+  Number(process.env.PLC_UBE_SHOT_CHANGE_FALLBACK_GRACE_MS || 0)
 );
 const dedicatedSocketFailedMachines = new Set();
 const plantEnvironmentCache = {
