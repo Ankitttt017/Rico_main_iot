@@ -423,60 +423,60 @@ function normalizeUbeReadParameter(parameter = {}) {
 }
 
 const UBE_LIMIT_READ_PARAMETERS = [
-  { name: "DIE-CLOSE CORE IN TIME Upper Limit sec", device: "D4269", type: "decimal" },
-  { name: "DIE-CLOSE CORE IN TIME Lower Limit sec", device: "D4319", type: "decimal" },
-  { name: "POURING TIME Upper Limit sec", device: "D4270", type: "decimal" },
-  { name: "POURING TIME Lower Limit sec", device: "D4320", type: "decimal" },
-  { name: "SHOT FWD TIME Upper Limit sec", device: "D4271", type: "decimal" },
-  { name: "SHOT FWD TIME Lower Limit sec", device: "D4321", type: "decimal" },
-  { name: "CURING TIME Upper Limit sec", device: "D4272", type: "decimal" },
-  { name: "CURING TIME Lower Limit sec", device: "D4322", type: "decimal" },
-  { name: "DIE OPEN CORE OUT TIME Upper Limit sec", device: "D4273", type: "decimal" },
-  { name: "DIE OPEN CORE OUT TIME Lower Limit sec", device: "D4323", type: "decimal" },
-  { name: "EJECTOR TIME Upper Limit sec", device: "D4274", type: "decimal" },
-  { name: "EJECTOR TIME Lower Limit sec", device: "D4324", type: "decimal" },
-  { name: "EXTRACT TIME Upper Limit sec", device: "D4275", type: "decimal" },
-  { name: "EXTRACT TIME Lower Limit sec", device: "D4325", type: "decimal" },
-  { name: "SPRAY TIME Upper Limit sec", device: "D4276", type: "decimal" },
-  { name: "SPRAY TIME Lower Limit sec", device: "D4326", type: "decimal" },
-  { name: "V1 Upper Limit m/sec", device: "D4250", type: "decimal" },
-  { name: "V1 Lower Limit m/sec", device: "D4300", type: "decimal" },
-  { name: "V2 Upper Limit m/sec", device: "D4251", type: "decimal" },
-  { name: "V2 Lower Limit m/sec", device: "D4301", type: "decimal" },
-  { name: "V3 Upper Limit m/sec", device: "D4252", type: "decimal" },
-  { name: "V3 Lower Limit m/sec", device: "D4302", type: "decimal" },
-  { name: "V4 Upper Limit m/sec", device: "D4253", type: "decimal" },
-  { name: "V4 Lower Limit m/sec", device: "D4303", type: "decimal" },
-  { name: "METAL PRESS. Upper Limit Mpa", device: "D4256", type: "decimal" },
-  { name: "METAL PRESS. Lower Limit Mpa", device: "D4306", type: "decimal" },
-  { name: "FURNACE METAL TEMP. Upper Limit C", device: "D4267", type: "decimal" },
-  { name: "FURNACE METAL TEMP. Lower Limit C", device: "D4317", type: "decimal" },
-  { name: "COOLING WATER FLOW RATE (MOV.) Upper Limit L/min", device: "D4265", type: "decimal" },
-  { name: "COOLING WATER FLOW RATE (MOV.) Lower Limit L/min", device: "D4315", type: "decimal" },
-  { name: "COOLING WATER FLOW RATE (STA.) Upper Limit L/min", device: "D4266", type: "decimal" },
-  { name: "COOLING WATER FLOW RATE (STA.) Lower Limit L/min", device: "D4316", type: "decimal" },
-  { name: "ACCEL. POINT Upper Limit mm", device: "D4254", type: "decimal" },
-  { name: "ACCEL. POINT Lower Limit mm", device: "D4304", type: "decimal" },
-  { name: "DEACEL. POINT Upper Limit mm", device: "D4255", type: "decimal" },
-  { name: "DEACEL. POINT Lower Limit mm", device: "D4305", type: "decimal" },
-  { name: "INTEN. TIME Upper Limit msec", device: "D4257", type: "decimal" },
-  { name: "INTEN. TIME Lower Limit msec", device: "D4307", type: "decimal" },
-  { name: "BISCUIT THICKNESS Upper Limit mm", device: "D4258", type: "decimal" },
-  { name: "BISCUIT THICKNESS Lower Limit mm", device: "D4308", type: "decimal" },
-  { name: "JET COOLING PRESSURE Upper Limit kgf/cm2", device: "D4277", type: "decimal" },
-  { name: "JET COOLING PRESSURE Lower Limit kgf/cm2", device: "D4327", type: "decimal" },
-  { name: "CLAMP TONNAGE(HE.LOW) Upper Limit %", device: "D4259", type: "decimal" },
-  { name: "CLAMP TONNAGE(HE.LOW) Lower Limit %", device: "D4309", type: "decimal" },
-  { name: "CLAMP TONNAGE(HE.LOW) Upper Limit MN", device: "D4260", type: "decimal" },
-  { name: "CLAMP TONNAGE(HE.LOW) Lower Limit MN", device: "D4310", type: "decimal" },
-  { name: "CLAMP TONNAGE(OP.UP) Upper Limit %", device: "D4261", type: "decimal" },
-  { name: "CLAMP TONNAGE(OP.UP) Lower Limit %", device: "D4311", type: "decimal" },
-  { name: "CLAMP TONNAGE(OP.LOW) Upper Limit %", device: "D4262", type: "decimal" },
-  { name: "CLAMP TONNAGE(OP.LOW) Lower Limit %", device: "D4312", type: "decimal" },
-  { name: "CLAMP TONNAGE(HE.UP) Upper Limit %", device: "D4263", type: "decimal" },
-  { name: "CLAMP TONNAGE(HE.UP) Lower Limit %", device: "D4313", type: "decimal" },
-  { name: "VACUUM PRESSURE Upper Limit mbar", device: "D4264", type: "decimal" },
-  { name: "VACUUM PRESSURE Lower Limit mbar", device: "D4314", type: "decimal" },
+  { name: "DIE-CLOSE CORE IN TIME Upper Limit sec", device: "D4269", type: "decimal", scale: 0.1 },
+  { name: "DIE-CLOSE CORE IN TIME Lower Limit sec", device: "D4319", type: "decimal", scale: 0.1 },
+  { name: "POURING TIME Upper Limit sec", device: "D4270", type: "decimal", scale: 0.1 },
+  { name: "POURING TIME Lower Limit sec", device: "D4320", type: "decimal", scale: 0.1 },
+  { name: "SHOT FWD TIME Upper Limit sec", device: "D4271", type: "decimal", scale: 0.1 },
+  { name: "SHOT FWD TIME Lower Limit sec", device: "D4321", type: "decimal", scale: 0.1 },
+  { name: "CURING TIME Upper Limit sec", device: "D4272", type: "decimal", scale: 0.1 },
+  { name: "CURING TIME Lower Limit sec", device: "D4322", type: "decimal", scale: 0.1 },
+  { name: "DIE OPEN CORE OUT TIME Upper Limit sec", device: "D4273", type: "decimal", scale: 0.1 },
+  { name: "DIE OPEN CORE OUT TIME Lower Limit sec", device: "D4323", type: "decimal", scale: 0.1 },
+  { name: "EJECTOR TIME Upper Limit sec", device: "D4274", type: "decimal", scale: 0.1 },
+  { name: "EJECTOR TIME Lower Limit sec", device: "D4324", type: "decimal", scale: 0.1 },
+  { name: "EXTRACT TIME Upper Limit sec", device: "D4275", type: "decimal", scale: 0.1 },
+  { name: "EXTRACT TIME Lower Limit sec", device: "D4325", type: "decimal", scale: 0.1 },
+  { name: "SPRAY TIME Upper Limit sec", device: "D4276", type: "decimal", scale: 0.1 },
+  { name: "SPRAY TIME Lower Limit sec", device: "D4326", type: "decimal", scale: 0.1 },
+  { name: "V1 Upper Limit m/sec", device: "D4250", type: "decimal", scale: 0.01 },
+  { name: "V1 Lower Limit m/sec", device: "D4300", type: "decimal", scale: 0.01 },
+  { name: "V2 Upper Limit m/sec", device: "D4251", type: "decimal", scale: 0.01 },
+  { name: "V2 Lower Limit m/sec", device: "D4301", type: "decimal", scale: 0.01 },
+  { name: "V3 Upper Limit m/sec", device: "D4252", type: "decimal", scale: 0.01 },
+  { name: "V3 Lower Limit m/sec", device: "D4302", type: "decimal", scale: 0.01 },
+  { name: "V4 Upper Limit m/sec", device: "D4253", type: "decimal", scale: 0.01 },
+  { name: "V4 Lower Limit m/sec", device: "D4303", type: "decimal", scale: 0.01 },
+  { name: "METAL PRESS. Upper Limit Mpa", device: "D4256", type: "decimal", scale: 0.1 },
+  { name: "METAL PRESS. Lower Limit Mpa", device: "D4306", type: "decimal", scale: 0.1 },
+  { name: "FURNACE METAL TEMP. Upper Limit C", device: "D4267", type: "decimal", scale: 1 },
+  { name: "FURNACE METAL TEMP. Lower Limit C", device: "D4317", type: "decimal", scale: 1 },
+  { name: "COOLING WATER FLOW RATE (MOV.) Upper Limit L/min", device: "D4265", type: "decimal", scale: 0.1 },
+  { name: "COOLING WATER FLOW RATE (MOV.) Lower Limit L/min", device: "D4315", type: "decimal", scale: 0.1 },
+  { name: "COOLING WATER FLOW RATE (STA.) Upper Limit L/min", device: "D4266", type: "decimal", scale: 0.1 },
+  { name: "COOLING WATER FLOW RATE (STA.) Lower Limit L/min", device: "D4316", type: "decimal", scale: 0.1 },
+  { name: "ACCEL. POINT Upper Limit mm", device: "D4254", type: "decimal", scale: 1 },
+  { name: "ACCEL. POINT Lower Limit mm", device: "D4304", type: "decimal", scale: 1 },
+  { name: "DEACEL. POINT Upper Limit mm", device: "D4255", type: "decimal", scale: 1 },
+  { name: "DEACEL. POINT Lower Limit mm", device: "D4305", type: "decimal", scale: 1 },
+  { name: "INTEN. TIME Upper Limit msec", device: "D4257", type: "decimal", scale: 1 },
+  { name: "INTEN. TIME Lower Limit msec", device: "D4307", type: "decimal", scale: 1 },
+  { name: "BISCUIT THICKNESS Upper Limit mm", device: "D4258", type: "decimal", scale: 1 },
+  { name: "BISCUIT THICKNESS Lower Limit mm", device: "D4308", type: "decimal", scale: 1 },
+  { name: "JET COOLING PRESSURE Upper Limit kgf/cm2", device: "D4277", type: "decimal", scale: 0.1 },
+  { name: "JET COOLING PRESSURE Lower Limit kgf/cm2", device: "D4327", type: "decimal", scale: 0.1 },
+  { name: "CLAMP TONNAGE(HE.LOW) Upper Limit %", device: "D4259", type: "decimal", scale: 1 },
+  { name: "CLAMP TONNAGE(HE.LOW) Lower Limit %", device: "D4309", type: "decimal", scale: 1 },
+  { name: "CLAMP TONNAGE(HE.LOW) Upper Limit MN", device: "D4260", type: "decimal", scale: 0.01 },
+  { name: "CLAMP TONNAGE(HE.LOW) Lower Limit MN", device: "D4310", type: "decimal", scale: 0.01 },
+  { name: "CLAMP TONNAGE(OP.UP) Upper Limit %", device: "D4261", type: "decimal", scale: 1 },
+  { name: "CLAMP TONNAGE(OP.UP) Lower Limit %", device: "D4311", type: "decimal", scale: 1 },
+  { name: "CLAMP TONNAGE(OP.LOW) Upper Limit %", device: "D4262", type: "decimal", scale: 1 },
+  { name: "CLAMP TONNAGE(OP.LOW) Lower Limit %", device: "D4312", type: "decimal", scale: 1 },
+  { name: "CLAMP TONNAGE(HE.UP) Upper Limit %", device: "D4263", type: "decimal", scale: 1 },
+  { name: "CLAMP TONNAGE(HE.UP) Lower Limit %", device: "D4313", type: "decimal", scale: 1 },
+  { name: "VACUUM PRESSURE Upper Limit mbar", device: "D4264", type: "decimal", scale: 1 },
+  { name: "VACUUM PRESSURE Lower Limit mbar", device: "D4314", type: "decimal", scale: 1 },
 ];
 
 function mergeUbeReadParameters(configuredParameters = []) {
@@ -1024,6 +1024,84 @@ function getFixedReadingColumnNames() {
 // FORMAT HELPERS
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+const LIMIT_DIVIDE_BY_HUNDRED = new Set([
+  "v1_speed_upper_limit",
+  "v1_speed_lower_limit",
+  "v2_speed_upper_limit",
+  "v2_speed_lower_limit",
+  "v3_speed_upper_limit",
+  "v3_speed_lower_limit",
+  "v4_speed_upper_limit",
+  "v4_speed_lower_limit",
+  "clamp_tonnage_he_low_mn_upper_limit",
+  "clamp_tonnage_he_low_mn_lower_limit",
+]);
+
+const LIMIT_DIVIDE_BY_TEN = new Set([
+  "die_close_core_in_time_upper_limit",
+  "die_close_core_in_time_lower_limit",
+  "pouring_time_upper_limit",
+  "pouring_time_lower_limit",
+  "shot_fwd_time_upper_limit",
+  "shot_fwd_time_lower_limit",
+  "curing_time_upper_limit",
+  "curing_time_lower_limit",
+  "die_open_core_out_time_upper_limit",
+  "die_open_core_out_time_lower_limit",
+  "ejector_time_upper_limit",
+  "ejector_time_lower_limit",
+  "extract_time_upper_limit",
+  "extract_time_lower_limit",
+  "spray_time_upper_limit",
+  "spray_time_lower_limit",
+  "metal_pressure_upper_limit",
+  "metal_pressure_lower_limit",
+  "cooling_water_mov_upper_limit",
+  "cooling_water_mov_lower_limit",
+  "cooling_water_sta_upper_limit",
+  "cooling_water_sta_lower_limit",
+  "jet_cooling_pressure_upper_limit",
+  "jet_cooling_pressure_lower_limit",
+  "fix_1_flow_upper_limit",
+  "fix_1_flow_lower_limit",
+  "fix_2_flow_upper_limit",
+  "fix_2_flow_lower_limit",
+  "fix_3_flow_upper_limit",
+  "fix_3_flow_lower_limit",
+  "mov_1_flow_upper_limit",
+  "mov_1_flow_lower_limit",
+  "mov_2_flow_upper_limit",
+  "mov_2_flow_lower_limit",
+  "mov_3_flow_upper_limit",
+  "mov_3_flow_lower_limit",
+]);
+
+function scaleLimitValueForApi(key, val) {
+  if (val === null || val === undefined) return val;
+  const num = Number(val);
+  if (!Number.isFinite(num)) return val;
+
+  const keyLower = String(key).toLowerCase();
+
+  if (LIMIT_DIVIDE_BY_HUNDRED.has(keyLower)) {
+    if (num > 10) return Number((num / 100).toFixed(2));
+  } else if (LIMIT_DIVIDE_BY_TEN.has(keyLower)) {
+    if (num > 10) return Number((num / 10).toFixed(1));
+  } else if (keyLower.endsWith("_upper_limit") || keyLower.endsWith("_lower_limit")) {
+    if (
+      keyLower.startsWith("v1_speed") ||
+      keyLower.startsWith("v2_speed") ||
+      keyLower.startsWith("v3_speed") ||
+      keyLower.startsWith("v4_speed") ||
+      keyLower.includes("clamp_tonnage_he_low_mn")
+    ) {
+      if (num > 10) return Number((num / 100).toFixed(2));
+    }
+  }
+
+  return val;
+}
+
 function formatDbRowForClient(row = {}) {
   let rawReadings = {};
   try {
@@ -1060,6 +1138,12 @@ function formatDbRowForClient(row = {}) {
   for (const column of TWO_DIGIT_READING_COLUMNS) {
     if (Object.prototype.hasOwnProperty.call(next, column)) {
       next[column] = pad2(next[column]);
+    }
+  }
+
+  for (const [key, value] of Object.entries(next)) {
+    if (key.endsWith("_upper_limit") || key.endsWith("_lower_limit")) {
+      next[key] = scaleLimitValueForApi(key, value);
     }
   }
 
@@ -5218,6 +5302,7 @@ module.exports = {
   buildReadingsCsv,
   buildReadingsExcelXml,
   buildConnectionEventsExcelXml,
+  formatDbRowForClient,
 };
 
 

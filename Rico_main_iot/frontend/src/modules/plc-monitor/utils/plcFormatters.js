@@ -118,11 +118,17 @@ function getScaledDisplayValue(normalizedName, value) {
       normalizedName.startsWith("v4_speed") ||
       normalizedName.includes("clamp_tonnage_he_low_mn")
     ) {
-      return Number((numericValue / 100).toFixed(2));
+      if (numericValue > 10) {
+        return Number((numericValue / 100).toFixed(2));
+      }
+      return numericValue;
     }
     const baseName = normalizedName.replace(/_(upper|lower)_limit$/, "");
     if (DISPLAY_DIVIDE_BY_TEN_FIELDS.has(baseName)) {
-      return Number((numericValue / 10).toFixed(1));
+      if (numericValue > 10) {
+        return Number((numericValue / 10).toFixed(1));
+      }
+      return numericValue;
     }
   }
 
