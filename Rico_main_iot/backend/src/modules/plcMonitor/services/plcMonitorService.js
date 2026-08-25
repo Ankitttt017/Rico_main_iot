@@ -1083,20 +1083,39 @@ function scaleLimitValueForApi(key, val) {
 
   const keyLower = String(key).toLowerCase();
 
-  if (LIMIT_DIVIDE_BY_HUNDRED.has(keyLower)) {
-    if (num > 10) return Number((num / 100).toFixed(2));
-  } else if (LIMIT_DIVIDE_BY_TEN.has(keyLower)) {
-    if (num > 10) return Number((num / 10).toFixed(1));
-  } else if (keyLower.endsWith("_upper_limit") || keyLower.endsWith("_lower_limit")) {
-    if (
-      keyLower.startsWith("v1_speed") ||
-      keyLower.startsWith("v2_speed") ||
-      keyLower.startsWith("v3_speed") ||
-      keyLower.startsWith("v4_speed") ||
-      keyLower.includes("clamp_tonnage_he_low_mn")
-    ) {
-      if (num > 10) return Number((num / 100).toFixed(2));
+  if (
+    LIMIT_DIVIDE_BY_HUNDRED.has(keyLower) ||
+    keyLower.startsWith("v1_speed") ||
+    keyLower.startsWith("v2_speed") ||
+    keyLower.startsWith("v3_speed") ||
+    keyLower.startsWith("v4_speed") ||
+    keyLower.includes("clamp_tonnage_he_low_mn")
+  ) {
+    if (num > 10) {
+      return Number((num / 100).toFixed(2));
     }
+    return num;
+  }
+
+  if (LIMIT_DIVIDE_BY_TEN.has(keyLower)) {
+    if (num > 80) {
+      return Number((num / 10).toFixed(1));
+    }
+    const baseName = keyLower.replace(/_(upper|lower)_limit$/, "");
+    if (
+      [
+        "die_close_core_in_time",
+        "pouring_time",
+        "shot_fwd_time",
+        "die_open_core_out_time",
+        "ejector_time",
+      ].includes(baseName)
+    ) {
+      if (num > 15) {
+        return Number((num / 10).toFixed(1));
+      }
+    }
+    return num;
   }
 
   return val;
