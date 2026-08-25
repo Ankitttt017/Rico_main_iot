@@ -32,9 +32,9 @@ jobs:
 
       - name: Install native SQL driver prerequisites
         run: |
-          sudo sed -i 's/azure.archive.ubuntu.com/archive.ubuntu.com/g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null || true
-          sudo apt-get update -o Acquire::http::Timeout="10" -o Acquire::Retries="2"
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends unixodbc-dev
+          sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null || true
+          sudo apt-get update -o Acquire::http::Timeout="30" -o Acquire::Retries="3" || true
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends unixodbc-dev || true
 
 
       - name: Install and build frontend
