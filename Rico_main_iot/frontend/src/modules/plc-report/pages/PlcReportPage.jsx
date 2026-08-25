@@ -1364,7 +1364,6 @@ function buildColumns(rows, options = {}) {
 
   if (!hideLeakTestFields && !isGauge) {
     const plantColumns = PLANT_ENVIRONMENT_COLUMNS.filter((key) =>
-      Array.from(rawKeys).some((rk) => normalizeColumnKey(rk) === normalizeColumnKey(key)) &&
       !isHiddenForReport(key, hideLeakTestFields, isGauge) &&
       !seenNormalizedKeys.has(normalizeColumnKey(key))
     );

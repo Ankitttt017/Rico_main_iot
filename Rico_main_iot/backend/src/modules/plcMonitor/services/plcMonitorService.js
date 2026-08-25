@@ -3383,9 +3383,22 @@ function startPlcMonitor(io) {
     for (const parameter of readParameters) {
       const { name, device, stringDevice, computed } = parameter;
       try {
+        const normalizedParamName = normalizeRegisterName(name);
+        if (normalizedParamName === "plant_temperature" || normalizedParamName === "plant_humidity") {
+          if (readings[name] !== undefined && readings[name] !== null) continue;
+          if (readings[normalizedParamName] !== undefined && readings[normalizedParamName] !== null) {
+            readings[name] = readings[normalizedParamName];
+            continue;
+          }
+        }
         if (computed === "serial") { readings[name] = reportSerial; continue; }
         if (computed === "shotTime") { readings[name] = shotTime; continue; }
-        if (!device && !stringDevice) { readings[name] = null; continue; }
+        if (!device && !stringDevice) {
+          if (readings[name] === undefined) {
+            readings[name] = null;
+          }
+          continue;
+        }
         if (skipStringParameters && (stringDevice || isStringRegisterType(parameter.type))) {
           readings[name] = null;
           continue;
