@@ -180,6 +180,16 @@ async function readUbeShotTimestamp(sock, fallbackDate = new Date()) {
   }
 }
 
+function getPlantFallbackTemperature() {
+  const envVal = Number(process.env.PLC_PLANT_TEMPERATURE_DEFAULT || process.env.PLC_PLANT_TEMPERATURE_FALLBACK || 30.0);
+  return Number.isFinite(envVal) ? Number(envVal.toFixed(2)) : 30.0;
+}
+
+function getPlantFallbackHumidity() {
+  const envVal = Number(process.env.PLC_PLANT_HUMIDITY_DEFAULT || process.env.PLC_PLANT_HUMIDITY_FALLBACK || 60.0);
+  return Number.isFinite(envVal) ? Number(envVal.toFixed(2)) : 60.0;
+}
+
 async function readPlantEnvironmentUnlocked() {
   if (!PLANT_ENVIRONMENT_ENABLED) return {};
   let sock = null;
@@ -201,13 +211,25 @@ async function readPlantEnvironmentUnlocked() {
       `plant humidity ${PLANT_ENVIRONMENT_HUMIDITY_DEVICE}`
     );
 
+    const normTemp = normalizePlantEnvironmentValue(temperature);
+    const normHum = normalizePlantEnvironmentValue(humidity);
+
     return {
-      plant_temperature: normalizePlantEnvironmentValue(temperature),
-      plant_humidity: normalizePlantEnvironmentValue(humidity),
+      plant_temperature: normTemp ?? getPlantFallbackTemperature(),
+      plant_humidity: normHum ?? getPlantFallbackHumidity(),
     };
+  } catch (error) {
+    console.warn(
+      `Plant environment PLC read failed (${PLANT_ENVIRONMENT_MACHINE.ip}:${PLANT_ENVIRONMENT_MACHINE.port}): ${error.message}. Using default environmental readings.`
+    );
   } finally {
     closeSocket(sock);
   }
+
+  return {
+    plant_temperature: getPlantFallbackTemperature(),
+    plant_humidity: getPlantFallbackHumidity(),
+  };
 }
 
 async function getPlantEnvironmentReadings() {
@@ -1164,6 +1186,13 @@ function formatDbRowForClient(row = {}) {
     if (key.endsWith("_upper_limit") || key.endsWith("_lower_limit")) {
       next[key] = scaleLimitValueForApi(key, value);
     }
+  }
+
+  if (next.plant_temperature === null || next.plant_temperature === undefined) {
+    next.plant_temperature = getPlantFallbackTemperature();
+  }
+  if (next.plant_humidity === null || next.plant_humidity === undefined) {
+    next.plant_humidity = getPlantFallbackHumidity();
   }
 
   return next;

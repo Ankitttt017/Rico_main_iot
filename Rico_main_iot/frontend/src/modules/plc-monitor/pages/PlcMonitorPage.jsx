@@ -375,7 +375,11 @@ function buildConfiguredGroups(machineKind, machine = {}, readings = {}) {
   const runtimeItems = RUNTIME_MONITOR_FIELDS
     .filter((item) => !configuredNames.has(normalizeMonitorFieldName(item.name)))
     .filter((item) => !machineHiddenFields.has(normalizeMonitorFieldName(item.name)))
-    .filter((item) => hasReadableValue(getReadingValue(readings, item.name)))
+    .filter((item) => {
+      const norm = normalizeMonitorFieldName(item.name);
+      if (norm === "plant_temperature" || norm === "plant_humidity") return true;
+      return hasReadableValue(getReadingValue(readings, item.name));
+    })
     .map((item) => ({
       ...item,
       unit: item.name === "plant_temperature" ? "C" : item.name === "plant_humidity" ? "%" : "",
