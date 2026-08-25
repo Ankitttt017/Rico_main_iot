@@ -1076,8 +1076,6 @@ const LIMIT_DIVIDE_BY_TEN = new Set([
   "extract_time_lower_limit",
   "spray_time_upper_limit",
   "spray_time_lower_limit",
-  "metal_pressure_upper_limit",
-  "metal_pressure_lower_limit",
   "cooling_water_mov_upper_limit",
   "cooling_water_mov_lower_limit",
   "cooling_water_sta_upper_limit",

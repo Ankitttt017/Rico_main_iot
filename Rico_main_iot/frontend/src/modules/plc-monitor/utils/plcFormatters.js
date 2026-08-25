@@ -123,6 +123,9 @@ function getScaledDisplayValue(normalizedName, value) {
       return numericValue;
     }
     const baseName = normalizedName.replace(/_(upper|lower)_limit$/, "");
+    if (baseName === "metal_pressure") {
+      return numericValue;
+    }
     if (DISPLAY_DIVIDE_BY_TEN_FIELDS.has(baseName)) {
       if (numericValue > 10) {
         return Number((numericValue / 10).toFixed(1));
