@@ -71,7 +71,6 @@ const DISPLAY_DIVIDE_BY_TEN_FIELDS = new Set([
   "metal_pressure",
   "cooling_water_mov",
   "cooling_water_sta",
-  "furnace_metal_temp",
   "jet_cooling_pressure",
   "clamp_tonnage_he_up_pct",
   "clamp_tonnage_op_low_pct",
