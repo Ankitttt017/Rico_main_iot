@@ -1172,6 +1172,15 @@ function formatDbRowForClient(row = {}) {
   delete next.duplicate_rank;
   Object.keys(next).forEach((column) => {
     if (isStoppageOrBreakdownKey(column)) delete next[column];
+    const lowerCol = column.toLowerCase();
+    if (
+      lowerCol.includes("cycle start") ||
+      lowerCol.includes("cycle_start") ||
+      lowerCol.includes("cycle end") ||
+      lowerCol.includes("cycle_end")
+    ) {
+      delete next[column];
+    }
   });
 
   for (const column of TWO_DIGIT_READING_COLUMNS) {

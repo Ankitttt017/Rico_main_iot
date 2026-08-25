@@ -225,6 +225,18 @@ const DROPPED_READING_COLUMNS = new Set([
   "SHOT FWD TIME sec value",
   "AUTO/OK-step value (sec)",
   "AUTO/ROBOT/OK-step value (sec)",
+  "Cycle Start",
+  "cycle_start",
+  "Cycle Start duration (sec)",
+  "cycle_start duration (sec)",
+  "cycle_start_duration_sec",
+  "cycle_end",
+  "Cycle End",
+  "cycle_complete",
+  "Cycle Complete",
+  "Cycle End duration (sec)",
+  "cycle_end duration (sec)",
+  "cycle_end_duration_sec",
 ]);
 
 const LIVE_READING_METADATA_COLUMNS = new Set([
