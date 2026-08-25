@@ -132,6 +132,12 @@ function getScaledDisplayValue(normalizedName, value) {
     }
   }
 
+  if (normalizedName === "clamp_tonnage" || normalizedName === "clamp_tonnage_t") {
+    if (numericValue > 0) {
+      return Number((numericValue / 10).toFixed(1));
+    }
+  }
+
   // Parameter values are already scaled by backend register configuration
   return value;
 }

@@ -213,6 +213,8 @@ const UBE_LIMIT_BASE_COLUMNS = [
   "clamp_tonnage_op_low_pct",
   "clamp_tonnage_he_up_pct",
   "vacuum_pressure",
+  "clamp_tonnage",
+  "clamp_force_pct",
 ];
 const UBE_LIMIT_BASE_SET = new Set(UBE_LIMIT_BASE_COLUMNS);
 
