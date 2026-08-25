@@ -123,7 +123,14 @@ function getScaledDisplayValue(normalizedName, value) {
       return numericValue;
     }
     const baseName = normalizedName.replace(/_(upper|lower)_limit$/, "");
-    if (baseName === "metal_pressure") {
+    if (
+      baseName === "metal_pressure" ||
+      baseName === "cooling_water_sta" ||
+      baseName === "curing_time" ||
+      baseName === "extract_time" ||
+      baseName === "spray_time" ||
+      baseName === "jet_cooling_pressure"
+    ) {
       return numericValue;
     }
     if (DISPLAY_DIVIDE_BY_TEN_FIELDS.has(baseName)) {
