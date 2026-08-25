@@ -377,7 +377,7 @@ function buildConfiguredGroups(machineKind, machine = {}, readings = {}) {
     .filter((item) => !machineHiddenFields.has(normalizeMonitorFieldName(item.name)))
     .filter((item) => {
       const norm = normalizeMonitorFieldName(item.name);
-      if (norm === "plant_temperature" || norm === "plant_humidity") return true;
+      if (norm === "plant_temperature" || norm === "plant_humidity") return machineKind === "ube";
       return hasReadableValue(getReadingValue(readings, item.name));
     })
     .map((item) => ({

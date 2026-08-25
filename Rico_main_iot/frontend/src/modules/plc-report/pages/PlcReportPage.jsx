@@ -1264,6 +1264,10 @@ function isGaugeMachine(machine = {}, rows = []) {
   return inferMachineKind(machine, rows) === "gauge";
 }
 
+function isUbeMachine(machine = {}, rows = []) {
+  return inferMachineKind(machine, rows) === "ube";
+}
+
 function isHiddenForReport(key, hideLeakTestFields = false, isGauge = false) {
   const normalizedKey = normalizeColumnKey(key);
   if (isGauge && ["cycle_start", "cycle_complete"].includes(normalizedKey)) return false;
@@ -1309,6 +1313,7 @@ function orderUbeLimitColumns(columns = []) {
 function buildColumns(rows, options = {}) {
   const hideLeakTestFields = Boolean(options.hideLeakTestFields);
   const isGauge = Boolean(options.isGauge);
+  const isUbe = Boolean(options.isUbe);
   if (isGauge) return GAUGE_REPORT_COLUMNS;
 
   const rawKeys = new Set();
@@ -1362,7 +1367,7 @@ function buildColumns(rows, options = {}) {
       }
     });
 
-  if (!hideLeakTestFields && !isGauge) {
+  if (isUbe && rows.length > 0) {
     const plantColumns = PLANT_ENVIRONMENT_COLUMNS.filter((key) =>
       !isHiddenForReport(key, hideLeakTestFields, isGauge) &&
       !seenNormalizedKeys.has(normalizeColumnKey(key))
@@ -1771,10 +1776,14 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     [filteredRows, selectedMachine]
   );
   const isGaugeReport = selectedMachineIsGauge || showGaugeFields;
+  const isUbeReport = useMemo(
+    () => Boolean(selectedMachineId) && filtersApplied && !isLeakReport && !isGaugeReport && isUbeMachine(selectedMachine, filteredRows),
+    [selectedMachineId, filtersApplied, isLeakReport, isGaugeReport, selectedMachine, filteredRows]
+  );
 
   const columns = useMemo(
-    () => buildColumns(filteredRows, { hideLeakTestFields, isGauge: showGaugeFields }),
-    [filteredRows, hideLeakTestFields, showGaugeFields]
+    () => buildColumns(filteredRows, { hideLeakTestFields, isGauge: showGaugeFields, isUbe: isUbeReport }),
+    [filteredRows, hideLeakTestFields, showGaugeFields, isUbeReport]
   );
 
   const reportRows = useMemo(
