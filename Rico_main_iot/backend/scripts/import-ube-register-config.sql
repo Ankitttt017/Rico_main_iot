@@ -31,9 +31,7 @@ DECLARE @ube_register_config NVARCHAR(MAX) = N'[
   {"name":"INTEN. TIME msec","device":"D6914","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Shot Setup","unit":"msec"},
   {"name":"BISCUIT THICKNESS mm","device":"D6916","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Shot Setup","unit":"mm"},
   {"name":"METAL PRESS. Mpa","device":"D6912","type":"decimal","scale":0.1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Pressure & Tonnage","unit":"MPa"},
-  {"name":"CLAMP TONNAGE(HE.LOW) %","device":"D6918","type":"decimal","scale":1,"e
-  nabled":true,"show_on_monitor":true,"log_history":true,"group":"Pressure & Tonnage","unit":"%"},
-  {"name":"CLAMP TONNAGE(HE.LOW) MN","device":"D6920","type":"decimal","scale":0.01,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Pressure & Tonnage","unit":"MN"},
+  {"name":"CLAMP TONNAGE(HE.LOW) %","device":"D6918","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Pressure & Tonnage","unit":"%"},
   {"name":"CLAMP TONNAGE(OP.UP) %","device":"D6922","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Pressure & Tonnage","unit":"%"},
   {"name":"CLAMP TONNAGE(OP.LOW) %","device":"D6924","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Pressure & Tonnage","unit":"%"},
   {"name":"CLAMP TONNAGE(HE.UP) %","device":"D6926","type":"decimal","scale":1,"enabled":true,"show_on_monitor":true,"log_history":true,"group":"Pressure & Tonnage","unit":"%"},

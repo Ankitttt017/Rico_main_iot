@@ -1157,6 +1157,13 @@ function formatDbRowForClient(row = {}) {
 
   for (const column of DROPPED_READING_COLUMNS) delete next[column];
   delete next.duplicate_rank;
+  delete next.clamp_tonnage_he_low_mn;
+  delete next.clamp_tonnage_he_low_mn_upper_limit;
+  delete next.clamp_tonnage_he_low_mn_lower_limit;
+  delete next.clamp_tonnage_he_low_mn_status;
+  delete next["CLAMP TONNAGE(HE.LOW) MN"];
+  delete next["CLAMP TONNAGE(HE.LOW) Upper Limit MN"];
+  delete next["CLAMP TONNAGE(HE.LOW) Lower Limit MN"];
   Object.keys(next).forEach((column) => {
     if (isStoppageOrBreakdownKey(column)) delete next[column];
     const lowerCol = column.toLowerCase();

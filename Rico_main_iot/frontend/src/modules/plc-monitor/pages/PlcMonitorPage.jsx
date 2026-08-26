@@ -313,6 +313,12 @@ const UI_CARD_HIDDEN_NAMES = new Set([
   "Shot Hour",
   "Shot Minute",
   "Shot Second",
+  "clamp_tonnage_he_low_mn",
+  "clamp_tonnage_he_low_mn_upper_limit",
+  "clamp_tonnage_he_low_mn_lower_limit",
+  "CLAMP TONNAGE(HE.LOW) MN",
+  "CLAMP TONNAGE(HE.LOW) Upper Limit MN",
+  "CLAMP TONNAGE(HE.LOW) Lower Limit MN",
 ]);
 
 const RUNTIME_MONITOR_FIELDS = [
