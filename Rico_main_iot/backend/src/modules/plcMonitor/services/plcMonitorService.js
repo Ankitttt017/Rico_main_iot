@@ -72,7 +72,7 @@ const PLANT_ENVIRONMENT_ENABLED =
   String(process.env.PLC_PLANT_ENVIRONMENT_ENABLED || "true").toLowerCase() !== "false";
 const PLANT_ENVIRONMENT_MACHINE = {
   ip: process.env.PLC_PLANT_ENVIRONMENT_IP || "192.168.119.206",
-  port: Number(process.env.PLC_PLANT_ENVIRONMENT_PORT || 5002),
+  port: Number(process.env.PLC_PLANT_ENVIRONMENT_PORT || 5001),
 };
 const PLANT_ENVIRONMENT_TEMPERATURE_DEVICE =
   String(process.env.PLC_PLANT_TEMPERATURE_DEVICE || "D210").trim().toUpperCase();
