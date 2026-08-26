@@ -3520,7 +3520,7 @@ function startPlcMonitor(io) {
       readings.clamp_tonnage_he_low_mn !== undefined &&
       readings.clamp_tonnage_he_low_mn !== null
     ) {
-      readings.clamp_tonnage = Number(Number(readings.clamp_tonnage_he_low_mn).toFixed(2));
+      readings.clamp_tonnage = Number((Number(readings.clamp_tonnage_he_low_mn) * 100).toFixed(0));
       readings["CLAMP TONNAGE (T)"] = readings.clamp_tonnage;
     }
     delete readings.ng_shot;

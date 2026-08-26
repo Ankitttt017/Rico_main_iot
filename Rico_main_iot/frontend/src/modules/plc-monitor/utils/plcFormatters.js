@@ -142,8 +142,14 @@ function getScaledDisplayValue(normalizedName, value) {
   }
 
   if (normalizedName === "clamp_tonnage" || normalizedName === "clamp_tonnage_t") {
-    if (numericValue > 0) {
-      return Number((numericValue / 10).toFixed(1));
+    if (numericValue !== null && numericValue > 0) {
+      if (numericValue < 20) {
+        return Number((numericValue * 100).toFixed(0));
+      }
+      if (numericValue < 200) {
+        return Number((numericValue * 10).toFixed(0));
+      }
+      return Number(numericValue.toFixed(0));
     }
   }
 
