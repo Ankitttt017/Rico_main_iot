@@ -4781,10 +4781,36 @@ function startPlcMonitor(io) {
                   );
                   for (let missingShot = lastSavedCycleShot + 1; missingShot < numericShot; missingShot += 1) {
                     try {
+                      const cycleSec = Number(payload.rawReadings?.cycle_time || payload.rawReadings?.cycle_time_sec || 65);
+                      const stepsBack = numericShot - missingShot;
+                      const baseTs = new Date(payload.timestamp || Date.now()).getTime();
+                      const missingTs = new Date(baseTs - (stepsBack * Math.max(10, cycleSec) * 1000));
+                      const mShotDate = buildShotDateValue(
+                        missingTs.getFullYear(),
+                        missingTs.getMonth() + 1,
+                        missingTs.getDate()
+                      );
+                      const mShotTime = buildShotTimeValue(
+                        missingTs.getHours(),
+                        missingTs.getMinutes(),
+                        missingTs.getSeconds()
+                      );
+
                       const missingReadings = {
                         ...(payload.rawReadings || {}),
                         shot_number: missingShot,
                         "SHOT NO.": missingShot,
+                        shot_datetime: missingTs.toISOString(),
+                        recorded_at: missingTs.toISOString(),
+                        created_at: missingTs.toISOString(),
+                        shot_date: getProductionDate(mShotDate, mShotTime) || mShotDate,
+                        shot_time: mShotTime,
+                        shot_year: pad2(missingTs.getFullYear()),
+                        shot_month: pad2(missingTs.getMonth() + 1),
+                        shot_day: pad2(missingTs.getDate()),
+                        shot_hour: pad2(missingTs.getHours()),
+                        shot_minute: pad2(missingTs.getMinutes()),
+                        shot_second: pad2(missingTs.getSeconds()),
                       };
                       await persistUbeReading(
                         machine,
