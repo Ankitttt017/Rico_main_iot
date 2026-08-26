@@ -269,6 +269,7 @@ const UBE_LEGACY_REPORT_COLUMNS = Array.from(new Set(Object.values(LEGACY_COLUMN
 const REPORT_COLUMNS = [
   ["machine_name", "Machine"],
   ["part_name", "Part Name"],
+  ["die_name", "Die Name"],
   ["part_qr_code", "Part QR Code"],
   ["shot_datetime", "Shot Date Time"],
   ["shot_date_full", "Shot Date"],

@@ -133,6 +133,7 @@ const PREFERRED_COLUMNS = [
   "plc_ip",
   "plc_port",
   "part_name",
+  "die_name",
   "shot_date",
   "shot_time",
   SHIFT_COLUMN,
@@ -239,6 +240,8 @@ const CLAMP_TONNAGE_PCT_AS_MN_COLUMNS = new Set([
 
 const REPORT_LABELS = {
   ...DISPLAY_LABELS,
+  part_name: "Part Name",
+  die_name: "Die Name",
   shot_status: "Shot Result",
   scan_data: "Scan Data",
   scan_time: "Scan Time",
@@ -962,11 +965,38 @@ function formatValue(value, key) {
   return String(displayValue);
 }
 
+function splitPartAndDieName(fullPartName) {
+  if (!fullPartName || typeof fullPartName !== "string") {
+    return { partName: fullPartName || "-", dieName: "-" };
+  }
+  const str = fullPartName.trim();
+  const match = str.match(/^(.*?)[-_]?(S[-_]?\d+)$/i);
+  if (match && match[1] && match[2]) {
+    return {
+      partName: match[1].trim(),
+      dieName: match[2].trim(),
+    };
+  }
+  return {
+    partName: str,
+    dieName: "-",
+  };
+}
+
 function formatReportCell(row, key, rowIndex = 0, rowCount = 0, rows = []) {
   if (key === SERIAL_COLUMN) return row[SERIAL_COLUMN] || Math.max(1, rowCount - rowIndex);
   if (key === SHIFT_COLUMN) return getRowShift(row);
   if (key === TESTING_MODE_COLUMN) return getTestingModeValue(row);
   if (key === "scan_time") return formatTimeParts24Hour(getRowTimeParts(row));
+  if (normalizeColumnKey(key) === "part_name") {
+    const rawPartName = String(getReportDisplayValue(row, key) || row.part_name || "");
+    return splitPartAndDieName(rawPartName).partName;
+  }
+  if (normalizeColumnKey(key) === "die_name") {
+    if (row.die_name && row.die_name !== "-") return row.die_name;
+    const rawPartName = String(row.part_name || getReportDisplayValue(row, "part_name") || "");
+    return splitPartAndDieName(rawPartName).dieName;
+  }
   if (normalizeColumnKey(key) === "scan_data") {
     return formatValue(row.scan_data || row.part_scan_data || row.part_qr_code, key);
   }
@@ -1389,7 +1419,8 @@ function getColumnWidth(key) {
   if (key === TESTING_MODE_COLUMN) return 140;
   if (key === "recorded_at") return 150;
   if (key === "machine_name") return 140;
-  if (["part_name", "part_qr_code", "scan_data", "part_scan_data"].includes(normalizedKey)) return 240;
+  if (key === "die_name") return 120;
+  if (["part_name", "part_qr_code", "scan_data", "part_scan_data"].includes(normalizedKey)) return 180;
   if (key === "shot_status") return 135;
   if (key === "average_die_clamp_tonnage_count") return 230;
   if (String(key).length > 24) return 190;

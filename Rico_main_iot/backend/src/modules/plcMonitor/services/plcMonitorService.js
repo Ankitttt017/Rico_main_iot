@@ -1128,6 +1128,24 @@ function scaleLimitValueForApi(key, val) {
   return val;
 }
 
+function splitPartAndDieName(fullPartName) {
+  if (!fullPartName || typeof fullPartName !== "string") {
+    return { partName: fullPartName || "", dieName: "-" };
+  }
+  const str = fullPartName.trim();
+  const match = str.match(/^(.*?)[-_]?(S[-_]?\d+)$/i);
+  if (match && match[1] && match[2]) {
+    return {
+      partName: match[1].trim(),
+      dieName: match[2].trim(),
+    };
+  }
+  return {
+    partName: str,
+    dieName: "-",
+  };
+}
+
 function formatDbRowForClient(row = {}) {
   let rawReadings = {};
   try {
@@ -1139,6 +1157,14 @@ function formatDbRowForClient(row = {}) {
     ...(rawReadings && typeof rawReadings === "object" && !Array.isArray(rawReadings) ? rawReadings : {}),
     ...row,
   };
+
+  if (next.part_name) {
+    const parsed = splitPartAndDieName(next.part_name);
+    next.part_name = parsed.partName;
+    next.die_name = parsed.dieName;
+  } else {
+    next.die_name = next.die_name || "-";
+  }
 
   if (next.scan_data && !next.part_qr_code) next.part_qr_code = next.scan_data;
   if (next.part_qr_code && !next.scan_data) next.scan_data = next.part_qr_code;
