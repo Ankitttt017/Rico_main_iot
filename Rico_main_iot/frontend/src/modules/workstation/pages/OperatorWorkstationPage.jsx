@@ -102,7 +102,6 @@ const PLC_REGISTER_GROUPS = [
     keys: [
       { name: "metal_pressure", label: "Metal Pressure", unit: "MPa" },
       { name: "clamp_tonnage_he_low_pct", label: "Clamp Tonnage HE Low %", unit: "%" },
-      { name: "clamp_tonnage_he_low_mn", label: "Clamp Tonnage HE Low MN", unit: "MN" },
       { name: "clamp_tonnage_op_up_pct", label: "Clamp Tonnage OP Up %", unit: "%" },
       { name: "clamp_tonnage_op_low_pct", label: "Clamp Tonnage OP Low %", unit: "%" },
       { name: "clamp_tonnage_he_up_pct", label: "Clamp Tonnage HE Up %", unit: "%" },

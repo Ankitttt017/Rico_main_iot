@@ -82,7 +82,6 @@ const DISPLAY_DIVIDE_BY_HUNDRED_FIELDS = new Set([
   "v2_speed",
   "v3_speed",
   "v4_speed",
-  "clamp_tonnage_he_low_mn",
 ]);
 
 const DISPLAY_DIVIDE_BY_HUNDRED_LIMITS = new Set([
@@ -94,8 +93,6 @@ const DISPLAY_DIVIDE_BY_HUNDRED_LIMITS = new Set([
   "v3_speed_lower_limit",
   "v4_speed_upper_limit",
   "v4_speed_lower_limit",
-  "clamp_tonnage_he_low_mn_upper_limit",
-  "clamp_tonnage_he_low_mn_lower_limit",
 ]);
 
 function getNumericDisplayValue(value) {
@@ -114,8 +111,7 @@ function getScaledDisplayValue(normalizedName, value) {
       normalizedName.startsWith("v1_speed") ||
       normalizedName.startsWith("v2_speed") ||
       normalizedName.startsWith("v3_speed") ||
-      normalizedName.startsWith("v4_speed") ||
-      normalizedName.includes("clamp_tonnage_he_low_mn")
+      normalizedName.startsWith("v4_speed")
     ) {
       if (numericValue > 10) {
         return Number((numericValue / 100).toFixed(2));
@@ -354,7 +350,6 @@ const READING_VALUE_ALIASES = {
   "BISCUIT THICKNESS mm": ["biscuit_thickness"],
   "METAL PRESS. Mpa": ["metal_pressure"],
   "CLAMP TONNAGE(HE.LOW) %": ["clamp_tonnage_he_low_pct"],
-  "CLAMP TONNAGE(HE.LOW) MN": ["clamp_tonnage_he_low_mn"],
   "CLAMP TONNAGE(OP.UP) %": ["clamp_tonnage_op_up_pct"],
   "CLAMP TONNAGE(OP.LOW) %": ["clamp_tonnage_op_low_pct"],
   "CLAMP TONNAGE(HE.UP) %": ["clamp_tonnage_he_up_pct"],

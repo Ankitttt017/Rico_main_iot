@@ -1055,8 +1055,6 @@ const LIMIT_DIVIDE_BY_HUNDRED = new Set([
   "v3_speed_lower_limit",
   "v4_speed_upper_limit",
   "v4_speed_lower_limit",
-  "clamp_tonnage_he_low_mn_upper_limit",
-  "clamp_tonnage_he_low_mn_lower_limit",
 ]);
 
 const LIMIT_DIVIDE_BY_TEN = new Set([
@@ -1098,8 +1096,7 @@ function scaleLimitValueForApi(key, val) {
     keyLower.startsWith("v1_speed") ||
     keyLower.startsWith("v2_speed") ||
     keyLower.startsWith("v3_speed") ||
-    keyLower.startsWith("v4_speed") ||
-    keyLower.includes("clamp_tonnage_he_low_mn")
+    keyLower.startsWith("v4_speed")
   ) {
     if (num > 10) {
       return Number((num / 100).toFixed(2));
@@ -3523,6 +3520,13 @@ function startPlcMonitor(io) {
       readings.clamp_tonnage = Number((Number(readings.clamp_tonnage_he_low_mn) * 100).toFixed(0));
       readings["CLAMP TONNAGE (T)"] = readings.clamp_tonnage;
     }
+    delete readings.clamp_tonnage_he_low_mn;
+    delete readings.clamp_tonnage_he_low_mn_upper_limit;
+    delete readings.clamp_tonnage_he_low_mn_lower_limit;
+    delete readings.clamp_tonnage_he_low_mn_status;
+    delete readings["CLAMP TONNAGE(HE.LOW) MN"];
+    delete readings["CLAMP TONNAGE(HE.LOW) Upper Limit MN"];
+    delete readings["CLAMP TONNAGE(HE.LOW) Lower Limit MN"];
     delete readings.ng_shot;
 
     for (const [parameterName, legacyColumn] of Object.entries(LEGACY_COLUMNS_BY_PARAMETER)) {

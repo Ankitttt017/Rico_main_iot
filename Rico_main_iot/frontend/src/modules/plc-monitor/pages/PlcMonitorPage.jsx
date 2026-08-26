@@ -223,7 +223,6 @@ const UI_GROUPS_BY_READING = {
   "VACUUM PRESSURE mbar": "Pressure & Tonnage",
   metal_pressure: "Pressure & Tonnage",
   clamp_tonnage_he_low_pct: "Pressure & Tonnage",
-  clamp_tonnage_he_low_mn: "Pressure & Tonnage",
   clamp_tonnage_op_up_pct: "Pressure & Tonnage",
   clamp_tonnage_op_low_pct: "Pressure & Tonnage",
   clamp_tonnage_he_up_pct: "Pressure & Tonnage",
