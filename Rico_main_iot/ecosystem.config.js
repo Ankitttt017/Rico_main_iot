@@ -16,7 +16,8 @@ module.exports = {
         PLC_RECONNECT_MIN_MS: 2000,
         PLC_RECONNECT_MAX_MS: 30000,
         PLC_RECONNECT_BACKOFF_FACTOR: 1.6,
-        PLC_RECONNECT_JITTER_MS: 1000
+        PLC_RECONNECT_JITTER_MS: 1000,
+        PLC_PLANT_ENVIRONMENT_PORT: 5002
       },
       error_file: require("path").join(__dirname, "backend", "backend.err.log"),
       out_file: require("path").join(__dirname, "backend", "backend.log"),
