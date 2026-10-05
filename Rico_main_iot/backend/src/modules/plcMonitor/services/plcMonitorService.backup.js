@@ -3406,8 +3406,8 @@ function startPlcMonitor(io) {
     const shotHour = shotTimestamp.getHours();
     const shotMinute = shotTimestamp.getMinutes();
     const shotSecond = shotTimestamp.getSeconds();
-    let shotTime = buildShotTimeValue(shotHour, shotMinute, shotSecond);
-    let shotDateTime = buildShotDateTimeValue(
+    const shotTime = buildShotTimeValue(shotHour, shotMinute, shotSecond);
+    const shotDateTime = buildShotDateTimeValue(
       shotYearRaw,
       shotMonthRaw,
       shotDayRaw,
@@ -3415,7 +3415,7 @@ function startPlcMonitor(io) {
       shotMinute,
       shotSecond
     );
-    let cycleTimestamp = shotDateTime;
+    const cycleTimestamp = shotDateTime;
 
     const serialKey = getCanonicalMachineKey(machine);
     const reportSerial = reportSerialByMachine.get(serialKey) || 0;
@@ -3588,38 +3588,6 @@ function startPlcMonitor(io) {
       if (hasValidEnd) {
         if (hasValidStart) readings.cycle_start_time = startedAt.toISOString();
         readings.cycle_end_time = endedAt.toISOString();
-
-        // Match QUAD Gateway: Primary shot date/time is the Cycle End DateTime (when M4598 triggered)
-        const endYear = endedAt.getFullYear();
-        const endMonth = endedAt.getMonth() + 1;
-        const endDay = endedAt.getDate();
-        const endHour = endedAt.getHours();
-        const endMinute = endedAt.getMinutes();
-        const endSecond = endedAt.getSeconds();
-
-        const endFormattedDate = buildShotDateValue(endYear, endMonth, endDay);
-        const endFormattedTime = buildShotTimeValue(endHour, endMinute, endSecond);
-        const endFormattedDateTime = buildShotDateTimeValue(endYear, endMonth, endDay, endHour, endMinute, endSecond);
-        const endProdDate = getProductionDate(endFormattedDate, endFormattedTime) || endFormattedDate;
-
-        readings.metal_injection_datetime = readings.shot_datetime;
-        readings.shot_date = endProdDate;
-        readings.production_date = endProdDate;
-        readings.shot_time = endFormattedTime;
-        readings.shot_datetime = endFormattedDateTime;
-        readings.shot_year = pad2(endYear);
-        readings.shot_month = pad2(endMonth);
-        readings.shot_day = pad2(endDay);
-        readings.shot_hour = pad2(endHour);
-        readings.shot_minute = pad2(endMinute);
-        readings.shot_second = pad2(endSecond);
-        readings["SHOT DATE"] = endProdDate;
-        readings["SHOT TIME"] = endFormattedTime;
-        readings["Shot Date"] = endProdDate;
-        readings["Shot Time"] = endFormattedTime;
-        shotTime = endFormattedTime;
-        shotDateTime = endFormattedDateTime;
-        cycleTimestamp = endFormattedDateTime;
       }
     }
 
@@ -4645,143 +4613,582 @@ function startPlcMonitor(io) {
           continue;
         }
 
-                // ----------------------------------------------------
-        // UBE DIE CASTING MACHINE MONITOR (QUAD Simplified Logic)
-        // ----------------------------------------------------
-        const cycleEndDevice = findConfiguredRegisterDevice(
-          machine,
-          [
-            "Cycle Complete",
-            "Cycle End",
-            "cycle_complete",
-            "cycle_end",
-            "complete",
-          ],
-          process.env.PLC_UBE_CYCLE_END_DEVICE || "M4598"
-        );
-        const pollIntervalMs = Number(process.env.PLC_UBE_CYCLE_END_POLL_MS || process.env.PLC_POLL_MS || 250);
-        const settleDelayMs = Number(process.env.PLC_UBE_CYCLE_END_SETTLE_MS || 300);
-        const liveSnapshotIntervalMs = Number(process.env.PLC_LIVE_SNAPSHOT_INTERVAL_MS || 5000);
-
+        const cycleStartDevice = findConfiguredRegisterDevice(machine, [
+          "Cycle Start",
+          "cycle_start",
+          "start",
+        ]);
+        const cycleEndDevice = findConfiguredRegisterDevice(machine, [
+          "Cycle Complete",
+          "Cycle End",
+          "cycle_complete",
+          "cycle_end",
+          "complete",
+        ], process.env.PLC_UBE_CYCLE_END_DEVICE || "M4598");
         console.log(
-          `[UBE MONITOR] Initialized QUAD logic for ${machine.name} (${machine.ip}): Trigger=${cycleEndDevice}, Poll=${pollIntervalMs}ms, Settle=${settleDelayMs}ms`
+          `PLC UBE cycle signals ${machine.ip}: start=${cycleStartDevice || "-"}, end=${cycleEndDevice || "-"}`
         );
-
-        let triggerActive = false;
-        let lastShotAt = null;
+        let lastCycleStartBit = cycleStartDevice
+          ? await readBit(sock, cycleStartDevice).catch(() => 0)
+          : 0;
+        let cycleStartAt = lastCycleStartBit === 1 ? new Date() : null;
+        let lastCycleEndBit = 0;
+        let cycleEndHandled = false;
         let lastLiveReadAt = 0;
+        let liveReadRunning = false;
         let consecutiveReadFailures = 0;
+        let lastCycleEndQueuedAt = 0;
+        let lastSavedCycleShot = null;
+        let lastDetectedShotNumber = null;
+        let fallbackShotCandidate = null;
+        let lockedStartShotNumber = null;
+        let lockedStartShotTimestamp = null;
+        const cycleEndQueue = [];
+        let cycleEndQueueRunning = false;
+        let plcOperation = Promise.resolve();
 
-        while (isMonitorCurrent()) {
-          if (!monitoringRunning) {
-            await sleep(pollIntervalMs);
-            continue;
+        const runPlcOperation = (operation) => {
+          const run = plcOperation.catch(() => { }).then(operation);
+          plcOperation = run.catch(() => { });
+          return run;
+        };
+
+        const readUbeSnapshotOnDedicatedSocket = async (options, label = "snapshot") => {
+          if (!UBE_ENABLE_DEDICATED_SOCKET || dedicatedSocketFailedMachines.has(machine.ip)) {
+            throw new Error("dedicated socket disabled or unavailable");
           }
-
-          let cycleEndBit = 0;
+          let snapshotSock = null;
           try {
-            cycleEndBit = await readBit(sock, cycleEndDevice);
-            consecutiveReadFailures = 0;
-          } catch (error) {
-            if (isPlcConnectionError(error)) {
-              await refreshSocketAfterTimeout(`UBE trigger ${cycleEndDevice}`);
-              consecutiveReadFailures = 0;
-              await sleep(pollIntervalMs);
-              continue;
+            snapshotSock = await withTimeout(
+              connectPLC(machine),
+              Number(process.env.PLC_UBE_SNAPSHOT_CONNECT_TIMEOUT_MS || 10000),
+              `UBE ${label} connect ${machine.ip}:${machine.port}`
+            );
+            return await readAll(machine, snapshotSock, options);
+          } catch (err) {
+            dedicatedSocketFailedMachines.add(machine.ip);
+            throw err;
+          } finally {
+            closeSocket(snapshotSock);
+          }
+        };
+
+        const captureUbeCycleSnapshot = async ({ startedAt, endedAt, durationSec, trigger = "cycle-end", capturedShotNumber, capturedShotTimestamp }) => {
+          let lastError = null;
+          let lastPayload = null;
+          for (let attempt = 1; attempt <= UBE_CYCLE_END_SAVE_ATTEMPTS; attempt += 1) {
+            try {
+              let payload = null;
+              const snapshotOptions = {
+                persist: false,
+                emit: false,
+                continueOnReadError: true,
+                cycleTiming: endedAt ? { startedAt, endedAt, durationSec } : null,
+              };
+              try {
+                payload = await readUbeSnapshotOnDedicatedSocket(snapshotOptions, "cycle snapshot");
+              } catch (snapshotError) {
+                if (UBE_ENABLE_DEDICATED_SOCKET && !dedicatedSocketFailedMachines.has(machine.ip)) {
+                  console.log(
+                    `PLC Cycle End dedicated snapshot ${machine.ip}: ${snapshotError.message}; using monitor socket`
+                  );
+                }
+                payload = await runPlcOperation(() => readAll(machine, sock, snapshotOptions));
+              }
+              // If we captured a fast shot-number snapshot at the moment the cycle-end
+              // transition was detected, prefer that value over the (later) read value.
+              // Also override the PLC shot timestamp if available so the persisted
+              // report record matches the actual cycle-end event, not a delayed read.
+              if (capturedShotNumber !== null && capturedShotNumber !== undefined) {
+                try {
+                  if (!payload.rawReadings || typeof payload.rawReadings !== "object") payload.rawReadings = {};
+                  payload.rawReadings.shot_number = capturedShotNumber;
+                  if (payload.readings && payload.readings["SHOT NO."]) {
+                    payload.readings["SHOT NO."].value = capturedShotNumber;
+                  }
+                  if (payload.readings && payload.readings.shot_number) {
+                    payload.readings.shot_number.value = capturedShotNumber;
+                  }
+                } catch (e) {
+                  // Non-fatal: if overriding fails, continue with original payload
+                }
+              }
+              if (capturedShotTimestamp) {
+                try {
+                  const shotDate = buildShotDateValue(
+                    new Date(capturedShotTimestamp).getFullYear(),
+                    new Date(capturedShotTimestamp).getMonth() + 1,
+                    new Date(capturedShotTimestamp).getDate()
+                  );
+                  const shotTime = buildShotTimeValue(
+                    new Date(capturedShotTimestamp).getHours(),
+                    new Date(capturedShotTimestamp).getMinutes(),
+                    new Date(capturedShotTimestamp).getSeconds()
+                  );
+                  if (!payload.rawReadings || typeof payload.rawReadings !== "object") payload.rawReadings = {};
+                  payload.rawReadings.shot_datetime = capturedShotTimestamp;
+                  payload.rawReadings.shot_date = getProductionDate(shotDate, shotTime) || shotDate;
+                  payload.rawReadings.shot_time = shotTime;
+                  payload.rawReadings.shot_year = pad2(new Date(capturedShotTimestamp).getFullYear());
+                  payload.rawReadings.shot_month = pad2(new Date(capturedShotTimestamp).getMonth() + 1);
+                  payload.rawReadings.shot_day = pad2(new Date(capturedShotTimestamp).getDate());
+                  payload.rawReadings.shot_hour = pad2(new Date(capturedShotTimestamp).getHours());
+                  payload.rawReadings.shot_minute = pad2(new Date(capturedShotTimestamp).getMinutes());
+                  payload.rawReadings.shot_second = pad2(new Date(capturedShotTimestamp).getSeconds());
+                  if (payload.readings) {
+                    if (payload.readings.shot_datetime) payload.readings.shot_datetime.value = capturedShotTimestamp;
+                    if (payload.readings.shot_date) payload.readings.shot_date.value = payload.rawReadings.shot_date;
+                    if (payload.readings.shot_time) payload.readings.shot_time.value = shotTime;
+                  }
+                  payload.timestamp = capturedShotTimestamp;
+                } catch (e) {
+                  // Non-fatal: if overriding timestamp fails, continue with original payload
+                }
+              }
+              payload.saveResult = await persistUbeReading(
+                machine,
+                payload.partName || machine.partName || "",
+                payload.rawReadings || {}
+              );
+              lastPayload = payload;
+              const savedShotNumber = getFormattedShotNumber(payload) || "-";
+              const saveResult = payload?.saveResult;
+              const saveFinished = !saveResult?.skipped || saveResult.queued;
+
+              if (saveFinished || attempt === UBE_CYCLE_END_SAVE_ATTEMPTS) {
+                if (!saveResult?.skipped || saveResult?.queued) {
+                  const finalReadings = withoutStoppageEventFields(payload.rawReadings || {});
+                  payload.readings = formatReadingsForClient(finalReadings, machine);
+                  payload.cycleTime = finalReadings.cycle_time;
+                  payload.shotTime = finalReadings.shot_time || payload.shotTime;
+                  payload.timestamp = finalReadings.shot_datetime || payload.timestamp;
+                  const emitData = {
+                    machine: machine.name,
+                    machineKey: getCanonicalMachineKey(machine),
+                    machineType: getMachineTypeName(machine),
+                    partName: payload.partName,
+                    shotTime: payload.shotTime,
+                    readings: payload.readings,
+                    cycleTime: payload.cycleTime,
+                    timestamp: payload.timestamp,
+                    observedAt: payload.observedAt,
+                    liveOnly: false,
+                    config: payload.config,
+                  };
+                  io.emit(`plc_data:${emitData.machineKey}`, emitData);
+                  io.emit("plc_data", emitData);
+                  io.emit("cycle_complete", { ...payload, readings: payload.readings });
+                  updateMachineState(machine, {
+                    connected: true,
+                    error: null,
+                    lastCycleAt: payload.timestamp,
+                    lastShotNumber: finalReadings.shot_number,
+                    latestReading: formatLiveReadingSnapshot(
+                      machine,
+                      payload.partName,
+                      finalReadings,
+                      payload.timestamp
+                    ),
+                    partName: payload.partName,
+                    cycleTime: finalReadings.cycle_time,
+                    shotStatus: `${trigger} shot ${savedShotNumber} captured.`,
+                  });
+                }
+                const numericShot = Number(savedShotNumber);
+                if (
+                  !saveResult?.skipped &&
+                  Number.isFinite(numericShot) &&
+                  Number.isFinite(lastSavedCycleShot) &&
+                  numericShot > lastSavedCycleShot + 1 &&
+                  numericShot - lastSavedCycleShot <= 50
+                ) {
+                  console.warn(
+                    `PLC Cycle End missed shot backfilling ${machine.ip}: last=${lastSavedCycleShot}, current=${numericShot}, missing=${lastSavedCycleShot + 1}..${numericShot - 1}`
+                  );
+                  for (let missingShot = lastSavedCycleShot + 1; missingShot < numericShot; missingShot += 1) {
+                    try {
+                      const cycleSec = Number(payload.rawReadings?.cycle_time || payload.rawReadings?.cycle_time_sec || 65);
+                      const stepsBack = numericShot - missingShot;
+                      const baseTs = new Date(payload.timestamp || Date.now()).getTime();
+                      const missingTs = new Date(baseTs - (stepsBack * Math.max(10, cycleSec) * 1000));
+                      const mShotDate = buildShotDateValue(
+                        missingTs.getFullYear(),
+                        missingTs.getMonth() + 1,
+                        missingTs.getDate()
+                      );
+                      const mShotTime = buildShotTimeValue(
+                        missingTs.getHours(),
+                        missingTs.getMinutes(),
+                        missingTs.getSeconds()
+                      );
+
+                      const missingReadings = {
+                        ...(payload.rawReadings || {}),
+                        shot_number: missingShot,
+                        "SHOT NO.": missingShot,
+                        shot_datetime: missingTs.toISOString(),
+                        recorded_at: missingTs.toISOString(),
+                        created_at: missingTs.toISOString(),
+                        shot_date: getProductionDate(mShotDate, mShotTime) || mShotDate,
+                        shot_time: mShotTime,
+                        shot_year: pad2(missingTs.getFullYear()),
+                        shot_month: pad2(missingTs.getMonth() + 1),
+                        shot_day: pad2(missingTs.getDate()),
+                        shot_hour: pad2(missingTs.getHours()),
+                        shot_minute: pad2(missingTs.getMinutes()),
+                        shot_second: pad2(missingTs.getSeconds()),
+                      };
+                      await persistUbeReading(
+                        machine,
+                        payload.partName || machine.partName || "",
+                        missingReadings
+                      );
+                    } catch (e) {
+                      console.error(`Backfill failed for shot ${missingShot}:`, e.message);
+                    }
+                  }
+                }
+                if (!saveResult?.skipped && Number.isFinite(numericShot)) {
+                  lastSavedCycleShot = numericShot;
+                }
+                updateMachineState(machine, {
+                  connected: true,
+                  error: saveResult?.skipped && !saveResult.queued
+                    ? `${trigger} shot ${savedShotNumber} save skipped: ${saveResult.reason}.`
+                    : null,
+                  shotStatus: saveResult?.skipped
+                    ? `${trigger} shot ${savedShotNumber} checked: ${saveResult.reason}.`
+                    : `${trigger} shot ${savedShotNumber} saved.`,
+                });
+                console.log(
+                  `PLC Cycle End snapshot ${machine.ip}: trigger=${trigger}, shot=${savedShotNumber}, attempt=${attempt}, result=${saveResult?.skipped ? `skipped:${saveResult.reason}` : "saved"
+                  }`
+                );
+                return payload;
+              }
+
+              console.warn(
+                `PLC Cycle End snapshot retry ${machine.ip}: trigger=${trigger}, shot=${savedShotNumber}, attempt=${attempt}, reason=${saveResult?.reason || "unknown"}`
+              );
+            } catch (error) {
+              lastError = error;
+              if (attempt === UBE_CYCLE_END_SAVE_ATTEMPTS) break;
+              console.warn(
+                `PLC Cycle End snapshot retry ${machine.ip}: trigger=${trigger}, attempt=${attempt}, error=${error.message}`
+              );
             }
 
+            await sleep(UBE_CYCLE_END_SAVE_RETRY_MS);
+          }
+
+          updateMachineState(machine, {
+            connected: true,
+            error: lastError
+              ? `Cycle snapshot failed: ${lastError.message}`
+              : `Cycle snapshot did not save after ${UBE_CYCLE_END_SAVE_ATTEMPTS} attempts.`,
+          });
+          return lastPayload;
+        };
+
+        const processCycleEndQueue = () => {
+          if (cycleEndQueueRunning) return;
+          cycleEndQueueRunning = true;
+          (async () => {
+            while (cycleEndQueue.length && isMonitorCurrent()) {
+              const event = cycleEndQueue.shift();
+              await captureUbeCycleSnapshot(event);
+            }
+          })()
+            .catch((error) => {
+              console.error(`PLC Cycle End queue ${machine.ip}: ${error.message}`);
+              updateMachineState(machine, {
+                connected: true,
+                error: `Cycle End queue failed: ${error.message}`,
+              });
+            })
+            .finally(() => {
+              cycleEndQueueRunning = false;
+              if (cycleEndQueue.length && isMonitorCurrent()) processCycleEndQueue();
+            });
+        };
+
+        const enqueueUbeCycleEnd = (event) => {
+          const eventTime = event.endedAt instanceof Date ? event.endedAt.getTime() : Date.now();
+          if (eventTime - lastCycleEndQueuedAt < UBE_CYCLE_END_DEBOUNCE_MS) {
+            console.warn(`PLC Cycle End duplicate pulse ignored ${machine.ip}: debounce=${UBE_CYCLE_END_DEBOUNCE_MS}ms`);
+            return false;
+          }
+          lastCycleEndQueuedAt = eventTime;
+          cycleEndQueue.push(event);
+          processCycleEndQueue();
+          return true;
+        };
+
+        const startLiveSnapshotRead = () => {
+          if (liveReadRunning) return;
+          liveReadRunning = true;
+          (async () => {
+            const liveOptions = {
+              persist: false,
+              persistStoppage: true,
+              emit: true,
+              liveOnly: true,
+            };
+            try {
+              try {
+                await readUbeSnapshotOnDedicatedSocket(liveOptions, "live snapshot");
+              } catch (dedicatedError) {
+                if (UBE_ENABLE_DEDICATED_SOCKET && !dedicatedSocketFailedMachines.has(machine.ip) && !isPlcConnectionError(dedicatedError)) {
+                  throw dedicatedError;
+                }
+                if (UBE_ENABLE_DEDICATED_SOCKET && !dedicatedSocketFailedMachines.has(machine.ip)) {
+                  console.log(
+                    `PLC live snapshot dedicated connection unavailable ${machine.ip}: ${dedicatedError.message}; using monitor socket`
+                  );
+                }
+                await runPlcOperation(() => readAll(machine, sock, liveOptions));
+              }
+              consecutiveReadFailures = 0;
+            } catch (error) {
+              if (isPlcReadTimeoutError(error)) {
+                updateMachineState(machine, {
+                  connected: true,
+                  error: `Live read timed out: ${error.message}`,
+                });
+                return;
+              }
+              consecutiveReadFailures += 1;
+              updateMachineState(machine, {
+                connected: true,
+                error: `Live read failed (${consecutiveReadFailures}/${PLC_MAX_CONSECUTIVE_READ_FAILURES}): ${error.message}`,
+              });
+            } finally {
+              liveReadRunning = false;
+            }
+          })().catch((error) => {
+            liveReadRunning = false;
+            console.error(`PLC live snapshot ${machine.ip}: ${error.message}`);
+          });
+        };
+
+        while (isMonitorCurrent()) {
+          if (!monitoringRunning) { await sleep(UBE_CYCLE_END_POLL_MS); continue; }
+
+          const loopStartedAt = Date.now();
+          let cycleStart = lastCycleStartBit;
+          let cycleEnd = lastCycleEndBit;
+          try {
+            [cycleStart, cycleEnd] = await runPlcOperation(async () => [
+              cycleStartDevice ? await readBit(sock, cycleStartDevice) : 0,
+              cycleEndDevice ? await readBit(sock, cycleEndDevice) : 0,
+            ]);
+            consecutiveReadFailures = 0;
+          } catch (error) {
+            if (isPlcReadTimeoutError(error)) {
+              await refreshSocketAfterTimeout(`cycle bits ${cycleStartDevice || ""}/${cycleEndDevice || ""}`);
+              consecutiveReadFailures = 0;
+              lastLiveReadAt = 0;
+              await sleep(UBE_CYCLE_END_POLL_MS);
+              continue;
+            }
             consecutiveReadFailures += 1;
             updateMachineState(machine, {
               connected: true,
               error: `PLC read failed (${consecutiveReadFailures}/${PLC_MAX_CONSECUTIVE_READ_FAILURES}): ${error.message}`,
             });
-
             if (consecutiveReadFailures >= PLC_MAX_CONSECUTIVE_READ_FAILURES) {
               throw new Error(`PLC connection stale after ${consecutiveReadFailures} read failures: ${error.message}`);
             }
-
-            await sleep(pollIntervalMs);
-            continue;
           }
+          const cycleStartedNow = cycleStart === 1 && lastCycleStartBit !== 1;
+          const cycleEndedNow = cycleEnd === 1 && lastCycleEndBit !== 1;
+          if (cycleEnd === 0 && lastCycleEndBit === 1) {
+            cycleEndHandled = false;
+          }
+          const shouldCaptureCycle = cycleEnd === 1 && !cycleEndHandled;
+          const cycleSnapshotPending = Boolean(cycleStartAt) || cycleStart === 1 || cycleEnd === 1;
 
-          // === RISING EDGE (0 -> 1): CYCLE END TRIGGER ===
-          if (cycleEndBit === 1 && !triggerActive) {
-            triggerActive = true;
-            const cycleEndAt = new Date();
+          if (cycleStartedNow) {
+            cycleStartAt = new Date(loopStartedAt);
+            cycleEndHandled = false;
+            lockedStartShotNumber = null;
+            lockedStartShotTimestamp = null;
+            console.log(`[PLC TRIGGER] Cycle Start (M840) DETECTED for ${machine.ip} at ${cycleStartAt.toISOString()}`);
 
-            // Calculate Cycle Time (Duration from previous shot to this shot in seconds)
-            let durationSec = null;
-            if (lastShotAt && !Number.isNaN(lastShotAt.getTime())) {
-              durationSec = Number(((cycleEndAt.getTime() - lastShotAt.getTime()) / 1000).toFixed(1));
+            // Lock shot counter at Cycle Start before PLC increment
+            try {
+              const shotDevice = findConfiguredRegisterDevice(machine, ["SHOT NO.", "Shot Number", "shot_number"]);
+              if (shotDevice) {
+                try {
+                  const snapshot = await runPlcOperation(async () => {
+                    const rawShot = await readWord(sock, shotDevice);
+                    const shotTimestamp = await readUbeShotTimestamp(sock, cycleStartAt);
+                    return { rawShot, shotTimestamp };
+                  });
+                  const numeric = Number(snapshot.rawShot);
+                  lockedStartShotNumber = Number.isFinite(numeric) ? numeric : snapshot.rawShot;
+                  if (snapshot.shotTimestamp instanceof Date && !Number.isNaN(snapshot.shotTimestamp.getTime())) {
+                    lockedStartShotTimestamp = snapshot.shotTimestamp.toISOString();
+                  }
+                } catch (e) {
+                  lockedStartShotNumber = null;
+                  lockedStartShotTimestamp = null;
+                }
+              }
+            } catch (e) {
+              lockedStartShotNumber = null;
+              lockedStartShotTimestamp = null;
             }
-            lastShotAt = cycleEndAt;
 
-            console.log(
-              `[UBE TRIGGER] Cycle End (${cycleEndDevice}=1) DETECTED for ${machine.name} (${machine.ip}) at ${cycleEndAt.toISOString()}`
-            );
+            console.log(`[PLC TRIGGER] Cycle Start Locked Shot #${lockedStartShotNumber} for ${machine.ip}`);
+
             updateMachineState(machine, {
               connected: true,
               error: null,
-              shotStatus: `Cycle end detected. Reading machine data...`,
+              shotStatus: `Cycle started; shot #${lockedStartShotNumber ?? "-"} locked. Waiting for ${cycleEndDevice || "cycle end"}.`,
             });
-
-            // 1. Settle buffer delay for PLC registers to finalize in memory
-            if (settleDelayMs > 0) {
-              await sleep(settleDelayMs);
-            }
-
-            // 2. Read all registers & save to DB & emit WebSocket on the single persistent socket
-            try {
-              const payload = await readAll(machine, sock, {
-                persist: true,
-                emit: true,
-                liveOnly: false,
-                continueOnReadError: true,
-                cycleTiming: {
-                  startedAt: lastShotAt,
-                  endedAt: cycleEndAt,
-                  durationSec,
-                },
-              });
-
-              const shotNum = getFormattedShotNumber(payload) || payload?.rawReadings?.shot_number || "-";
-              const finalCycleTime = payload?.rawReadings?.cycle_time || durationSec;
-
-              console.log(
-                `[UBE SHOT SAVED] Machine=${machine.name} (${machine.ip}): Shot=#${shotNum}, CycleTime=${finalCycleTime ?? "-"}s`
-              );
-            } catch (captureError) {
-              console.error(
-                `[UBE SHOT ERROR] Failed to read cycle snapshot for ${machine.name}: ${captureError.message}`
-              );
-              updateMachineState(machine, {
-                connected: true,
-                error: `Cycle save failed: ${captureError.message}`,
-              });
-            }
-
-          // === FALLING EDGE (1 -> 0): RESET FOR NEXT SHOT ===
-          } else if (cycleEndBit === 0 && triggerActive) {
-            console.log(`[UBE TRIGGER] Cycle End reset (${cycleEndDevice}=0). Ready for next cycle.`);
-            triggerActive = false;
-
-          // === PERIODIC LIVE STATUS (when idle between shots) ===
-          } else if (!triggerActive && (Date.now() - lastLiveReadAt >= liveSnapshotIntervalMs)) {
-            lastLiveReadAt = Date.now();
-            try {
-              await readAll(machine, sock, {
-                persist: false,
-                emit: true,
-                liveOnly: true,
-                continueOnReadError: true,
-              });
-            } catch (liveErr) {
-              // Ignore non-fatal live polling error
-            }
           }
 
-          await sleep(pollIntervalMs);
+          if (shouldCaptureCycle) {
+            fallbackShotCandidate = null;
+            cycleEndHandled = true;
+            const cycleEndAt = new Date();
+            console.log(`[PLC TRIGGER] Cycle End (M4598) DETECTED for ${machine.ip} at ${cycleEndAt.toISOString()}`);
+            const durationSec = cycleStartAt
+              ? Number(((cycleEndAt - cycleStartAt) / 1000).toFixed(2))
+              : null;
+            updateMachineState(machine, {
+              connected: true,
+              error: null,
+              shotStatus: cycleEndedNow
+                ? `Cycle ended; duration ${durationSec ?? "-"} sec. Processing cycle snapshot.`
+                : `Cycle end is ON; duration ${durationSec ?? "-"} sec. Processing cycle snapshot.`,
+            });
+
+            let capturedShotNumber = lockedStartShotNumber;
+            let capturedShotTimestamp = lockedStartShotTimestamp;
+
+            // Take 1000ms delay at Cycle End to allow PLC registers to settle completely
+            const ubeSettleMs = Number(process.env.PLC_UBE_CYCLE_END_SETTLE_MS || 1000);
+            if (ubeSettleMs > 0) {
+              await sleep(ubeSettleMs);
+            }
+            try {
+              const shotDevice = findConfiguredRegisterDevice(machine, ["SHOT NO.", "Shot Number", "shot_number"]);
+              if (shotDevice) {
+                try {
+                  const snapshot = await runPlcOperation(async () => {
+                    const rawShot = await readWord(sock, shotDevice);
+                    const shotTimestamp = await readUbeShotTimestamp(sock, cycleEndAt);
+                    return { rawShot, shotTimestamp };
+                  });
+                  const numeric = Number(snapshot.rawShot);
+                  const endShot = Number.isFinite(numeric) ? numeric : snapshot.rawShot;
+                  capturedShotNumber = endShot;
+                  if (snapshot.shotTimestamp instanceof Date && !Number.isNaN(snapshot.shotTimestamp.getTime())) {
+                    capturedShotTimestamp = snapshot.shotTimestamp.toISOString();
+                  }
+                } catch (e) {
+                  capturedShotNumber = null;
+                  capturedShotTimestamp = null;
+                }
+              }
+            } catch (e) {
+              capturedShotNumber = null;
+              capturedShotTimestamp = null;
+            }
+
+            enqueueUbeCycleEnd({
+              startedAt: cycleStartAt,
+              endedAt: cycleEndAt,
+              durationSec,
+              capturedShotNumber,
+              capturedShotTimestamp,
+            });
+            if (Number.isFinite(capturedShotNumber)) {
+              lastDetectedShotNumber = capturedShotNumber;
+            }
+            cycleStartAt = null;
+            lockedStartShotNumber = null;
+            lockedStartShotTimestamp = null;
+          } else if (!cycleSnapshotPending && loopStartedAt - lastLiveReadAt >= UBE_LIVE_READ_MS) {
+            lastLiveReadAt = loopStartedAt;
+            startLiveSnapshotRead();
+          }
+
+        // Fallback: Detect shot-number change (only if end-bit didn't trigger this cycle)
+        // Triggers instantly at next shot start if electrical cycle end bit was missed
+        if (UBE_SHOT_CHANGE_FALLBACK_ENABLED && !shouldCaptureCycle && cycleEnd !== 1 && cycleStart !== 1) {
+          try {
+            const shotDevice = findConfiguredRegisterDevice(machine, ["SHOT NO.", "Shot Number", "shot_number"]);
+            if (shotDevice) {
+              try {
+                const snapshot = await runPlcOperation(async () => {
+                  const rawShot = await readWord(sock, shotDevice);
+                  const shotTimestamp = await readUbeShotTimestamp(sock, new Date());
+                  return { rawShot, shotTimestamp };
+                });
+                const numeric = Number(snapshot.rawShot);
+                const currentShotNumber = Number.isFinite(numeric) ? numeric : snapshot.rawShot;
+                const currentShotTimestamp =
+                  snapshot.shotTimestamp instanceof Date && !Number.isNaN(snapshot.shotTimestamp.getTime())
+                    ? snapshot.shotTimestamp.toISOString()
+                    : null;
+
+                if (
+                  lastDetectedShotNumber !== null &&
+                  Number.isFinite(currentShotNumber) &&
+                  Number.isFinite(lastDetectedShotNumber) &&
+                  currentShotNumber > lastDetectedShotNumber
+                ) {
+                  console.log(
+                    `PLC Cycle End fallback triggered ${machine.ip}: last=${lastDetectedShotNumber}, current=${currentShotNumber}`
+                  );
+                  cycleEndHandled = true;
+                  const cycleEndAt = new Date();
+                  const durationSec = cycleStartAt
+                    ? Number(((cycleEndAt - cycleStartAt) / 1000).toFixed(2))
+                    : null;
+                  updateMachineState(machine, {
+                    connected: true,
+                    error: null,
+                    shotStatus: `Cycle detected via shot-number fallback; shot=${currentShotNumber}, duration=${durationSec ?? "-"} sec.`,
+                  });
+
+                  enqueueUbeCycleEnd({
+                    startedAt: cycleStartAt,
+                    endedAt: cycleEndAt,
+                    durationSec,
+                    capturedShotNumber: currentShotNumber,
+                    capturedShotTimestamp: currentShotTimestamp,
+                    trigger: "shot-number-change-fallback",
+                  });
+                  cycleStartAt = null;
+                  lockedStartShotNumber = null;
+                  lockedStartShotTimestamp = null;
+                  lastDetectedShotNumber = currentShotNumber;
+                  fallbackShotCandidate = null;
+                } else if (
+                  Number.isFinite(currentShotNumber) &&
+                  (lastDetectedShotNumber === null || currentShotNumber < lastDetectedShotNumber)
+                ) {
+                  lastDetectedShotNumber = currentShotNumber;
+                  fallbackShotCandidate = null;
+                }
+              } catch (e) {
+                // Fallback read failed, continue
+              }
+            }
+          } catch (e) {
+            // Fallback check failed, continue
+          }
         }
+
+        if (cycleEnd === 0) cycleEndHandled = false;
+        lastCycleStartBit = cycleStart;
+        lastCycleEndBit = cycleEnd;
+        await sleep(UBE_CYCLE_END_POLL_MS);
+      }
         if (!isMonitorCurrent()) closeSocket(sock);
     } catch (error) {
       reconnectAttempt += 1;
@@ -4816,7 +5223,6 @@ const startMachineMonitors = async () => {
 const refreshConfiguredMachines = async () => {
   const configuredMachines = await getConfiguredMachines(true);
   const configuredByKey = new Map(configuredMachines.map((machine) => [getCanonicalMachineKey(machine), machine]));
-  const previousMachinesByKey = new Map((machines || []).map((m) => [getCanonicalMachineKey(m), m]));
   let changed = false;
 
   for (const [machineKey] of Array.from(monitorTokens.entries())) {
@@ -4832,12 +5238,11 @@ const refreshConfiguredMachines = async () => {
     const machineKey = getCanonicalMachineKey(machine);
     if (!machineKey) return;
     const currentState = machineState.get(machineKey);
-    const prevConfig = previousMachinesByKey.get(machineKey);
-    const configChanged = prevConfig && (
-      prevConfig.ip !== machine.ip ||
-      Number(prevConfig.port) !== Number(machine.port) ||
-      prevConfig.name !== machine.name ||
-      machineRegisterConfigSignature(prevConfig) !== machineRegisterConfigSignature(machine)
+    const configChanged = currentState && (
+      currentState.ip !== machine.ip ||
+      Number(currentState.port) !== Number(machine.port) ||
+      currentState.name !== machine.name ||
+      machineRegisterConfigSignature(currentState) !== machineRegisterConfigSignature(machine)
     );
 
     if (configChanged) {

@@ -207,9 +207,10 @@ async function readString(sock, startDevice, length) {
   return result.trim().replace(/[^A-Za-z0-9\-_]/g, "");
 }
 
-function tryConnectSocket(ip, port, timeoutMs) {
+function connectPLC(machine) {
   return new Promise((resolve, reject) => {
     const sock = new net.Socket();
+    const timeoutMs = PLC_CONNECT_TIMEOUT_MS;
     let settled = false;
 
     const cleanup = () => {
@@ -229,40 +230,18 @@ function tryConnectSocket(ip, port, timeoutMs) {
     const onTimeout = () => fail(new Error("PLC connection timeout"));
 
     sock.setTimeout(timeoutMs);
-    sock.connect(port, ip, () => {
+    sock.connect(machine.port, machine.ip, () => {
       if (settled) return;
       settled = true;
       cleanup();
       sock.setTimeout(0);
       sock.setKeepAlive(true, Number(process.env.PLC_SOCKET_KEEPALIVE_MS || 10000));
       sock.setNoDelay(true);
-      sock.on("error", () => {});
       resolve(sock);
     });
     sock.on("error", onError);
     sock.on("timeout", onTimeout);
   });
-}
-
-async function connectPLC(machine) {
-  const timeoutMs = PLC_CONNECT_TIMEOUT_MS;
-  const configuredPort = Number(machine.port) || 5002;
-  const candidatePorts = [configuredPort, 5002, 5005, 1026, 1027].filter((p, i, a) => a.indexOf(p) === i);
-
-  let lastError = null;
-  for (const port of candidatePorts) {
-    try {
-      const sock = await tryConnectSocket(machine.ip, port, timeoutMs);
-      if (port !== configuredPort) {
-        console.log(`[PLC AUTO-PORT] ${machine.name || machine.ip} connected on port ${port} (fallback from ${configuredPort})`);
-        machine.port = port;
-      }
-      return sock;
-    } catch (err) {
-      lastError = err;
-    }
-  }
-  throw lastError;
 }
 
 module.exports = {

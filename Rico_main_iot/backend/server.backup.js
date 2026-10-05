@@ -1,13 +1,5 @@
 require("dotenv").config();
 
-// Global crash protection for 24/7 industrial uptime
-process.on("uncaughtException", (err) => {
-  console.error("[CRITICAL SHIELD] Uncaught Exception:", err.message);
-});
-process.on("unhandledRejection", (reason) => {
-  console.error("[CRITICAL SHIELD] Unhandled Rejection:", reason);
-});
-
 const express = require("express");
 const cors = require("cors");
 const http = require("http");
