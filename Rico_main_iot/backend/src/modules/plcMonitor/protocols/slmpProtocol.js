@@ -255,7 +255,7 @@ async function connectPLC(machine) {
       const sock = await tryConnectSocket(machine.ip, port, timeoutMs);
       if (port !== configuredPort) {
         console.log(`[PLC AUTO-PORT] ${machine.name || machine.ip} connected on port ${port} (fallback from ${configuredPort})`);
-        machine.port = port;
+        machine.connectedPort = port;
       }
       return sock;
     } catch (err) {

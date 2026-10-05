@@ -2750,24 +2750,8 @@ async function saveToDBUnlocked(machine, partName, readings) {
         return { skipped: true, reason: "duplicate-exact-timestamp-shot" };
       }
 
-      if (productionDate) {
-        const { rows: sameShotRows } = await db.query(
-          `SELECT TOP 1 id FROM ${TABLE}
-           WHERE (machine_key = ? OR plc_ip = ?)
-             AND TRY_CONVERT(date, COALESCE(shot_date, shot_datetime, recorded_at)) = CAST(? AS date)
-             AND (
-               (TRY_CONVERT(BIGINT, ?) IS NOT NULL AND TRY_CONVERT(BIGINT, shot_number) = TRY_CONVERT(BIGINT, ?))
-               OR
-               (TRY_CONVERT(BIGINT, ?) IS NULL AND LTRIM(RTRIM(CAST(shot_number AS NVARCHAR(80)))) = ?)
-             )
-           ORDER BY recorded_at DESC, id DESC`,
-          [machineKey, machine.ip, productionDate, shotNumber, shotNumber, shotNumber, String(shotNumber).trim()]
-        );
-        if (sameShotRows.length) {
-          console.warn(`PLC DB save skipped (duplicate shot/day): ${machine?.ip || machine?.name || "unknown"} shot=${shotNumber ?? "-"} production_date=${productionDate}`);
-          return { skipped: true, reason: "duplicate-shot-production-date" };
-        }
-      }
+      // Note: Strategy 1 (exact timestamp) & Strategy 2 (15s window below) handle duplicates.
+      // Full-day shot_number deduplication is relaxed to prevent dropping valid cycles if counter resets across shifts.
     }
 
     // Strategy 2: Same machine + shot number within a small time window (15 seconds)
@@ -3394,11 +3378,11 @@ function startPlcMonitor(io) {
     const isGauge = isGaugeMachine(machine);
     const configuredParameters = Array.isArray(machine.registerConfig) ? machine.registerConfig : [];
     const readParameters = isGauge ? configuredParameters : mergeUbeReadParameters(configuredParameters);
-    const shotTimestamp = !isGauge && isUbeMachine(machine)
+    const shotTimestamp = !liveOnly && !isGauge && isUbeMachine(machine)
       ? await readUbeShotTimestamp(sock, fallbackShotTimestamp)
       : fallbackShotTimestamp;
 
-    const livePartName = isGauge ? "" : await readUbePartName(sock, machine);
+    const livePartName = (!liveOnly && !isGauge) ? await readUbePartName(sock, machine) : "";
     const partName = livePartName || (isGauge ? "" : await getLatestKnownUbePartName(machine));
     const shotYearRaw = shotTimestamp.getFullYear();
     const shotMonthRaw = shotTimestamp.getMonth() + 1;
@@ -4659,9 +4643,9 @@ function startPlcMonitor(io) {
           ],
           process.env.PLC_UBE_CYCLE_END_DEVICE || "M4598"
         );
-        const pollIntervalMs = Number(process.env.PLC_UBE_CYCLE_END_POLL_MS || process.env.PLC_POLL_MS || 250);
+        const pollIntervalMs = Number(process.env.PLC_UBE_CYCLE_END_POLL_MS || process.env.PLC_POLL_MS || 200);
         const settleDelayMs = Number(process.env.PLC_UBE_CYCLE_END_SETTLE_MS || 300);
-        const liveSnapshotIntervalMs = Number(process.env.PLC_LIVE_SNAPSHOT_INTERVAL_MS || 5000);
+        const liveSnapshotIntervalMs = Number(process.env.PLC_LIVE_SNAPSHOT_INTERVAL_MS || 10000);
 
         console.log(
           `[UBE MONITOR] Initialized QUAD logic for ${machine.name} (${machine.ip}): Trigger=${cycleEndDevice}, Poll=${pollIntervalMs}ms, Settle=${settleDelayMs}ms`
@@ -4879,8 +4863,8 @@ const refreshConfiguredMachines = async () => {
   if (changed) {
     io.emit("machines", machines);
     emitMachineState();
+    await startMachineMonitors();
   }
-  await startMachineMonitors();
 };
 
 const ensureSchemaAndStart = async () => {
