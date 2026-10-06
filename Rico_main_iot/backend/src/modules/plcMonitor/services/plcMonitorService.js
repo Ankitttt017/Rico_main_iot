@@ -4664,6 +4664,7 @@ function startPlcMonitor(io) {
         let lastDetectedShotNumber = null;
         let lastShotPollAt = 0;
         let lastCounterChangeAt = 0;
+        let currentShotNumber = null;
 
         while (isMonitorCurrent()) {
           if (!monitoringRunning) {
@@ -4672,26 +4673,27 @@ function startPlcMonitor(io) {
           }
 
           let cycleEndBit = 0;
-          let currentShotNumber = null;
           const nowMs = Date.now();
 
           try {
-            cycleEndBit = await readBit(sock, cycleEndDevice);
+            cycleEndBit = await readBit(sock, cycleEndDevice, 2000);
 
-            // Poll shot counter every 1500ms or when trigger bit is active
-            if (shotDevice && (nowMs - lastShotPollAt >= 1500 || cycleEndBit === 1)) {
+            // Poll shot counter every 1200ms or when trigger bit is active
+            if (shotDevice && (nowMs - lastShotPollAt >= 1200 || cycleEndBit === 1)) {
               lastShotPollAt = nowMs;
-              const rawShot = await readWord(sock, shotDevice);
+              const rawShot = await readWord(sock, shotDevice, 2000);
               const numShot = Number(rawShot);
               if (Number.isFinite(numShot) && numShot > 0) {
-                if (currentShotNumber !== null && numShot !== currentShotNumber) {
+                if (currentShotNumber !== null && numShot > currentShotNumber) {
                   lastCounterChangeAt = nowMs;
+                  console.log(`[UBE SHOT ADVANCE] ${machine.name}: Shot counter changed #${currentShotNumber} -> #${numShot}`);
                 }
                 currentShotNumber = numShot;
                 if (lastDetectedShotNumber === null) {
                   lastDetectedShotNumber = numShot;
                   lastSavedCycleShot = numShot;
                 }
+                lastDetectedShotNumber = numShot;
               }
             }
             consecutiveReadFailures = 0;
@@ -4717,90 +4719,18 @@ function startPlcMonitor(io) {
             continue;
           }
 
-          // === AUTOMATIC BACKFILL OF MISSED INTERMEDIATE SHOTS ===
-          // If D1120 has moved 2+ shots ahead (e.g. 1151 -> 1153), intermediate shot(s) (1152)
-          // completed without the momentary M4598 pulse being caught.
-          // Backfill intermediate shots (lastSavedCycleShot + 1 to currentShotNumber - 1) immediately!
-          // Note: currentShotNumber (1153) is STILL RUNNING in the machine (only ~14s in).
-          // We update lastSavedCycleShot = currentShotNumber - 1 so currentShotNumber can finish
-          // naturally when cycleEndBit pulses (M4598) or timeout occurs, avoiding duplicate saves.
-          if (
-            Number.isFinite(currentShotNumber) &&
-            Number.isFinite(lastSavedCycleShot) &&
-            currentShotNumber > lastSavedCycleShot + 1 &&
-            currentShotNumber - lastSavedCycleShot <= 50
-          ) {
-            console.warn(
-              `[UBE BACKFILL] Backfilling missed shot(s) for ${machine.name} (${machine.ip}): #${lastSavedCycleShot + 1} to #${currentShotNumber - 1}`
-            );
-            for (let missingShot = lastSavedCycleShot + 1; missingShot < currentShotNumber; missingShot++) {
-              try {
-                const cycleSec = Number(machine.defaultCycleSec || 65);
-                const stepsBack = currentShotNumber - missingShot;
-                const baseTs = Date.now();
-                const missingTs = new Date(baseTs - stepsBack * Math.max(10, cycleSec) * 1000);
-                const mShotDate = buildShotDateValue(
-                  missingTs.getFullYear(),
-                  missingTs.getMonth() + 1,
-                  missingTs.getDate()
-                );
-                const mShotTime = buildShotTimeValue(
-                  missingTs.getHours(),
-                  missingTs.getMinutes(),
-                  missingTs.getSeconds()
-                );
-                const mShotDateTime = buildShotDateTimeValue(
-                  missingTs.getFullYear(),
-                  missingTs.getMonth() + 1,
-                  missingTs.getDate(),
-                  missingTs.getHours(),
-                  missingTs.getMinutes(),
-                  missingTs.getSeconds()
-                );
-                const missingReadings = {
-                  shot_number: missingShot,
-                  "SHOT NO.": missingShot,
-                  cycle_time: cycleSec,
-                  "CYCLE TIME sec.": cycleSec,
-                  shot_datetime: mShotDateTime,
-                  recorded_at: mShotDateTime,
-                  created_at: mShotDateTime,
-                  shot_date: getProductionDate(mShotDate, mShotTime) || mShotDate,
-                  production_date: getProductionDate(mShotDate, mShotTime) || mShotDate,
-                  shot_time: mShotTime,
-                  shot_year: pad2(missingTs.getFullYear()),
-                  shot_month: pad2(missingTs.getMonth() + 1),
-                  shot_day: pad2(missingTs.getDate()),
-                  shot_hour: pad2(missingTs.getHours()),
-                  shot_minute: pad2(missingTs.getMinutes()),
-                  shot_second: pad2(missingTs.getSeconds()),
-                };
-                await persistUbeReading(
-                  machine,
-                  machine.partName || "",
-                  missingReadings
-                );
-                console.log(
-                  `[UBE SHOT SAVED] Machine=${machine.name} (${machine.ip}): Shot=#${missingShot}, CycleTime=${cycleSec}s [Trigger: Backfill Auto-Recovery]`
-                );
-              } catch (backfillErr) {
-                console.error(`[UBE BACKFILL ERROR] Failed for shot #${missingShot}:`, backfillErr.message);
-              }
-            }
-            lastSavedCycleShot = currentShotNumber - 1;
-            lastDetectedShotNumber = currentShotNumber - 1;
-          }
-
           // === PRIMARY TRIGGER: BIT RISING EDGE (0 -> 1) AT FULL CYCLE COMPLETION ===
           const bitTriggered = (cycleEndBit === 1 && !triggerActive);
 
-          // === FALLBACK TRIGGER: ONLY WHEN BIT WAS DEFINITELY MISSED VIA TIMEOUT (>85s) ===
+          // === FALLBACK TRIGGER: WHEN BIT WAS MISSED VIA TIMEOUT (58s for 850T, 70s for 1250T) ===
           // In UBE machines, D1120 increments early during metal injection (~14s into cycle).
-          // We must NEVER trigger immediately on D1120 change while cycle is still running.
-          // Only trigger if:
-          // 1) Machine has NO cycleEndDevice configured, OR
-          // 2) Timeout: counter incremented > 85s ago and cycleEndBit never pulsed
-          const isFallbackTimeout = lastCounterChangeAt > 0 && (nowMs - lastCounterChangeAt > 85000);
+          // Full cycle completes at ~68s (UBE 850) or ~79s (UBE 1250).
+          // Time remaining after injection is ~54s (UBE 850) or ~62s (UBE 1250).
+          // If 58s (UBE 850) or 70s (UBE 1250) have elapsed since counter change and cycleEndBit never pulsed:
+          // The cycle has 100% completed, and full parameters are in the PLC registers.
+          // Trigger fallback to read all genuine parameters from PLC — NEVER miss a shot!
+          const fallbackTimeoutMs = machine.name?.includes("1250") ? 70000 : 58000;
+          const isFallbackTimeout = lastCounterChangeAt > 0 && (nowMs - lastCounterChangeAt >= fallbackTimeoutMs);
           const counterFallbackTriggered = (
             !triggerActive &&
             (!cycleEndDevice || isFallbackTimeout) &&
@@ -4873,6 +4803,17 @@ function startPlcMonitor(io) {
                 connected: true,
                 error: `Cycle save failed: ${captureError.message}`,
               });
+            }
+
+            // Check if cycle end bit already returned to 0 during readAll delay
+            try {
+              const currentBit = cycleEndDevice ? await readBit(sock, cycleEndDevice, 1000) : 0;
+              if (currentBit === 0) {
+                triggerActive = false;
+                console.log(`[UBE TRIGGER] Cycle End confirmed low (${cycleEndDevice}=0). Ready for next cycle.`);
+              }
+            } catch (_) {
+              // Loop falling edge branch will handle reset if readBit timed out
             }
 
             // === FALLING EDGE: RESET FOR NEXT SHOT ===

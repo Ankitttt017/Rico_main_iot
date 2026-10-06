@@ -29,16 +29,17 @@ function withTimeout(promise, ms, label) {
   ]);
 }
 
-function sendReceive(sock, packet, expectedPayloadBytes = 1, label = "PLC read") {
+function sendReceive(sock, packet, expectedPayloadBytes = 1, label = "PLC read", customTimeoutMs = null) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let totalReceived = 0;
     const expectedBytes = 11 + Math.max(0, Number(expectedPayloadBytes) || 0);
     let settled = false;
+    const effectiveTimeoutMs = Number.isFinite(customTimeoutMs) && customTimeoutMs > 0 ? customTimeoutMs : PLC_READ_TIMEOUT_MS;
     const timer = setTimeout(() => {
       cleanup();
-      reject(new Error(`PLC read timeout (${PLC_READ_TIMEOUT_MS}ms): ${label}`));
-    }, PLC_READ_TIMEOUT_MS);
+      reject(new Error(`PLC read timeout (${effectiveTimeoutMs}ms): ${label}`));
+    }, effectiveTimeoutMs);
 
     const cleanup = () => {
       if (settled) return;
@@ -156,34 +157,34 @@ function buildPacket(device, count, isBit = false) {
   return packet;
 }
 
-async function readWord(sock, device) {
-  const response = await sendReceive(sock, buildPacket(device, 1, false), 2, `readWord(${device})`);
+async function readWord(sock, device, timeoutMs = 2500) {
+  const response = await sendReceive(sock, buildPacket(device, 1, false), 2, `readWord(${device})`, timeoutMs);
   return response.readUInt16LE(0);
 }
 
-async function readReal32(sock, device) {
-  const response = await sendReceive(sock, buildPacket(device, 2, false), 4, `readReal32(${device})`);
+async function readReal32(sock, device, timeoutMs = 3000) {
+  const response = await sendReceive(sock, buildPacket(device, 2, false), 4, `readReal32(${device})`, timeoutMs);
   const value = response.readFloatLE(0);
   return Number.isFinite(value) ? Number(value.toFixed(3)) : null;
 }
 
-async function readDWord(sock, device) {
-  const response = await sendReceive(sock, buildPacket(device, 2, false), 4, `readDWord(${device})`);
+async function readDWord(sock, device, timeoutMs = 3000) {
+  const response = await sendReceive(sock, buildPacket(device, 2, false), 4, `readDWord(${device})`, timeoutMs);
   return response.readUInt32LE(0);
 }
 
-async function readBit(sock, device) {
-  const response = await sendReceive(sock, buildPacket(device, 1, true), 1, `readBit(${device})`);
+async function readBit(sock, device, timeoutMs = 2000) {
+  const response = await sendReceive(sock, buildPacket(device, 1, true), 1, `readBit(${device})`, timeoutMs);
   return response[0] === 0 ? 0 : 1;
 }
 
-async function readControlSignal(sock, device) {
+async function readControlSignal(sock, device, timeoutMs = 2000) {
   const normalizedDevice = String(device || "").trim().toUpperCase();
   if (!normalizedDevice) return 0;
   if (["M", "X", "Y"].includes(normalizedDevice[0])) {
-    return readBit(sock, normalizedDevice);
+    return readBit(sock, normalizedDevice, timeoutMs);
   }
-  const value = await readWord(sock, normalizedDevice);
+  const value = await readWord(sock, normalizedDevice, timeoutMs);
   return Number(value) === 0 ? 0 : 1;
 }
 
