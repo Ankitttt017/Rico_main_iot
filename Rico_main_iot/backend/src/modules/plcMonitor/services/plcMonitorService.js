@@ -4629,7 +4629,7 @@ function startPlcMonitor(io) {
           continue;
         }
 
-                // ----------------------------------------------------
+        // ----------------------------------------------------
         // UBE DIE CASTING MACHINE MONITOR (QUAD Simplified Logic)
         // ----------------------------------------------------
         const cycleEndDevice = findConfiguredRegisterDevice(
@@ -4643,18 +4643,25 @@ function startPlcMonitor(io) {
           ],
           process.env.PLC_UBE_CYCLE_END_DEVICE || "M4598"
         );
+        const shotDevice = findConfiguredRegisterDevice(
+          machine,
+          ["SHOT NO.", "Shot Number", "shot_number", "Shot Count"],
+          machine.name?.includes("1250") ? "D1536" : "D1120"
+        );
         const pollIntervalMs = Number(process.env.PLC_UBE_CYCLE_END_POLL_MS || process.env.PLC_POLL_MS || 200);
         const settleDelayMs = Number(process.env.PLC_UBE_CYCLE_END_SETTLE_MS || 300);
-        const liveSnapshotIntervalMs = Number(process.env.PLC_LIVE_SNAPSHOT_INTERVAL_MS || 10000);
+        const liveSnapshotIntervalMs = Number(process.env.PLC_LIVE_SNAPSHOT_INTERVAL_MS || 15000);
 
         console.log(
-          `[UBE MONITOR] Initialized QUAD logic for ${machine.name} (${machine.ip}): Trigger=${cycleEndDevice}, Poll=${pollIntervalMs}ms, Settle=${settleDelayMs}ms`
+          `[UBE MONITOR] Initialized QUAD + Shot-Counter logic for ${machine.name} (${machine.ip}): Trigger=${cycleEndDevice}, ShotDevice=${shotDevice}, Poll=${pollIntervalMs}ms, Settle=${settleDelayMs}ms`
         );
 
         let triggerActive = false;
         let lastShotAt = null;
         let lastLiveReadAt = 0;
         let consecutiveReadFailures = 0;
+        let lastDetectedShotNumber = null;
+        let lastShotPollAt = 0;
 
         while (isMonitorCurrent()) {
           if (!monitoringRunning) {
@@ -4663,8 +4670,24 @@ function startPlcMonitor(io) {
           }
 
           let cycleEndBit = 0;
+          let currentShotNumber = null;
+
           try {
             cycleEndBit = await readBit(sock, cycleEndDevice);
+
+            // Poll shot counter every 500ms or when trigger bit is active
+            const nowMs = Date.now();
+            if (shotDevice && (nowMs - lastShotPollAt >= 500 || cycleEndBit === 1)) {
+              lastShotPollAt = nowMs;
+              const rawShot = await readWord(sock, shotDevice);
+              const numShot = Number(rawShot);
+              if (Number.isFinite(numShot) && numShot > 0) {
+                currentShotNumber = numShot;
+                if (lastDetectedShotNumber === null) {
+                  lastDetectedShotNumber = numShot;
+                }
+              }
+            }
             consecutiveReadFailures = 0;
           } catch (error) {
             if (isPlcConnectionError(error)) {
@@ -4688,12 +4711,20 @@ function startPlcMonitor(io) {
             continue;
           }
 
-          // === RISING EDGE (0 -> 1): CYCLE END TRIGGER ===
-          if (cycleEndBit === 1 && !triggerActive) {
+          // === DUAL TRIGGER: BIT RISING EDGE (0 -> 1) OR SHOT COUNTER INCREMENT ===
+          const bitTriggered = (cycleEndBit === 1 && !triggerActive);
+          const counterTriggered = (
+            !triggerActive &&
+            Number.isFinite(currentShotNumber) &&
+            Number.isFinite(lastDetectedShotNumber) &&
+            currentShotNumber > lastDetectedShotNumber
+          );
+
+          if (bitTriggered || counterTriggered) {
             triggerActive = true;
+            const triggerReason = bitTriggered ? `${cycleEndDevice}=1` : `Shot# ${lastDetectedShotNumber} -> ${currentShotNumber}`;
             const cycleEndAt = new Date();
 
-            // Calculate Cycle Time (Duration from previous shot to this shot in seconds)
             let durationSec = null;
             if (lastShotAt && !Number.isNaN(lastShotAt.getTime())) {
               durationSec = Number(((cycleEndAt.getTime() - lastShotAt.getTime()) / 1000).toFixed(1));
@@ -4701,12 +4732,12 @@ function startPlcMonitor(io) {
             lastShotAt = cycleEndAt;
 
             console.log(
-              `[UBE TRIGGER] Cycle End (${cycleEndDevice}=1) DETECTED for ${machine.name} (${machine.ip}) at ${cycleEndAt.toISOString()}`
+              `[UBE TRIGGER] Cycle End DETECTED via [${triggerReason}] for ${machine.name} (${machine.ip}) at ${cycleEndAt.toISOString()}`
             );
             updateMachineState(machine, {
               connected: true,
               error: null,
-              shotStatus: `Cycle end detected. Reading machine data...`,
+              shotStatus: `Cycle end detected (${triggerReason}). Reading machine data...`,
             });
 
             // 1. Settle buffer delay for PLC registers to finalize in memory
@@ -4714,7 +4745,7 @@ function startPlcMonitor(io) {
               await sleep(settleDelayMs);
             }
 
-            // 2. Read all registers & save to DB & emit WebSocket on the single persistent socket
+            // 2. Read all registers & save to DB & emit WebSocket
             try {
               const payload = await readAll(machine, sock, {
                 persist: true,
@@ -4728,11 +4759,18 @@ function startPlcMonitor(io) {
                 },
               });
 
-              const shotNum = getFormattedShotNumber(payload) || payload?.rawReadings?.shot_number || "-";
+              const rawShotNum = Number(payload?.rawReadings?.shot_number || payload?.rawReadings?.["SHOT NO."] || currentShotNumber);
+              if (Number.isFinite(rawShotNum) && rawShotNum > 0) {
+                lastDetectedShotNumber = rawShotNum;
+              } else if (Number.isFinite(currentShotNumber) && currentShotNumber > 0) {
+                lastDetectedShotNumber = currentShotNumber;
+              }
+
+              const shotNum = getFormattedShotNumber(payload) || lastDetectedShotNumber || "-";
               const finalCycleTime = payload?.rawReadings?.cycle_time || durationSec;
 
               console.log(
-                `[UBE SHOT SAVED] Machine=${machine.name} (${machine.ip}): Shot=#${shotNum}, CycleTime=${finalCycleTime ?? "-"}s`
+                `[UBE SHOT SAVED] Machine=${machine.name} (${machine.ip}): Shot=#${shotNum}, CycleTime=${finalCycleTime ?? "-"}s [Trigger: ${triggerReason}]`
               );
             } catch (captureError) {
               console.error(
@@ -4744,12 +4782,20 @@ function startPlcMonitor(io) {
               });
             }
 
-          // === FALLING EDGE (1 -> 0): RESET FOR NEXT SHOT ===
+            // === FALLING EDGE: RESET FOR NEXT SHOT ===
           } else if (cycleEndBit === 0 && triggerActive) {
+            if (Number.isFinite(currentShotNumber) && currentShotNumber > 0) {
+              lastDetectedShotNumber = currentShotNumber;
+            }
             console.log(`[UBE TRIGGER] Cycle End reset (${cycleEndDevice}=0). Ready for next cycle.`);
             triggerActive = false;
 
-          // === PERIODIC LIVE STATUS (when idle between shots) ===
+            // === SHOT COUNTER RESET (e.g. shift change from high to low) ===
+          } else if (!triggerActive && Number.isFinite(currentShotNumber) && Number.isFinite(lastDetectedShotNumber) && currentShotNumber < lastDetectedShotNumber) {
+            console.log(`[UBE COUNTER RESET] Shift counter reset on ${machine.name}: ${lastDetectedShotNumber} -> ${currentShotNumber}`);
+            lastDetectedShotNumber = currentShotNumber;
+
+            // === PERIODIC LIVE STATUS (when idle between shots) ===
           } else if (!triggerActive && (Date.now() - lastLiveReadAt >= liveSnapshotIntervalMs)) {
             lastLiveReadAt = Date.now();
             try {
@@ -4767,225 +4813,225 @@ function startPlcMonitor(io) {
           await sleep(pollIntervalMs);
         }
         if (!isMonitorCurrent()) closeSocket(sock);
-    } catch (error) {
-      reconnectAttempt += 1;
-      const reconnectDelay = reconnectDelayMs(reconnectAttempt);
-      console.error(`${machineLabel} â€” Error: ${error.message}`);
-      updateMachineState(machine, {
-        connected: false,
-        error: error.message,
-        shotStatus: `PLC offline; retrying in ${Math.ceil(reconnectDelay / 1000)} sec.`,
-      });
-      recordConnectionChange(machine, false, error.message).catch(() => { });
-      closeSocket(sock);
-      await sleep(reconnectDelay);
+      } catch (error) {
+        reconnectAttempt += 1;
+        const reconnectDelay = reconnectDelayMs(reconnectAttempt);
+        console.error(`${machineLabel} â€” Error: ${error.message}`);
+        updateMachineState(machine, {
+          connected: false,
+          error: error.message,
+          shotStatus: `PLC offline; retrying in ${Math.ceil(reconnectDelay / 1000)} sec.`,
+        });
+        recordConnectionChange(machine, false, error.message).catch(() => { });
+        closeSocket(sock);
+        await sleep(reconnectDelay);
+      }
     }
-  }
-};
+  };
 
-const startMachineMonitors = async () => {
-  for (let i = 0; i < machines.length; i++) {
-    const machine = machines[i];
-    const machineKey = getCanonicalMachineKey(machine);
-    if (monitorTokens.has(machineKey)) continue;
-    const token = Symbol(machineKey);
-    monitorTokens.set(machineKey, token);
-    const label = getMachineTypeName(machine).toUpperCase();
-    console.log(`Starting [${label}]: ${machine.name} (${machine.ip})`);
-    monitorMachine(machine, token); // intentionally not awaited
-    if (i < machines.length - 1) await sleep(500);
-  }
-};
+  const startMachineMonitors = async () => {
+    for (let i = 0; i < machines.length; i++) {
+      const machine = machines[i];
+      const machineKey = getCanonicalMachineKey(machine);
+      if (monitorTokens.has(machineKey)) continue;
+      const token = Symbol(machineKey);
+      monitorTokens.set(machineKey, token);
+      const label = getMachineTypeName(machine).toUpperCase();
+      console.log(`Starting [${label}]: ${machine.name} (${machine.ip})`);
+      monitorMachine(machine, token); // intentionally not awaited
+      if (i < machines.length - 1) await sleep(500);
+    }
+  };
 
-const refreshConfiguredMachines = async () => {
-  const configuredMachines = await getConfiguredMachines(true);
-  const configuredByKey = new Map(configuredMachines.map((machine) => [getCanonicalMachineKey(machine), machine]));
-  const previousMachinesByKey = new Map((machines || []).map((m) => [getCanonicalMachineKey(m), m]));
-  let changed = false;
+  const refreshConfiguredMachines = async () => {
+    const configuredMachines = await getConfiguredMachines(true);
+    const configuredByKey = new Map(configuredMachines.map((machine) => [getCanonicalMachineKey(machine), machine]));
+    const previousMachinesByKey = new Map((machines || []).map((m) => [getCanonicalMachineKey(m), m]));
+    let changed = false;
 
-  for (const [machineKey] of Array.from(monitorTokens.entries())) {
-    if (configuredByKey.has(machineKey)) continue;
-    monitorTokens.delete(machineKey);
-    machineState.delete(machineKey);
-    changed = true;
-  }
-
-  machines = configuredMachines;
-
-  configuredMachines.forEach((machine) => {
-    const machineKey = getCanonicalMachineKey(machine);
-    if (!machineKey) return;
-    const currentState = machineState.get(machineKey);
-    const prevConfig = previousMachinesByKey.get(machineKey);
-    const configChanged = prevConfig && (
-      prevConfig.ip !== machine.ip ||
-      Number(prevConfig.port) !== Number(machine.port) ||
-      prevConfig.name !== machine.name ||
-      machineRegisterConfigSignature(prevConfig) !== machineRegisterConfigSignature(machine)
-    );
-
-    if (configChanged) {
+    for (const [machineKey] of Array.from(monitorTokens.entries())) {
+      if (configuredByKey.has(machineKey)) continue;
       monitorTokens.delete(machineKey);
-      machineState.set(machineKey, {
-        ...currentState,
-        ...machine,
-        connected: false,
-        error: null,
-        shotStatus: "Machine register config changed; restarting monitor.",
-        machineType: getMachineTypeName(machine),
-      });
+      machineState.delete(machineKey);
       changed = true;
     }
 
-    if (machineState.has(machineKey)) {
+    machines = configuredMachines;
+
+    configuredMachines.forEach((machine) => {
+      const machineKey = getCanonicalMachineKey(machine);
+      if (!machineKey) return;
+      const currentState = machineState.get(machineKey);
+      const prevConfig = previousMachinesByKey.get(machineKey);
+      const configChanged = prevConfig && (
+        prevConfig.ip !== machine.ip ||
+        Number(prevConfig.port) !== Number(machine.port) ||
+        prevConfig.name !== machine.name ||
+        machineRegisterConfigSignature(prevConfig) !== machineRegisterConfigSignature(machine)
+      );
+
+      if (configChanged) {
+        monitorTokens.delete(machineKey);
+        machineState.set(machineKey, {
+          ...currentState,
+          ...machine,
+          connected: false,
+          error: null,
+          shotStatus: "Machine register config changed; restarting monitor.",
+          machineType: getMachineTypeName(machine),
+        });
+        changed = true;
+      }
+
+      if (machineState.has(machineKey)) {
+        machineState.set(machineKey, {
+          ...machineState.get(machineKey),
+          ...machine,
+          machine_key: machineKey,
+        });
+        return;
+      }
+
       machineState.set(machineKey, {
-        ...machineState.get(machineKey),
         ...machine,
-        machine_key: machineKey,
+        connected: false,
+        error: null,
+        lastCycleAt: null,
+        lastShotNumber: null,
+        partName: "",
+        cycleTime: null,
+        shotStatus: "Machine added from setup; starting monitor.",
+        machineType: getMachineTypeName(machine),
       });
-      return;
-    }
-
-    machineState.set(machineKey, {
-      ...machine,
-      connected: false,
-      error: null,
-      lastCycleAt: null,
-      lastShotNumber: null,
-      partName: "",
-      cycleTime: null,
-      shotStatus: "Machine added from setup; starting monitor.",
-      machineType: getMachineTypeName(machine),
-    });
-    changed = true;
-  });
-
-  if (changed) {
-    io.emit("machines", machines);
-    emitMachineState();
-    await startMachineMonitors();
-  }
-};
-
-const ensureSchemaAndStart = async () => {
-  try {
-    await ensureTableOnce();
-    if (!monitorTokens.size) {
-      machines = await getConfiguredMachines();
-      machineState.clear();
-      createInitialMachineState(machines).forEach((value, key) => {
-        machineState.set(key, value);
-      });
-    }
-    console.log("PLC monitor table ready — starting machine monitors");
-    await startMachineMonitors();
-  } catch (error) {
-    console.error("PLC monitor schema check failed; starting monitor and retrying schema:", error.message);
-    await startMachineMonitors();
-    setTimeout(() => {
-      schemaReadyPromise = null;
-      ensureSchemaAndStart().catch((retryError) => {
-        console.error("PLC monitor schema retry failed:", retryError.message);
-      });
-    }, Number(process.env.PLC_SCHEMA_RETRY_MS || 30000)).unref?.();
-  }
-};
-
-ensureSchemaAndStart().catch((error) => {
-  console.error("PLC monitor startup failed:", error.message);
-});
-
-const machineConfigRefreshTimer = setInterval(() => {
-  refreshConfiguredMachines().catch((error) => {
-    console.error("PLC machine config refresh failed:", error.message);
-  });
-}, Number(process.env.PLC_MACHINE_CONFIG_REFRESH_MS || 15000));
-machineConfigRefreshTimer.unref?.();
-
-const isLiveReadingInHistoryRange = (liveReading = {}, { from, to } = {}) => {
-  const productionDate = liveReading.production_date || liveReading.shot_date;
-  if (productionDate) {
-    const normalizedProductionDate = normalizeReadingForDB("shot_date", productionDate);
-    if (normalizedProductionDate) {
-      if (from && normalizedProductionDate < String(from).slice(0, 10)) return false;
-      if (to && normalizedProductionDate > String(to).slice(0, 10)) return false;
-      return true;
-    }
-  }
-
-  const timestamp = liveReading.recorded_at || liveReading.shot_datetime || liveReading.created_at;
-  const liveTime = timestamp ? new Date(timestamp).getTime() : Date.now();
-  if (!Number.isFinite(liveTime)) return true;
-
-  if (from) {
-    const fromTime = new Date(from).getTime();
-    if (Number.isFinite(fromTime) && liveTime < fromTime) return false;
-  }
-
-  if (to) {
-    const toDate = new Date(to);
-    if (!Number.isNaN(toDate.getTime())) {
-      toDate.setHours(23, 59, 59, 999);
-      if (liveTime > toDate.getTime()) return false;
-    }
-  }
-
-  return true;
-};
-
-const mergeLiveReadingsIntoHistory = (rows = [], args = {}) => {
-  const targetId = args.ip || "";
-  const liveMachines = Array.from(machineState.values()).filter((machine) => {
-    if (!machine.latestReading?.has_data) return false;
-    const key = getCanonicalMachineKey(machine);
-    return !targetId || key === targetId || machine.ip === targetId;
-  });
-  if (!liveMachines.length) return rows;
-
-  let nextRows = [...rows];
-  for (const machine of liveMachines) {
-    const liveReading = formatDbRowForClient(machine.latestReading);
-    if (!isLiveReadingInHistoryRange(liveReading, args)) continue;
-
-    const machineKey = getCanonicalMachineKey(machine);
-    const liveShot = getComparableShotNumber(liveReading);
-    let replaced = false;
-
-    nextRows = nextRows.map((row) => {
-      const sameMachine = row.machine_key === machineKey || row.plc_ip === machine.ip;
-      const sameShot = liveShot !== null && getComparableShotNumber(row) === liveShot;
-      if (!sameMachine || !sameShot) return row;
-      replaced = true;
-      return {
-        ...row,
-        ...liveReading,
-        id: row.id ?? liveReading.id,
-        history_rank: row.history_rank,
-      };
+      changed = true;
     });
 
-    if (!replaced) nextRows.unshift(liveReading);
-  }
+    if (changed) {
+      io.emit("machines", machines);
+      emitMachineState();
+      await startMachineMonitors();
+    }
+  };
 
-  return sortProductionHistoryRows(nextRows).slice(0, clampLimit(args.limit || 200));
-};
+  const ensureSchemaAndStart = async () => {
+    try {
+      await ensureTableOnce();
+      if (!monitorTokens.size) {
+        machines = await getConfiguredMachines();
+        machineState.clear();
+        createInitialMachineState(machines).forEach((value, key) => {
+          machineState.set(key, value);
+        });
+      }
+      console.log("PLC monitor table ready — starting machine monitors");
+      await startMachineMonitors();
+    } catch (error) {
+      console.error("PLC monitor schema check failed; starting monitor and retrying schema:", error.message);
+      await startMachineMonitors();
+      setTimeout(() => {
+        schemaReadyPromise = null;
+        ensureSchemaAndStart().catch((retryError) => {
+          console.error("PLC monitor schema retry failed:", retryError.message);
+        });
+      }, Number(process.env.PLC_SCHEMA_RETRY_MS || 30000)).unref?.();
+    }
+  };
 
-return {
-  getStatus: () => ({
-    running: monitoringRunning,
-    machines: Array.from(machineState.values()),
-    pendingUbeSaves: pendingUbeSaves.size,
-  }),
-  getLatestReadings: () =>
-    getLatestReadingsForMachines(Array.from(machineState.values())),
-  getReadingHistory: async (args = {}) => {
-    return getReadingHistory(args);
-  },
-  getConnectionEvents,
-  buildReadingsCsv,
-  buildReadingsExcelXml,
-  buildConnectionEventsExcelXml,
-};
+  ensureSchemaAndStart().catch((error) => {
+    console.error("PLC monitor startup failed:", error.message);
+  });
+
+  const machineConfigRefreshTimer = setInterval(() => {
+    refreshConfiguredMachines().catch((error) => {
+      console.error("PLC machine config refresh failed:", error.message);
+    });
+  }, Number(process.env.PLC_MACHINE_CONFIG_REFRESH_MS || 15000));
+  machineConfigRefreshTimer.unref?.();
+
+  const isLiveReadingInHistoryRange = (liveReading = {}, { from, to } = {}) => {
+    const productionDate = liveReading.production_date || liveReading.shot_date;
+    if (productionDate) {
+      const normalizedProductionDate = normalizeReadingForDB("shot_date", productionDate);
+      if (normalizedProductionDate) {
+        if (from && normalizedProductionDate < String(from).slice(0, 10)) return false;
+        if (to && normalizedProductionDate > String(to).slice(0, 10)) return false;
+        return true;
+      }
+    }
+
+    const timestamp = liveReading.recorded_at || liveReading.shot_datetime || liveReading.created_at;
+    const liveTime = timestamp ? new Date(timestamp).getTime() : Date.now();
+    if (!Number.isFinite(liveTime)) return true;
+
+    if (from) {
+      const fromTime = new Date(from).getTime();
+      if (Number.isFinite(fromTime) && liveTime < fromTime) return false;
+    }
+
+    if (to) {
+      const toDate = new Date(to);
+      if (!Number.isNaN(toDate.getTime())) {
+        toDate.setHours(23, 59, 59, 999);
+        if (liveTime > toDate.getTime()) return false;
+      }
+    }
+
+    return true;
+  };
+
+  const mergeLiveReadingsIntoHistory = (rows = [], args = {}) => {
+    const targetId = args.ip || "";
+    const liveMachines = Array.from(machineState.values()).filter((machine) => {
+      if (!machine.latestReading?.has_data) return false;
+      const key = getCanonicalMachineKey(machine);
+      return !targetId || key === targetId || machine.ip === targetId;
+    });
+    if (!liveMachines.length) return rows;
+
+    let nextRows = [...rows];
+    for (const machine of liveMachines) {
+      const liveReading = formatDbRowForClient(machine.latestReading);
+      if (!isLiveReadingInHistoryRange(liveReading, args)) continue;
+
+      const machineKey = getCanonicalMachineKey(machine);
+      const liveShot = getComparableShotNumber(liveReading);
+      let replaced = false;
+
+      nextRows = nextRows.map((row) => {
+        const sameMachine = row.machine_key === machineKey || row.plc_ip === machine.ip;
+        const sameShot = liveShot !== null && getComparableShotNumber(row) === liveShot;
+        if (!sameMachine || !sameShot) return row;
+        replaced = true;
+        return {
+          ...row,
+          ...liveReading,
+          id: row.id ?? liveReading.id,
+          history_rank: row.history_rank,
+        };
+      });
+
+      if (!replaced) nextRows.unshift(liveReading);
+    }
+
+    return sortProductionHistoryRows(nextRows).slice(0, clampLimit(args.limit || 200));
+  };
+
+  return {
+    getStatus: () => ({
+      running: monitoringRunning,
+      machines: Array.from(machineState.values()),
+      pendingUbeSaves: pendingUbeSaves.size,
+    }),
+    getLatestReadings: () =>
+      getLatestReadingsForMachines(Array.from(machineState.values())),
+    getReadingHistory: async (args = {}) => {
+      return getReadingHistory(args);
+    },
+    getConnectionEvents,
+    buildReadingsCsv,
+    buildReadingsExcelXml,
+    buildConnectionEventsExcelXml,
+  };
 }
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

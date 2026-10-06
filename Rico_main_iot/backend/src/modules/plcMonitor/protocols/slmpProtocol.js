@@ -236,7 +236,7 @@ function tryConnectSocket(ip, port, timeoutMs) {
       sock.setTimeout(0);
       sock.setKeepAlive(true, Number(process.env.PLC_SOCKET_KEEPALIVE_MS || 10000));
       sock.setNoDelay(true);
-      sock.on("error", () => {});
+      sock.on("error", () => { });
       resolve(sock);
     });
     sock.on("error", onError);
