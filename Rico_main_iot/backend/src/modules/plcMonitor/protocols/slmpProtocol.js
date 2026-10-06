@@ -245,18 +245,21 @@ function tryConnectSocket(ip, port, timeoutMs) {
 }
 
 async function connectPLC(machine) {
-  const timeoutMs = PLC_CONNECT_TIMEOUT_MS;
+  const primaryPort = Number(machine.connectedPort || machine.port) || 5002;
   const configuredPort = Number(machine.port) || 5002;
-  const candidatePorts = [configuredPort, 5002, 5005, 1026, 1027].filter((p, i, a) => a.indexOf(p) === i);
+  const candidatePorts = [primaryPort, configuredPort, 5002, 5001, 1025, 1026, 1027].filter(
+    (p, i, a) => Number.isFinite(p) && p > 0 && a.indexOf(p) === i
+  );
 
   let lastError = null;
   for (const port of candidatePorts) {
     try {
+      const timeoutMs = port === primaryPort ? PLC_CONNECT_TIMEOUT_MS : 2000;
       const sock = await tryConnectSocket(machine.ip, port, timeoutMs);
-      if (port !== configuredPort) {
+      if (port !== configuredPort && machine.connectedPort !== port) {
         console.log(`[PLC AUTO-PORT] ${machine.name || machine.ip} connected on port ${port} (fallback from ${configuredPort})`);
-        machine.connectedPort = port;
       }
+      machine.connectedPort = port;
       return sock;
     } catch (err) {
       lastError = err;

@@ -4660,8 +4660,10 @@ function startPlcMonitor(io) {
         let lastShotAt = null;
         let lastLiveReadAt = 0;
         let consecutiveReadFailures = 0;
+        let lastSavedCycleShot = null;
         let lastDetectedShotNumber = null;
         let lastShotPollAt = 0;
+        let lastCounterChangeAt = 0;
 
         while (isMonitorCurrent()) {
           if (!monitoringRunning) {
@@ -4671,20 +4673,24 @@ function startPlcMonitor(io) {
 
           let cycleEndBit = 0;
           let currentShotNumber = null;
+          const nowMs = Date.now();
 
           try {
             cycleEndBit = await readBit(sock, cycleEndDevice);
 
             // Poll shot counter every 500ms or when trigger bit is active
-            const nowMs = Date.now();
             if (shotDevice && (nowMs - lastShotPollAt >= 500 || cycleEndBit === 1)) {
               lastShotPollAt = nowMs;
               const rawShot = await readWord(sock, shotDevice);
               const numShot = Number(rawShot);
               if (Number.isFinite(numShot) && numShot > 0) {
+                if (currentShotNumber !== null && numShot !== currentShotNumber) {
+                  lastCounterChangeAt = nowMs;
+                }
                 currentShotNumber = numShot;
                 if (lastDetectedShotNumber === null) {
                   lastDetectedShotNumber = numShot;
+                  lastSavedCycleShot = numShot;
                 }
               }
             }
@@ -4711,18 +4717,35 @@ function startPlcMonitor(io) {
             continue;
           }
 
-          // === DUAL TRIGGER: BIT RISING EDGE (0 -> 1) OR SHOT COUNTER INCREMENT ===
+          // === PRIMARY TRIGGER: BIT RISING EDGE (0 -> 1) AT FULL CYCLE COMPLETION ===
           const bitTriggered = (cycleEndBit === 1 && !triggerActive);
-          const counterTriggered = (
-            !triggerActive &&
+
+          // === FALLBACK TRIGGER: ONLY WHEN BIT WAS DEFINITELY MISSED ===
+          // In UBE machines, D1120 increments early during metal injection (~14s into cycle).
+          // We must NEVER trigger immediately on D1120 change because cycle is still running.
+          // Only trigger if:
+          // 1) Machine has NO cycleEndDevice configured, OR
+          // 2) Shot counter moved 2+ shots ahead without cycleEndBit (currentShotNumber > lastSavedCycleShot + 1), OR
+          // 3) Timeout: counter incremented > 85s ago and cycleEndBit never pulsed
+          const isFallbackTimeout = lastCounterChangeAt > 0 && (nowMs - lastCounterChangeAt > 85000);
+          const isMultiShotMissed = (
             Number.isFinite(currentShotNumber) &&
-            Number.isFinite(lastDetectedShotNumber) &&
-            currentShotNumber > lastDetectedShotNumber
+            Number.isFinite(lastSavedCycleShot) &&
+            currentShotNumber > lastSavedCycleShot + 1
+          );
+          const counterFallbackTriggered = (
+            !triggerActive &&
+            (!cycleEndDevice || isMultiShotMissed || isFallbackTimeout) &&
+            Number.isFinite(currentShotNumber) &&
+            Number.isFinite(lastSavedCycleShot) &&
+            currentShotNumber > lastSavedCycleShot
           );
 
-          if (bitTriggered || counterTriggered) {
+          if (bitTriggered || counterFallbackTriggered) {
             triggerActive = true;
-            const triggerReason = bitTriggered ? `${cycleEndDevice}=1` : `Shot# ${lastDetectedShotNumber} -> ${currentShotNumber}`;
+            const triggerReason = bitTriggered
+              ? `${cycleEndDevice}=1`
+              : (isMultiShotMissed ? `MissedShot Fallback #${lastSavedCycleShot} -> #${currentShotNumber}` : `Timeout Fallback #${currentShotNumber}`);
             const cycleEndAt = new Date();
 
             let durationSec = null;
@@ -4760,10 +4783,66 @@ function startPlcMonitor(io) {
               });
 
               const rawShotNum = Number(payload?.rawReadings?.shot_number || payload?.rawReadings?.["SHOT NO."] || currentShotNumber);
-              if (Number.isFinite(rawShotNum) && rawShotNum > 0) {
-                lastDetectedShotNumber = rawShotNum;
-              } else if (Number.isFinite(currentShotNumber) && currentShotNumber > 0) {
-                lastDetectedShotNumber = currentShotNumber;
+              const numericShot = Number.isFinite(rawShotNum) && rawShotNum > 0 ? rawShotNum : currentShotNumber;
+
+              // Automatic missed shot backfilling
+              if (
+                Number.isFinite(numericShot) &&
+                Number.isFinite(lastSavedCycleShot) &&
+                numericShot > lastSavedCycleShot + 1 &&
+                numericShot - lastSavedCycleShot <= 50
+              ) {
+                console.warn(
+                  `[UBE BACKFILL] Backfilling missed shots for ${machine.name} (${machine.ip}): #${lastSavedCycleShot + 1} to #${numericShot - 1}`
+                );
+                for (let missingShot = lastSavedCycleShot + 1; missingShot < numericShot; missingShot++) {
+                  try {
+                    const cycleSec = Number(payload?.rawReadings?.cycle_time || durationSec || 65);
+                    const stepsBack = numericShot - missingShot;
+                    const baseTs = cycleEndAt.getTime();
+                    const missingTs = new Date(baseTs - stepsBack * Math.max(10, cycleSec) * 1000);
+                    const mShotDate = buildShotDateValue(
+                      missingTs.getFullYear(),
+                      missingTs.getMonth() + 1,
+                      missingTs.getDate()
+                    );
+                    const mShotTime = buildShotTimeValue(
+                      missingTs.getHours(),
+                      missingTs.getMinutes(),
+                      missingTs.getSeconds()
+                    );
+                    const missingReadings = {
+                      ...(payload.rawReadings || {}),
+                      shot_number: missingShot,
+                      "SHOT NO.": missingShot,
+                      shot_datetime: missingTs.toISOString(),
+                      recorded_at: missingTs.toISOString(),
+                      created_at: missingTs.toISOString(),
+                      shot_date: getProductionDate(mShotDate, mShotTime) || mShotDate,
+                      production_date: getProductionDate(mShotDate, mShotTime) || mShotDate,
+                      shot_time: mShotTime,
+                      shot_year: pad2(missingTs.getFullYear()),
+                      shot_month: pad2(missingTs.getMonth() + 1),
+                      shot_day: pad2(missingTs.getDate()),
+                      shot_hour: pad2(missingTs.getHours()),
+                      shot_minute: pad2(missingTs.getMinutes()),
+                      shot_second: pad2(missingTs.getSeconds()),
+                    };
+                    await persistUbeReading(
+                      machine,
+                      payload.partName || machine.partName || "",
+                      missingReadings
+                    );
+                  } catch (backfillErr) {
+                    console.error(`[UBE BACKFILL ERROR] Failed for shot #${missingShot}:`, backfillErr.message);
+                  }
+                }
+              }
+
+              if (Number.isFinite(numericShot) && numericShot > 0) {
+                lastSavedCycleShot = numericShot;
+                lastDetectedShotNumber = numericShot;
+                lastCounterChangeAt = 0;
               }
 
               const shotNum = getFormattedShotNumber(payload) || lastDetectedShotNumber || "-";
@@ -4784,16 +4863,15 @@ function startPlcMonitor(io) {
 
             // === FALLING EDGE: RESET FOR NEXT SHOT ===
           } else if (cycleEndBit === 0 && triggerActive) {
-            if (Number.isFinite(currentShotNumber) && currentShotNumber > 0) {
-              lastDetectedShotNumber = currentShotNumber;
-            }
             console.log(`[UBE TRIGGER] Cycle End reset (${cycleEndDevice}=0). Ready for next cycle.`);
             triggerActive = false;
 
             // === SHOT COUNTER RESET (e.g. shift change from high to low) ===
-          } else if (!triggerActive && Number.isFinite(currentShotNumber) && Number.isFinite(lastDetectedShotNumber) && currentShotNumber < lastDetectedShotNumber) {
-            console.log(`[UBE COUNTER RESET] Shift counter reset on ${machine.name}: ${lastDetectedShotNumber} -> ${currentShotNumber}`);
+          } else if (!triggerActive && Number.isFinite(currentShotNumber) && Number.isFinite(lastSavedCycleShot) && currentShotNumber < lastSavedCycleShot) {
+            console.log(`[UBE COUNTER RESET] Shift counter reset on ${machine.name}: ${lastSavedCycleShot} -> ${currentShotNumber}`);
+            lastSavedCycleShot = currentShotNumber;
             lastDetectedShotNumber = currentShotNumber;
+            lastCounterChangeAt = 0;
 
             // === PERIODIC LIVE STATUS (when idle between shots) ===
           } else if (!triggerActive && (Date.now() - lastLiveReadAt >= liveSnapshotIntervalMs)) {
