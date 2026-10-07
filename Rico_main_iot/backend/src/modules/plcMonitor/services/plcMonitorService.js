@@ -2154,12 +2154,21 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
     }
   };
   const productionHourExpr = "COALESCE(TRY_CONVERT(INT, shot_hour), DATEPART(hour, shot_datetime), DATEPART(hour, recorded_at))";
-  const productionClockDateExpr = "COALESCE(TRY_CONVERT(date, shot_date), TRY_CONVERT(date, shot_datetime), CAST(recorded_at AS date))";
+  const productionClockDateExpr = "COALESCE(CAST(recorded_at AS date), TRY_CONVERT(date, shot_datetime), TRY_CONVERT(date, shot_date))";
   const productionDateExpr = `
     CASE
-      WHEN ${productionHourExpr} < 6
-        THEN DATEADD(day, -1, ${productionClockDateExpr})
-      ELSE ${productionClockDateExpr}
+      WHEN TRY_CONVERT(date, shot_date) IS NOT NULL THEN
+        CASE
+          WHEN ${productionHourExpr} < 6 AND TRY_CONVERT(date, shot_date) >= CAST(recorded_at AS date)
+            THEN DATEADD(day, -1, TRY_CONVERT(date, shot_date))
+          ELSE TRY_CONVERT(date, shot_date)
+        END
+      ELSE
+        CASE
+          WHEN ${productionHourExpr} < 6
+            THEN DATEADD(day, -1, ${productionClockDateExpr})
+          ELSE ${productionClockDateExpr}
+        END
     END
   `;
   const productionSelect = `*, CONVERT(VARCHAR(10), ${productionDateExpr}, 23) AS production_date`;

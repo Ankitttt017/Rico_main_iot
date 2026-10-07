@@ -822,7 +822,6 @@ function normalizeDateInput(value) {
 }
 
 function getRowCalendarDate(row = {}) {
-  const shotDate = getRowValue(row, "shot_date", "SHOT DATE", "Shot Date");
   const timestamp = getRowValue(
     row,
     "shot_datetime",
@@ -833,20 +832,61 @@ function getRowCalendarDate(row = {}) {
     "recorded_at",
     "created_at"
   );
-  return normalizeDateInput(shotDate) || normalizeDateInput(timestamp);
-}
+  const normalizedTimestampDate = normalizeDateInput(timestamp);
+  if (normalizedTimestampDate) return normalizedTimestampDate;
 
-function getRowProductionDate(row = {}) {
-  const calendarDate = getRowCalendarDate(row);
-  const productionDate = normalizeDateInput(getRowValue(row, "production_date", "Production Date"));
-  if (!calendarDate) return productionDate;
+  const shotDate = normalizeDateInput(getRowValue(row, "shot_date", "SHOT DATE", "Shot Date", "production_date", "Production Date"));
+  if (!shotDate) return null;
+
   const timeParts = getRowTimeParts(row);
   const shift = getShiftFromTimeParts(timeParts);
   const seconds = getSecondsFromTimeParts(timeParts);
   if (shift === "C" && seconds !== null && seconds < 6 * 3600) {
-    return addDaysToInputDate(calendarDate, -1);
+    return addDaysToInputDate(shotDate, 1);
   }
-  return productionDate || calendarDate;
+  return shotDate;
+}
+
+function getRowProductionDate(row = {}) {
+  const explicitProductionDate = normalizeDateInput(getRowValue(row, "production_date", "Production Date"));
+  if (explicitProductionDate) return explicitProductionDate;
+
+  const shotDate = normalizeDateInput(getRowValue(row, "shot_date", "SHOT DATE", "Shot Date"));
+  const timestamp = getRowValue(
+    row,
+    "shot_datetime",
+    "SHOT DATETIME",
+    "Shot Datetime",
+    "cycle_end_time",
+    "cycle_end",
+    "recorded_at",
+    "created_at"
+  );
+  const calendarDate = normalizeDateInput(timestamp);
+
+  const timeParts = getRowTimeParts(row);
+  const shift = getShiftFromTimeParts(timeParts);
+  const seconds = getSecondsFromTimeParts(timeParts);
+  const isPostMidnightShiftC = shift === "C" && seconds !== null && seconds < 6 * 3600;
+
+  if (shotDate) {
+    if (calendarDate && shotDate < calendarDate) {
+      return shotDate;
+    }
+    if (isPostMidnightShiftC && (!calendarDate || shotDate === calendarDate)) {
+      return addDaysToInputDate(shotDate, -1);
+    }
+    return shotDate;
+  }
+
+  if (calendarDate) {
+    if (isPostMidnightShiftC) {
+      return addDaysToInputDate(calendarDate, -1);
+    }
+    return calendarDate;
+  }
+
+  return null;
 }
 
 function getRowLocalDateTime(row = {}) {
