@@ -1528,6 +1528,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
+  const [searchTrigger, setSearchTrigger] = useState(0);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [selectedReportRowKey, setSelectedReportRowKey] = useState("");
   const tableScrollRef = useRef(null);
@@ -1688,14 +1689,8 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   }, []);
 
   const handleSearchTextChange = useCallback((event) => {
-    const nextSearchText = event.target.value;
-    setDraftSearchText(nextSearchText);
-    if (!nextSearchText.trim() && searchText) {
-      setSearchText("");
-      setReportPage(1);
-      setPagination({ page: 1, pageSize: REPORT_RESULT_LIMIT, total: 0, totalPages: 1 });
-    }
-  }, [searchText]);
+    setDraftSearchText(event.target.value);
+  }, []);
 
   const applyReportFilters = useCallback(({ showValidationError = true } = {}) => {
     const selectedDraftMachine = draftMachineOptions.find((machine) => getMachineId(machine) === draftMachineId);
@@ -1725,25 +1720,8 @@ export default function PlcReportPage({ onLogout, currentUser }) {
     setReportPage(1);
     setPagination({ page: 1, pageSize: REPORT_RESULT_LIMIT, total: 0, totalPages: 1 });
     setFiltersApplied(true);
+    setSearchTrigger((prev) => prev + 1);
   }, [draftFromDate, draftLineId, draftMachineId, draftMachineOptions, draftQuickFilter, draftResultFilterValue, draftSearchText, draftShiftFilter, draftToDate]);
-
-  useEffect(() => {
-    if (!reportMachinesReady || !draftMachineId) return undefined;
-    const timer = window.setTimeout(() => {
-      applyReportFilters({ showValidationError: false });
-    }, 150);
-    return () => window.clearTimeout(timer);
-  }, [
-    applyReportFilters,
-    draftFromDate,
-    draftLineId,
-    draftMachineId,
-    draftQuickFilter,
-    draftResultFilterValue,
-    draftShiftFilter,
-    draftToDate,
-    reportMachinesReady,
-  ]);
 
   const clearReportFilters = useCallback(() => {
     const today = todayInput();
@@ -1824,13 +1802,14 @@ export default function PlcReportPage({ onLogout, currentUser }) {
   }, [activeResultFilterValue, filtersApplied, fromDate, reportMachinesReady, reportPage, searchText, selectedMachine, selectedMachineIsGauge, selectedMachineIsLeak, shiftFilter, toDate]);
 
   useEffect(() => {
+    if (!filtersApplied) return undefined;
     loadReport();
     if (fromDate !== todayInput() || toDate !== todayInput()) return undefined;
     const timer = window.setInterval(() => {
       loadReport({ silent: true });
     }, REPORT_AUTO_REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [fromDate, loadReport, toDate]);
+  }, [filtersApplied, fromDate, loadReport, searchTrigger, toDate]);
 
   const filteredRows = rows;
 
