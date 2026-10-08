@@ -61,6 +61,7 @@ const plcMonitor = String(process.env.PLC_MONITOR_ENABLED || "true").toLowerCase
     getStatus: () => ({ running: false, disabled: true }),
     getLatestReadings: async () => [],
     getReadingHistory: async () => [],
+    getHourlyProductionStats: async () => ({ summary: {}, hours: [] }),
     getConnectionEvents: async () => [],
     getReportColumns: () => [],
     buildReadingsExcelXml: () => "",

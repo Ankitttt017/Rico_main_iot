@@ -1,15 +1,14 @@
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import AppLayout from "../components/common/AppLayout";
+import HourlyProductionChart from "../components/dashboard/HourlyProductionChart";
+import { Cpu, Activity, Clock } from "lucide-react";
 import { getMachines, getPlcLatestReadings, getStats } from "../services/api";
 import { sortMachinesBySeries } from "../modules/plc-monitor/constants";
 
-const fmt = (value) => Number(value || 0).toLocaleString("en-IN");
-
-const statusTone = {
-  online: "bg-emerald-50 text-emerald-700 border-emerald-100",
-  warning: "bg-amber-50 text-amber-700 border-amber-100",
-  offline: "bg-rose-50 text-rose-700 border-rose-100",
+const fmt = (value) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num.toLocaleString("en-IN") : (value ?? "-");
 };
 
 const IotDashboardPage = ({ onLogout, currentUser }) => {
@@ -69,43 +68,9 @@ const IotDashboardPage = ({ onLogout, currentUser }) => {
     [latest, machines]
   );
 
-  const quickActions = [
-    { label: "Open Workstation", to: "/operator-workstation", permission: "workstation:view" },
-    { label: "Monitor PLC", to: "/plc-monitor", permission: "plc:view" },
-    { label: "Add / Setup Machine", to: "/machines", permission: "master:manage" },
-    { label: "Manage Parts", to: "/parts", permission: "master:manage" },
-  ].filter((action) => {
-    const permissions = currentUser?.permissions || [];
-    return permissions.includes(action.permission) || permissions.includes(action.permission.replace(":view", ":manage")) || permissions.includes("roles:manage");
-  });
-
   return (
     <AppLayout onLogout={onLogout} currentUser={currentUser}>
       <div className="w-full min-w-0 space-y-4 sm:space-y-5">
-        <section className="w-full min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-          <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex min-w-0 items-start gap-3 sm:items-center sm:gap-4">
-              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#123f75] text-white shadow-lg shadow-slate-300 sm:h-14 sm:w-14">
-                <svg className="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 19V5m5 14V9m5 10V7m5 12V3M4 19h17" />
-                </svg>
-              </div>
-              <div className="min-w-0">
-                <p className="text-xs font-black uppercase tracking-[0.22em] text-[#0b73bd]">IoT Command Center</p>
-                <h2 className="text-xl font-extrabold text-slate-950 sm:text-2xl">Dashboard Overview</h2>
-                <p className="text-sm font-medium text-slate-500">Production health, PLC status and master setup readiness.</p>
-              </div>
-            </div>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:flex lg:flex-wrap">
-              {quickActions.map((action) => (
-                <Link key={action.to} to={action.to} className="flex min-h-10 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 py-2 text-center text-sm font-bold text-slate-700 hover:border-[#0b73bd] hover:text-[#0b73bd] sm:px-4">
-                  {action.label}
-                </Link>
-              ))}
-            </div>
-          </div>
-        </section>
-
         <section className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
           {cards.map((card) => (
             <div key={card.label} className={`min-w-0 rounded-2xl border-l-4 ${card.tone} border-y border-r bg-white p-4 shadow-sm sm:p-5`}>
@@ -116,63 +81,106 @@ const IotDashboardPage = ({ onLogout, currentUser }) => {
           ))}
         </section>
 
-        <section className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
-          <div className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-              <h3 className="text-base font-extrabold text-slate-950">Live Machine Snapshot</h3>
-              <Link to="/plc-monitor" className="text-sm font-bold text-[#0b73bd]">View monitor</Link>
+        {/* Industrial Hourly Production & Quality Trend Chart */}
+        <section className="w-full min-w-0">
+          <HourlyProductionChart machines={latest.length ? latest : machines} />
+        </section>
+
+        {/* Live Machine KPI Cards Grid */}
+        <section className="w-full min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-white shadow-sm">
+                <Cpu className="h-4 w-4" />
+              </div>
+              <div>
+                <h3 className="text-base font-extrabold text-slate-950">Live Machine Telemetry</h3>
+                <p className="text-xs font-medium text-slate-500">Real-time PLC connection, cycle time and status per machine</p>
+              </div>
             </div>
-            <div className="responsive-scroll rounded-xl border border-slate-100">
-              <table className="w-full min-w-[620px] text-left text-sm">
-                <thead className="bg-slate-50 text-xs font-black uppercase tracking-wide text-slate-500">
-                  <tr>
-                    <th className="px-4 py-3">Machine</th>
-                    <th className="px-4 py-3">PLC IP</th>
-                    <th className="px-4 py-3">Status</th>
-                    <th className="px-4 py-3">Cycle</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {snapshotRows.map((row, index) => {
-                    const online = row.is_online || row.has_data || String(row.status || "").toUpperCase() === "RUNNING";
-                    const tone = online ? statusTone.online : statusTone.offline;
-                    return (
-                      <tr key={`${row.machine_key || row.machine_name || index}-${index}`} className="hover:bg-slate-50">
-                        <td className="px-4 py-3 font-bold text-slate-900">{row.machine_name || row.name || row.machine || "Machine"}</td>
-                        <td className="px-4 py-3 font-mono text-xs text-slate-500">{row.plc_ip || row.ip_address || "-"}</td>
-                        <td className="px-4 py-3">
-                          <span className={`rounded-full border px-2 py-1 text-xs font-bold ${tone}`}>{online ? "ONLINE" : "WAITING"}</span>
-                        </td>
-                        <td className="px-4 py-3 font-semibold text-slate-700">{row.cycle_time || row.cycle_time_sec || "-"}</td>
-                      </tr>
-                    );
-                  })}
-                  {!snapshotRows.length && (
-                    <tr>
-                      <td colSpan={4} className="px-4 py-10 text-center text-sm font-semibold text-slate-400">No machine data available</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+            <Link to="/plc-monitor" className="text-xs font-bold text-[#0b73bd] hover:text-[#095c99] hover:underline flex items-center gap-1">
+              Open Full Monitor →
+            </Link>
           </div>
 
-          <div className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-            <h3 className="text-base font-extrabold text-slate-950">Setup Health</h3>
-            <p className="mt-1 text-sm font-medium text-slate-500">Follow this sequence for clean industrial master data.</p>
-            <div className="mt-5 space-y-3">
-              {[
-                ["Plant", stats.total_lines || stats.total_machines ? "Ready" : "Setup"],
-                ["Line / Cell", stats.total_lines ? "Ready" : "Pending"],
-                ["Machine & PLC", stats.total_machines ? "Ready" : "Pending"],
-                ["Parts & Operations", stats.total_parts ? "Ready" : "Pending"],
-              ].map(([label, status]) => (
-                <div key={label} className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50/70 px-4 py-3">
-                  <span className="font-bold text-slate-800">{label}</span>
-                  <span className={`rounded-full px-2.5 py-1 text-xs font-black ${status === "Ready" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>{status}</span>
+          <div className="grid min-w-0 grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+            {snapshotRows.map((row, index) => {
+              const online = row.is_online || row.has_data || String(row.status || "").toUpperCase() === "RUNNING";
+              const cycleTime = row.cycle_time || row.cycle_time_sec;
+              const shotNo = row.shot_number || row.Counter || row.shot_no;
+              return (
+                <div
+                  key={`${row.machine_key || row.machine_name || index}-${index}`}
+                  className="flex flex-col justify-between rounded-xl border border-slate-200/90 bg-slate-50/40 p-3.5 shadow-sm hover:border-[#0b73bd]/60 hover:bg-white hover:shadow-md transition-all group"
+                >
+                  <div>
+                    {/* Header: Machine name & Online status */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <h4 className="truncate text-sm font-black text-slate-900 group-hover:text-[#0b73bd] transition-colors" title={row.machine_name || row.name || "Machine"}>
+                          {row.machine_name || row.name || row.machine || "Machine"}
+                        </h4>
+                        <p className="font-mono text-[11px] font-semibold text-slate-400">
+                          {row.plc_ip || row.ip_address || "No IP"}
+                        </p>
+                      </div>
+                      <span
+                        className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-black tracking-wide border ${
+                          online
+                            ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                            : "bg-slate-100 text-slate-500 border-slate-200"
+                        }`}
+                      >
+                        <span
+                          className={`h-1.5 w-1.5 rounded-full ${
+                            online ? "bg-emerald-500 animate-pulse" : "bg-slate-400"
+                          }`}
+                        />
+                        {online ? "ONLINE" : "WAITING"}
+                      </span>
+                    </div>
+
+                    {/* KPI metrics in each card */}
+                    <div className="mt-3.5 grid grid-cols-2 gap-2 border-t border-slate-200/60 pt-3">
+                      <div className="rounded-lg bg-white border border-slate-100 p-2 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                          <Clock className="h-2.5 w-2.5" /> Cycle
+                        </span>
+                        <p className="mt-0.5 text-base font-black text-slate-800">
+                          {cycleTime ? `${cycleTime}s` : "-"}
+                        </p>
+                      </div>
+                      <div className="rounded-lg bg-white border border-slate-100 p-2 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                          <Activity className="h-2.5 w-2.5" /> Shots
+                        </span>
+                        <p className="mt-0.5 text-base font-black text-slate-800">
+                          {shotNo != null ? fmt(shotNo) : "-"}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Footer link to monitor */}
+                  <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-2 text-[11px]">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Port: {row.plc_port || 5002}
+                    </span>
+                    <Link
+                      to="/plc-monitor"
+                      className="font-bold text-[#0b73bd] hover:underline"
+                    >
+                      Monitor →
+                    </Link>
+                  </div>
                 </div>
-              ))}
-            </div>
+              );
+            })}
+            {snapshotRows.length === 0 && (
+              <div className="col-span-full py-8 text-center text-sm font-semibold text-slate-400">
+                No active machine data available
+              </div>
+            )}
           </div>
         </section>
       </div>

@@ -137,6 +137,7 @@ export const updateLineMachine = (lineId, machineId, data) => mutate(api.put(END
 export const removeLineMachine = (lineId, machineId, params) => mutate(api.delete(ENDPOINTS.lineMachine(lineId, machineId), { params }));
 export const getPlcLatestReadings = () => requestGet(ENDPOINTS.plcLatestReadings, { params: { _: Date.now() } });
 export const getPlcReadingHistory = (params) => cachedGet(ENDPOINTS.plcReadingHistory, { params, ttl: LIVE_CACHE_TTL, staleWhileRefresh: false });
+export const getPlcHourlyProduction = (params) => cachedGet(ENDPOINTS.plcHourlyProduction, { params, ttl: LIVE_CACHE_TTL, staleWhileRefresh: false });
 export const getPlcConnectionEvents = (params) => cachedGet(ENDPOINTS.plcConnectionEvents, { params, ttl: LIVE_CACHE_TTL, staleWhileRefresh: false });
 export const getPlcMachineConfigs = () => cachedGet(ENDPOINTS.plcMachineConfigs, { ttl: LIVE_CACHE_TTL, staleWhileRefresh: false });
 export const savePlcMachineConfig = (data) => mutate(api.post(ENDPOINTS.plcMachineConfigs, data));

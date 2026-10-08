@@ -2557,6 +2557,149 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
   return sortProductionHistoryRows(rows.map(formatDbRowForClient));
 }
 
+async function getHourlyProductionStats({ ip, date } = {}) {
+  await ensureTableOnce();
+
+  const productionHourExpr = "COALESCE(TRY_CONVERT(INT, shot_hour), DATEPART(hour, shot_datetime), DATEPART(hour, recorded_at))";
+  const productionClockDateExpr = "COALESCE(CAST(recorded_at AS date), TRY_CONVERT(date, shot_datetime), TRY_CONVERT(date, shot_date))";
+  const productionDateExpr = `
+    CASE
+      WHEN TRY_CONVERT(date, shot_date) IS NOT NULL THEN
+        CASE
+          WHEN ${productionHourExpr} < 6 AND TRY_CONVERT(date, shot_date) >= CAST(recorded_at AS date)
+            THEN DATEADD(day, -1, TRY_CONVERT(date, shot_date))
+          ELSE TRY_CONVERT(date, shot_date)
+        END
+      ELSE
+        CASE
+          WHEN ${productionHourExpr} < 6
+            THEN DATEADD(day, -1, ${productionClockDateExpr})
+          ELSE ${productionClockDateExpr}
+        END
+    END
+  `;
+
+  let queryDate = date;
+  if (!queryDate) {
+    const { rows: dateRows } = await db.query(
+      `SELECT CONVERT(VARCHAR(10), CASE WHEN DATEPART(hour, GETDATE()) < 6 THEN DATEADD(day, -1, CAST(GETDATE() AS date)) ELSE CAST(GETDATE() AS date) END, 23) AS today_date`
+    );
+    queryDate = dateRows[0]?.today_date || new Date().toISOString().slice(0, 10);
+  }
+
+  const filters = [`${productionDateExpr} = CAST(? AS date)`];
+  const values = [queryDate];
+
+  if (ip && ip !== "all") {
+    filters.push("(machine_key = ? OR plc_ip = ?)");
+    values.push(ip, ip);
+  }
+
+  const whereClause = `WHERE ${filters.join(" AND ")}`;
+
+  const query = `
+    WITH deduped_shots AS (
+      SELECT
+        ${productionDateExpr} AS production_date,
+        ${productionHourExpr} AS shot_hour_int,
+        shot_status,
+        ROW_NUMBER() OVER (
+          PARTITION BY
+            COALESCE(machine_key, plc_ip),
+            ${productionDateExpr},
+            CASE
+              WHEN shot_number IS NULL THEN CONCAT(N'row-', id)
+              ELSE CONCAT(N'shot-', LTRIM(RTRIM(CAST(shot_number AS NVARCHAR(80)))))
+            END
+          ORDER BY
+            COALESCE(TRY_CONVERT(datetime2, shot_datetime), recorded_at, created_at) DESC,
+            id DESC
+        ) AS duplicate_rank
+      FROM ${TABLE}
+      ${whereClause}
+    )
+    SELECT
+      shot_hour_int AS hour,
+      COUNT(1) AS total,
+      SUM(CASE WHEN TRY_CONVERT(INT, shot_status) = 1 THEN 1 ELSE 0 END) AS ok,
+      SUM(CASE WHEN TRY_CONVERT(INT, shot_status) = 3 THEN 1 ELSE 0 END) AS warm,
+      SUM(CASE WHEN TRY_CONVERT(INT, shot_status) = 5 THEN 1 ELSE 0 END) AS ng
+    FROM deduped_shots
+    WHERE duplicate_rank = 1
+    GROUP BY shot_hour_int
+    ORDER BY shot_hour_int ASC
+  `;
+
+  const { rows } = await db.query(query, values);
+
+  const hourMap = new Map();
+  for (const r of rows) {
+    const h = Number(r.hour);
+    if (!Number.isNaN(h)) {
+      hourMap.set(h, {
+        hour: h,
+        total: Number(r.total || 0),
+        ok: Number(r.ok || 0),
+        warm: Number(r.warm || 0),
+        ng: Number(r.ng || 0),
+      });
+    }
+  }
+
+  const productionHoursOrder = [
+    6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4, 5
+  ];
+
+  let totalProduction = 0;
+  let totalOk = 0;
+  let totalWarm = 0;
+  let totalNg = 0;
+
+  const hourlyData = productionHoursOrder.map((h) => {
+    const data = hourMap.get(h) || { hour: h, total: 0, ok: 0, warm: 0, ng: 0 };
+    totalProduction += data.total;
+    totalOk += data.ok;
+    totalWarm += data.warm;
+    totalNg += data.ng;
+
+    let shift = "Shift A";
+    if (h >= 6 && h < 14) shift = "Shift A";
+    else if (h >= 14 && h < 23) shift = "Shift B";
+    else shift = "Shift C";
+
+    const label = `${String(h).padStart(2, "0")}:00`;
+
+    return {
+      hour: h,
+      label,
+      shift,
+      total: data.total,
+      ok: data.ok,
+      warm: data.warm,
+      ng: data.ng,
+      okRate: data.total > 0 ? Number(((data.ok / data.total) * 100).toFixed(1)) : 0,
+      ngRate: data.total > 0 ? Number(((data.ng / data.total) * 100).toFixed(1)) : 0,
+    };
+  });
+
+  const okRate = totalProduction > 0 ? Number(((totalOk / totalProduction) * 100).toFixed(1)) : 0;
+  const ngRate = totalProduction > 0 ? Number(((totalNg / totalProduction) * 100).toFixed(1)) : 0;
+
+  return {
+    date: queryDate,
+    machine: ip || "all",
+    summary: {
+      total: totalProduction,
+      ok: totalOk,
+      warm: totalWarm,
+      ng: totalNg,
+      okRate,
+      ngRate,
+    },
+    hours: hourlyData,
+  };
+}
+
 async function getConnectionEvents({ ip, limit = 200, from, to } = {}) {
   await ensureTableOnce();
 
@@ -5069,6 +5212,9 @@ function startPlcMonitor(io) {
     getReadingHistory: async (args = {}) => {
       return getReadingHistory(args);
     },
+    getHourlyProductionStats: async (args = {}) => {
+      return getHourlyProductionStats(args);
+    },
     getConnectionEvents,
     buildReadingsCsv,
     buildReadingsExcelXml,
@@ -5086,6 +5232,7 @@ module.exports = {
   readingColumnName,
   getLatestReadingsForMachines,
   getReadingHistory,
+  getHourlyProductionStats,
   getConnectionEvents,
   buildReadingsCsv,
   buildReadingsExcelXml,

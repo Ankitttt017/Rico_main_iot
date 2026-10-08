@@ -43,6 +43,7 @@ export const ENDPOINTS = {
   lineMachine: (lineId, machineId) => `/lines/${lineId}/machines/${machineId}`,
   plcLatestReadings: "/plc-monitor/readings/latest",
   plcReadingHistory: "/plc-monitor/readings/history",
+  plcHourlyProduction: "/plc-monitor/readings/hourly-production",
   plcReadingHistoryExport: "/plc-monitor/readings/history/export",
   plcConnectionEvents: "/plc-monitor/connection-events",
   plcConnectionEventsExport: "/plc-monitor/connection-events/export",

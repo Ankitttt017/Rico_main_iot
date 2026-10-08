@@ -57,6 +57,22 @@ function createPlcMonitorRoutes(service) {
     }
   });
 
+  router.get("/readings/hourly-production", async (req, res) => {
+    try {
+      const data = await service.getHourlyProductionStats({
+        ip: req.query.ip,
+        date: req.query.date,
+      });
+      res.json({ success: true, data });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: "Unable to load hourly production stats.",
+        error: error.message,
+      });
+    }
+  });
+
   router.get("/readings/history/export", async (req, res) => {
     try {
       const rows = await service.getReadingHistory({
