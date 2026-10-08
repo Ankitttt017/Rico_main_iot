@@ -531,7 +531,7 @@ function labelize(key, options = {}) {
   if (key === TESTING_MODE_COLUMN) return "Testing Mode";
   if (isLeakTest && key === "shot_time") return "Scan Time";
   if (isLeakTest && normalizeColumnKey(key) === "shot_number") return "Scan Number";
-  if (isLeakTest && ["shot_status", "result"].includes(normalizeColumnKey(key))) return "Scan Result";
+  if (isLeakTest && ["shot_status", "result"].includes(normalizeColumnKey(key))) return "Test Result";
   if (normalizeColumnKey(key) === "shot_number") return "Machine Shot Number";
   const normalizedKey = normalizeColumnKey(key);
   const baseLabel = REPORT_LABELS[normalizedKey] || String(key || "")
@@ -1916,11 +1916,11 @@ export default function PlcReportPage({ onLogout, currentUser }) {
       reportRangeLabel,
     ].filter(Boolean).join(" | ")
     : "Select a machine to load report";
-  const reportResultFilterTitle = isGaugeReport ? "Filter" : isLeakReport ? "Scan Result" : "Shot Result";
+  const reportResultFilterTitle = isGaugeReport ? "Filter" : isLeakReport ? "Test Result" : "Shot Result";
   const reportResultFilterValue = isGaugeReport ? reportFilterSummary : reportShotResultLabel;
   const formIsGaugeReport = draftMachineId ? draftMachineIsGauge : isGaugeReport;
   const formIsLeakReport = draftMachineId ? draftMachineIsLeak : isLeakReport;
-  const formResultFilterTitle = formIsLeakReport ? "Scan Result" : "Shot Result";
+  const formResultFilterTitle = formIsLeakReport ? "Test Result" : "Shot Result";
   const searchPlaceholder = formIsGaugeReport || formIsLeakReport ? "Search scan data..." : "Search shot number...";
   const filterGridClass = formIsGaugeReport
     ? "grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))] 2xl:[grid-template-columns:minmax(160px,1fr)_minmax(165px,1fr)_minmax(145px,0.85fr)_minmax(125px,0.75fr)_minmax(145px,0.85fr)_minmax(145px,0.85fr)_minmax(220px,1.35fr)_minmax(105px,0.55fr)_minmax(105px,0.55fr)_minmax(120px,0.65fr)] 2xl:items-end"
@@ -2287,7 +2287,7 @@ export default function PlcReportPage({ onLogout, currentUser }) {
                       onChange={(event) => setDraftShotResultFilter(event.target.value)}
                       className="mt-1 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
                     >
-                      <option value="" disabled>{formIsLeakReport ? "Select Scan Result" : "Select Result"}</option>
+                      <option value="" disabled>{formIsLeakReport ? "Select Test Result" : "Select Result"}</option>
                       {draftResultFilterOptions.map((filter) => (
                         <option key={filter.key} value={filter.key}>{filter.label}</option>
                       ))}
