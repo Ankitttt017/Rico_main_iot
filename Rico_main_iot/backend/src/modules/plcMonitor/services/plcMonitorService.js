@@ -2557,9 +2557,44 @@ async function getReadingHistory({ ip, limit = 200, from, to, page, pageSize, sh
   return sortProductionHistoryRows(rows.map(formatDbRowForClient));
 }
 
-async function getHourlyProductionStats({ ip, date } = {}) {
-  await ensureTableOnce();
+async function resolveMachineCategory(targetId) {
+  if (!targetId || targetId === "all") return "all";
 
+  const configuredMachines = await getConfiguredMachines().catch(() => []);
+  const matched = configuredMachines.find(
+    (m) => (m.key || m.ip) === targetId || m.ip === targetId || m.name === targetId
+  );
+  if (matched?.kind) {
+    if (matched.kind === "leaktest" || matched.kind === "leak") return "leaktest";
+    if (matched.kind === "gauge") return "gauge";
+    if (matched.kind === "ube") return "ube";
+  }
+
+  const normalized = String(targetId).toLowerCase();
+  if (normalized.includes("leak")) return "leaktest";
+  if (normalized.includes("gauge") || normalized.includes("guage")) return "gauge";
+  if (normalized.includes("ube")) return "ube";
+
+  try {
+    const { rows: leakRows } = await db.query(
+      `SELECT TOP 1 [Id] FROM ${LEAK_TEST_TABLE} WHERE [PLC_IP] = ? OR [Machine] = ?`,
+      [targetId, targetId]
+    );
+    if (leakRows && leakRows.length > 0) return "leaktest";
+  } catch {}
+
+  try {
+    const { rows: gaugeRows } = await db.query(
+      `SELECT TOP 1 [Id] FROM ${GAUGE_TABLE} WHERE [Machine_Key] = ? OR [PLC_IP] = ? OR [Machine_Name] = ?`,
+      [targetId, targetId, targetId]
+    );
+    if (gaugeRows && gaugeRows.length > 0) return "gauge";
+  } catch {}
+
+  return "ube";
+}
+
+async function queryUbeHourlyStats(queryDate, targetId) {
   const productionHourExpr = "COALESCE(TRY_CONVERT(INT, shot_hour), DATEPART(hour, shot_datetime), DATEPART(hour, recorded_at))";
   const productionClockDateExpr = "COALESCE(CAST(recorded_at AS date), TRY_CONVERT(date, shot_datetime), TRY_CONVERT(date, shot_date))";
   const productionDateExpr = `
@@ -2579,23 +2614,13 @@ async function getHourlyProductionStats({ ip, date } = {}) {
     END
   `;
 
-  let queryDate = date;
-  if (!queryDate) {
-    const { rows: dateRows } = await db.query(
-      `SELECT CONVERT(VARCHAR(10), CASE WHEN DATEPART(hour, GETDATE()) < 6 THEN DATEADD(day, -1, CAST(GETDATE() AS date)) ELSE CAST(GETDATE() AS date) END, 23) AS today_date`
-    );
-    queryDate = dateRows[0]?.today_date || new Date().toISOString().slice(0, 10);
-  }
-
   const filters = [`${productionDateExpr} = CAST(? AS date)`];
   const values = [queryDate];
 
-  if (ip && ip !== "all") {
+  if (targetId && targetId !== "all") {
     filters.push("(machine_key = ? OR plc_ip = ?)");
-    values.push(ip, ip);
+    values.push(targetId, targetId);
   }
-
-  const whereClause = `WHERE ${filters.join(" AND ")}`;
 
   const query = `
     WITH deduped_shots AS (
@@ -2616,7 +2641,7 @@ async function getHourlyProductionStats({ ip, date } = {}) {
             id DESC
         ) AS duplicate_rank
       FROM ${TABLE}
-      ${whereClause}
+      WHERE ${filters.join(" AND ")}
     )
     SELECT
       shot_hour_int AS hour,
@@ -2631,19 +2656,187 @@ async function getHourlyProductionStats({ ip, date } = {}) {
   `;
 
   const { rows } = await db.query(query, values);
+  return rows || [];
+}
+
+async function queryLeakHourlyStats(queryDate, targetId) {
+  const leakHourExpr = "DATEPART(hour, [Cycle_End_Time])";
+  const leakProductionDateExpr = `
+    CASE
+      WHEN ${leakHourExpr} < 6
+        THEN DATEADD(day, -1, CAST([Cycle_End_Time] AS date))
+      ELSE CAST([Cycle_End_Time] AS date)
+    END
+  `;
+
+  const filters = [`${leakProductionDateExpr} = CAST(? AS date)`];
+  const values = [queryDate];
+
+  if (targetId && targetId !== "all") {
+    filters.push("([PLC_IP] = ? OR [Machine] = ?)");
+    values.push(targetId, targetId);
+  }
+
+  const query = `
+    WITH deduped_leak AS (
+      SELECT
+        ${leakProductionDateExpr} AS production_date,
+        ${leakHourExpr} AS shot_hour_int,
+        [Result],
+        ROW_NUMBER() OVER (
+          PARTITION BY
+            COALESCE([PLC_IP], [Machine]),
+            ${leakProductionDateExpr},
+            CASE
+              WHEN NULLIF(LTRIM(RTRIM([Part_QR_Code])), N'') IS NOT NULL THEN [Part_QR_Code]
+              ELSE CONCAT(N'noqr-', [Id])
+            END
+          ORDER BY
+            [Cycle_End_Time] DESC,
+            [Id] DESC
+        ) AS duplicate_rank
+      FROM ${LEAK_TEST_TABLE}
+      WHERE ${filters.join(" AND ")}
+    )
+    SELECT
+      shot_hour_int AS hour,
+      COUNT(1) AS total,
+      SUM(CASE WHEN UPPER(LTRIM(RTRIM([Result]))) = 'OK' THEN 1 ELSE 0 END) AS ok,
+      0 AS warm,
+      SUM(CASE WHEN UPPER(LTRIM(RTRIM([Result]))) = 'NG' THEN 1 ELSE 0 END) AS ng
+    FROM deduped_leak
+    WHERE duplicate_rank = 1
+    GROUP BY shot_hour_int
+    ORDER BY shot_hour_int ASC
+  `;
+
+  const { rows } = await db.query(query, values);
+  return rows || [];
+}
+
+async function queryGaugeHourlyStats(queryDate, targetId) {
+  const gaugeRecordedLocalExpr = `DATEADD(minute, ${PLANT_UTC_OFFSET_MINUTES}, [Recorded_At])`;
+  const gaugeHourExpr = `DATEPART(hour, ${gaugeRecordedLocalExpr})`;
+  const gaugeProductionDateExpr = `
+    CASE
+      WHEN ${gaugeHourExpr} < 6
+        THEN DATEADD(day, -1, CAST(${gaugeRecordedLocalExpr} AS date))
+      ELSE CAST(${gaugeRecordedLocalExpr} AS date)
+    END
+  `;
+
+  const filters = [`${gaugeProductionDateExpr} = CAST(? AS date)`];
+  const values = [queryDate];
+
+  if (targetId && targetId !== "all") {
+    filters.push("([Machine_Key] = ? OR [PLC_IP] = ? OR [Machine_Name] = ?)");
+    values.push(targetId, targetId, targetId);
+  }
+
+  const query = `
+    WITH deduped_gauge AS (
+      SELECT
+        ${gaugeProductionDateExpr} AS production_date,
+        ${gaugeHourExpr} AS shot_hour_int,
+        [Gauge_Judgement],
+        ROW_NUMBER() OVER (
+          PARTITION BY
+            COALESCE([Machine_Key], [PLC_IP]),
+            ${gaugeProductionDateExpr},
+            CASE
+              WHEN NULLIF(LTRIM(RTRIM([Part_Scan_Data])), N'') IS NOT NULL THEN [Part_Scan_Data]
+              ELSE CONCAT(N'noqr-', [Id])
+            END
+          ORDER BY
+            [Recorded_At] DESC,
+            [Id] DESC
+        ) AS duplicate_rank
+      FROM ${GAUGE_TABLE}
+      WHERE ${filters.join(" AND ")}
+    )
+    SELECT
+      shot_hour_int AS hour,
+      COUNT(1) AS total,
+      SUM(CASE WHEN [Gauge_Judgement] = '1' OR UPPER(LTRIM(RTRIM([Gauge_Judgement]))) = 'OK' THEN 1 ELSE 0 END) AS ok,
+      0 AS warm,
+      SUM(CASE WHEN [Gauge_Judgement] = '0' OR [Gauge_Judgement] = '2' OR UPPER(LTRIM(RTRIM([Gauge_Judgement]))) = 'NG' THEN 1 ELSE 0 END) AS ng
+    FROM deduped_gauge
+    WHERE duplicate_rank = 1
+    GROUP BY shot_hour_int
+    ORDER BY shot_hour_int ASC
+  `;
+
+  const { rows } = await db.query(query, values);
+  return rows || [];
+}
+
+async function getHourlyProductionStats({ ip, date } = {}) {
+  await ensureTableOnce();
+
+  let queryDate = date;
+  if (!queryDate) {
+    const { rows: dateRows } = await db.query(
+      `SELECT CONVERT(VARCHAR(10), CASE WHEN DATEPART(hour, GETDATE()) < 6 THEN DATEADD(day, -1, CAST(GETDATE() AS date)) ELSE CAST(GETDATE() AS date) END, 23) AS today_date`
+    );
+    queryDate = dateRows[0]?.today_date || new Date().toISOString().slice(0, 10);
+  }
+
+  const targetId = ip && ip !== "all" ? String(ip).trim() : null;
+  const category = await resolveMachineCategory(targetId);
 
   const hourMap = new Map();
-  for (const r of rows) {
-    const h = Number(r.hour);
-    if (!Number.isNaN(h)) {
-      hourMap.set(h, {
-        hour: h,
-        total: Number(r.total || 0),
-        ok: Number(r.ok || 0),
-        warm: Number(r.warm || 0),
-        ng: Number(r.ng || 0),
-      });
+  const mergeRowsIntoMap = (rows = []) => {
+    for (const r of rows) {
+      const h = Number(r.hour);
+      if (!Number.isNaN(h)) {
+        const prev = hourMap.get(h) || { hour: h, total: 0, ok: 0, warm: 0, ng: 0 };
+        hourMap.set(h, {
+          hour: h,
+          total: prev.total + Number(r.total || 0),
+          ok: prev.ok + Number(r.ok || 0),
+          warm: prev.warm + Number(r.warm || 0),
+          ng: prev.ng + Number(r.ng || 0),
+        });
+      }
     }
+  };
+
+  if (category === "all") {
+    const [ubeRows, leakRows, gaugeRows] = await Promise.all([
+      queryUbeHourlyStats(queryDate, null).catch((err) => {
+        console.error("Hourly stats UBE error:", err.message);
+        return [];
+      }),
+      queryLeakHourlyStats(queryDate, null).catch((err) => {
+        console.error("Hourly stats Leak error:", err.message);
+        return [];
+      }),
+      queryGaugeHourlyStats(queryDate, null).catch((err) => {
+        console.error("Hourly stats Gauge error:", err.message);
+        return [];
+      }),
+    ]);
+    mergeRowsIntoMap(ubeRows);
+    mergeRowsIntoMap(leakRows);
+    mergeRowsIntoMap(gaugeRows);
+  } else if (category === "leaktest") {
+    const leakRows = await queryLeakHourlyStats(queryDate, targetId).catch((err) => {
+      console.error("Hourly stats Leak error:", err.message);
+      return [];
+    });
+    mergeRowsIntoMap(leakRows);
+  } else if (category === "gauge") {
+    const gaugeRows = await queryGaugeHourlyStats(queryDate, targetId).catch((err) => {
+      console.error("Hourly stats Gauge error:", err.message);
+      return [];
+    });
+    mergeRowsIntoMap(gaugeRows);
+  } else {
+    const ubeRows = await queryUbeHourlyStats(queryDate, targetId).catch((err) => {
+      console.error("Hourly stats UBE error:", err.message);
+      return [];
+    });
+    mergeRowsIntoMap(ubeRows);
   }
 
   const productionHoursOrder = [
@@ -2688,6 +2881,7 @@ async function getHourlyProductionStats({ ip, date } = {}) {
   return {
     date: queryDate,
     machine: ip || "all",
+    category,
     summary: {
       total: totalProduction,
       ok: totalOk,
