@@ -80,6 +80,8 @@ const HIDDEN_COLUMNS = new Set([
   "manual_mode",
   "auto_bit",
   "manual",
+  "metal_injection_datetime",
+  "metal_injection_date_time",
 ]);
 
 const LEAK_TEST_HIDDEN_COLUMNS = new Set([
