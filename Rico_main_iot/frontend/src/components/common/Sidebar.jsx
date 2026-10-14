@@ -42,6 +42,8 @@ const navSections = [
       { label: "Real Time Monitor", to: "/plc-monitor", icon: Activity, badge: { text: "Live", type: "green" }, permission: "plc:view" },
       { label: "Downtime Tracker", to: "/downtime-tracker", icon: AlertTriangle, permission: "downtime:view" },
       { label: "My Report", to: "/plc-report", icon: FileText, permission: "reports:view" },
+      { label: "Traceability", href: "http://192.168.100.136:9090", icon: Map, permission: "traceability:view", external: true },
+      { label: "Live Machine View", href: "http://192.168.100.136:3000", icon: Video, permission: "camera:view", external: true },
     ],
   },
   {
@@ -61,13 +63,6 @@ const navSections = [
       { label: "User & Role Access", to: "/access-control", icon: Users, permission: "roles:manage" },
       { label: "Shift Management", to: "/shift-management", icon: Clock, permission: "system:config" },
       { label: "System Settings", to: "/system-settings", icon: Settings, permission: "system:config" },
-    ],
-  },
-  {
-    title: "External Apps",
-    items: [
-      { label: "Traceability", href: "http://192.168.100.136:9090", icon: Map, permission: "traceability:view", external: true },
-      { label: "Live Machine View", href: "http://192.168.100.136:3000", icon: Video, permission: "camera:view", external: true },
     ],
   },
 ];
