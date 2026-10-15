@@ -89,6 +89,7 @@ const LEAK_TEST_HIDDEN_COLUMNS = new Set([
   "machine",
   "ip",
   "part_name",
+  "die_name",
   "part_qr_code",
   "scan_source_device",
   "status",
