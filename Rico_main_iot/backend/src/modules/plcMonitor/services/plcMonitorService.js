@@ -57,6 +57,18 @@ const {
   resolveStringReadTarget,
   withTimeout,
 } = require("../protocols/slmpProtocol");
+const {
+  QUAD_RUNNING_WINDOW_MS,
+  QUAD_LIVE_MAX_AGE_MS,
+  getQuadMachineId,
+  isQuadMachine,
+} = require("../config/quadConfig");
+const { QuadMessageError, getQuadRawValue } = require("./quadPayloadMapper");
+
+// Set to false (local testing only) to skip every direct PLC connection; QUAD machines are
+// never polled directly, whatever this flag says.
+const PLC_DIRECT_POLLING_ENABLED =
+  String(process.env.PLC_DIRECT_POLLING_ENABLED || "true").toLowerCase() !== "false";
 
 let schemaReadyPromise = null;
 let schemaUsableAt = 0;
@@ -3017,35 +3029,56 @@ async function persistGenericMachineReading(machine, partName, readings = {}, ev
   const readingId = result.rows[0]?.id;
   if (!readingId) return { skipped: true, reason: "missing-reading-id" };
 
-  for (const [name, value] of Object.entries(cleanReadings)) {
+  const valueRows = buildMachineReadingValueRows(machine, readingId, cleanReadings);
+  for (const { sql, params } of buildMachineReadingValueInserts(valueRows)) {
+    await db.run(sql, params);
+  }
+
+  return { skipped: false, id: readingId };
+}
+
+function buildMachineReadingValueRows(machine, readingId, readings = {}) {
+  const rows = [];
+  for (const [name, value] of Object.entries(readings)) {
     if (value === undefined || typeof value === "function") continue;
     const metadata = getRegisterMetadata(machine, name);
     const normalizedNumber = Number(value);
     const numericValue = value !== "" && Number.isFinite(normalizedNumber) ? normalizedNumber : null;
     const boolValue = value === true ? 1 : value === false ? 0 : null;
     const textValue = value === null || value === undefined ? null : String(value);
+    rows.push([
+      readingId,
+      metadata.key,
+      metadata.label,
+      metadata.type,
+      metadata.unit,
+      numericValue,
+      textValue,
+      boolValue,
+      textValue,
+    ]);
+  }
+  return rows;
+}
 
-    await db.run(
-      `INSERT INTO ${MACHINE_READING_VALUES_TABLE} (
+// One multi-row INSERT per chunk instead of one INSERT per value. SQL Server allows at most
+// 2100 parameters and 1000 rows per statement.
+const MACHINE_READING_VALUE_ROWS_PER_INSERT = 200;
+
+function buildMachineReadingValueInserts(rows = []) {
+  const statements = [];
+  for (let start = 0; start < rows.length; start += MACHINE_READING_VALUE_ROWS_PER_INSERT) {
+    const chunk = rows.slice(start, start + MACHINE_READING_VALUE_ROWS_PER_INSERT);
+    statements.push({
+      sql: `INSERT INTO ${MACHINE_READING_VALUES_TABLE} (
         reading_id, parameter_key, parameter_label, parameter_type, parameter_unit,
         numeric_value, text_value, bool_value, raw_value
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        readingId,
-        metadata.key,
-        metadata.label,
-        metadata.type,
-        metadata.unit,
-        numericValue,
-        textValue,
-        boolValue,
-        textValue,
-      ]
-    );
+      VALUES ${chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ")}`,
+      params: chunk.flat(),
+    });
   }
-
-  return { skipped: false, id: readingId };
+  return statements;
 }
 
 async function saveToDBUnlocked(machine, partName, readings) {
@@ -3191,6 +3224,134 @@ async function saveToDBUnlocked(machine, partName, readings) {
   await db.run(`INSERT INTO ${TABLE} (${columnSql}) VALUES (${placeholders})`, values);
   await persistGenericMachineReading(machine, partName, savedReadings, plcRecordedAt);
   return { skipped: false };
+}
+
+// ─── QUAD gateway (MQTT) shots ───
+// Builds the same readings object readAll() builds after a direct PLC read, from the raw
+// register values QUAD sent: same register config, same scaleValue(), same date rules.
+
+function plantClockParts(date) {
+  const shifted = new Date(date.getTime() + PLANT_UTC_OFFSET_MINUTES * 60000);
+  return {
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth() + 1,
+    day: shifted.getUTCDate(),
+    hour: shifted.getUTCHours(),
+    minute: shifted.getUTCMinutes(),
+    second: shifted.getUTCSeconds(),
+  };
+}
+
+function buildUbeReadingsFromQuad(machine, telemetry, { plantEnvironment = {} } = {}) {
+  const readings = {};
+  const configuredParameters = Array.isArray(machine.registerConfig) ? machine.registerConfig : [];
+  const partName = telemetry.partName || "";
+  readings.part_name = partName;
+  Object.assign(readings, plantEnvironment);
+
+  for (const parameter of mergeUbeReadParameters(configuredParameters)) {
+    const { name, device, stringDevice, computed } = parameter;
+    if (computed === "serial" || computed === "shotTime") continue;
+    if (!device && !stringDevice) {
+      if (readings[name] === undefined) readings[name] = null;
+      continue;
+    }
+    const rawValue = getQuadRawValue(telemetry, parameter);
+    const isText = Boolean(stringDevice) || isStringRegisterType(parameter.type);
+    readings[name] = rawValue === null || rawValue === undefined
+      ? null
+      : isText ? String(rawValue) : scaleValue(parameter, rawValue);
+    const legacyColumn = getLegacyColumnForParameter(parameter);
+    if (legacyColumn && readings[legacyColumn] === undefined) {
+      readings[legacyColumn] = readings[name];
+    }
+  }
+
+  // Shot date/time = cycle end (QUAD reads the shot right after M4598 rises), as in direct mode.
+  let clock = telemetry.acquiredAt ? plantClockParts(telemetry.acquiredAt) : null;
+  const plcHour = normalizeClockPart(telemetry.rawByDevice.get(UBE_SHOT_TIME_HOUR_DEVICE), 23);
+  const plcMinute = normalizeClockPart(telemetry.rawByDevice.get(UBE_SHOT_TIME_MINUTE_DEVICE), 59);
+  const plcSecond = normalizeClockPart(telemetry.rawByDevice.get(UBE_SHOT_TIME_SECOND_DEVICE), 59);
+  const hasPlcClock = plcHour !== null && plcMinute !== null && plcSecond !== null;
+  if (!clock && telemetry.plcShotTime) {
+    const match = telemetry.plcShotTime.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+    if (match) {
+      const [year, month, day, hour, minute, second] = match.slice(1).map(Number);
+      clock = { year, month, day, hour, minute, second };
+    }
+  }
+  if (!clock) throw new QuadMessageError("message has neither acquired_at nor a PLC shot time");
+
+  const shotDate = buildShotDateValue(clock.year, clock.month, clock.day);
+  const shotTime = buildShotTimeValue(clock.hour, clock.minute, clock.second);
+  const shotDateTime = buildShotDateTimeValue(clock.year, clock.month, clock.day, clock.hour, clock.minute, clock.second);
+  if (!shotDate || !shotTime) throw new QuadMessageError("message has an invalid shot time");
+  const productionDate = getProductionDate(shotDate, shotTime) || shotDate;
+
+  if (hasPlcClock) {
+    readings.metal_injection_datetime = buildShotDateTimeValue(
+      clock.year, clock.month, clock.day, plcHour, plcMinute, plcSecond
+    );
+  }
+  readings.shot_date = productionDate;
+  readings.production_date = productionDate;
+  readings.shot_time = shotTime;
+  readings.shot_datetime = shotDateTime;
+  readings.shot_year = pad2(clock.year);
+  readings.shot_month = pad2(clock.month);
+  readings.shot_day = pad2(clock.day);
+  readings.shot_hour = pad2(clock.hour);
+  readings.shot_minute = pad2(clock.minute);
+  readings.shot_second = pad2(clock.second);
+  readings["SHOT DATE"] = productionDate;
+  readings["SHOT TIME"] = shotTime;
+  readings["Shot Date"] = productionDate;
+  readings["Shot Time"] = shotTime;
+
+  readings.shot_number = readings["SHOT NO."] ?? null;
+  readings.ok_shot = readings["HIGH SHOT COUNT"] ?? null;
+  readings.ng_counter = readings["NG COUNTER"] ?? null;
+  if (
+    readings.clamp_force_pct === undefined &&
+    readings["CLAMP FORCE (%)"] === undefined &&
+    readings.clamp_tonnage_he_low_pct !== undefined &&
+    readings.clamp_tonnage_he_low_pct !== null
+  ) {
+    readings.clamp_force_pct = Number((Number(readings.clamp_tonnage_he_low_pct) / 10).toFixed(2));
+    readings["CLAMP FORCE (%)"] = readings.clamp_force_pct;
+  }
+  if (
+    readings.clamp_tonnage === undefined &&
+    readings["CLAMP TONNAGE (T)"] === undefined &&
+    readings.clamp_tonnage_he_low_mn !== undefined &&
+    readings.clamp_tonnage_he_low_mn !== null
+  ) {
+    readings.clamp_tonnage = Number((Number(readings.clamp_tonnage_he_low_mn) * 100).toFixed(0));
+    readings["CLAMP TONNAGE (T)"] = readings.clamp_tonnage;
+  }
+  delete readings.clamp_tonnage_he_low_mn;
+  delete readings.clamp_tonnage_he_low_mn_upper_limit;
+  delete readings.clamp_tonnage_he_low_mn_lower_limit;
+  delete readings.clamp_tonnage_he_low_mn_status;
+  delete readings["CLAMP TONNAGE(HE.LOW) MN"];
+  delete readings["CLAMP TONNAGE(HE.LOW) Upper Limit MN"];
+  delete readings["CLAMP TONNAGE(HE.LOW) Lower Limit MN"];
+  delete readings.ng_shot;
+
+  for (const [parameterName, legacyColumn] of Object.entries(LEGACY_COLUMNS_BY_PARAMETER)) {
+    if (readings[legacyColumn] === undefined && readings[parameterName] !== undefined) {
+      readings[legacyColumn] = readings[parameterName];
+    }
+  }
+
+  if (telemetry.acquiredAt) {
+    readings.cycle_start_time = telemetry.acquiredAt.toISOString();
+    readings.cycle_end_time = telemetry.acquiredAt.toISOString();
+  }
+
+  STOPPAGE_READING_KEYS.forEach((key) => delete readings[key]);
+
+  return { readings, partName, shotTime, shotDateTime };
 }
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -3651,6 +3812,164 @@ function startPlcMonitor(io) {
       console.error("PLC DB retry queue failed:", error.message);
     });
   }, PLC_DB_RETRY_MS).unref?.();
+
+  // ── QUAD gateway (MQTT) machines: no direct PLC connection; shots arrive via MQTT ──
+
+  const quadGatewayOnline = new Map();
+  const quadLastShotAt = new Map();
+  const quadRecentEvents = new Map();
+  const QUAD_RECENT_EVENT_LIMIT = 5000;
+  const quadSkipLogged = new Set();
+
+  const getQuadState = (machineKey) => {
+    if (quadGatewayOnline.get(machineKey) !== true) return "OFFLINE";
+    const lastShotAt = quadLastShotAt.get(machineKey) || 0;
+    return Date.now() - lastShotAt <= QUAD_RUNNING_WINDOW_MS ? "RUNNING" : "IDLE";
+  };
+
+  const applyQuadMachineState = (machine, patch = {}) => {
+    const machineKey = getCanonicalMachineKey(machine);
+    const quadState = getQuadState(machineKey);
+    updateMachineState(machine, {
+      dataSource: "QUAD",
+      quadMachineId: getQuadMachineId(machine),
+      quadState,
+      connected: quadGatewayOnline.get(machineKey) === true,
+      error: null,
+      shotStatus: quadState === "OFFLINE"
+        ? "QUAD gateway offline."
+        : quadState === "RUNNING"
+          ? "QUAD shot received."
+          : "QUAD gateway online; waiting for shot.",
+      ...patch,
+    });
+  };
+
+  const findQuadMachineIn = (list, quadMachineId) => {
+    const wanted = String(quadMachineId || "").trim().toLowerCase();
+    if (!wanted) return null;
+    return (list || []).find(
+      (machine) => String(getQuadMachineId(machine) || "").toLowerCase() === wanted
+    ) || null;
+  };
+  const findQuadMachine = (quadMachineId) => findQuadMachineIn(machines, quadMachineId);
+  // Right after a restart the broker delivers queued shots before the machine list is loaded.
+  const resolveQuadMachine = async (quadMachineId) =>
+    findQuadMachine(quadMachineId) ||
+    findQuadMachineIn(await getConfiguredMachines().catch(() => []), quadMachineId);
+
+  const rememberQuadEvent = (eventUuid, status, events = quadRecentEvents) => {
+    events.set(eventUuid, status);
+    if (events.size > QUAD_RECENT_EVENT_LIMIT) {
+      events.delete(events.keys().next().value);
+    }
+  };
+  // Shots already pushed to the live screen (a shot resent after a DB error is not shown twice).
+  const quadEmittedEvents = new Map();
+
+  const emitQuadShot = (machine, built, telemetry) => {
+    const machineKey = getCanonicalMachineKey(machine);
+    const machineType = getMachineTypeName(machine);
+    const { readings, partName, shotTime, shotDateTime } = built;
+    const config = {
+      key: machineKey,
+      ip: machine.ip,
+      port: machine.port,
+      kind: machineType,
+      machineType,
+    };
+    const clientReadings = formatReadingsForClient(readings, machine);
+    const observedAt = (telemetry.acquiredAt || new Date()).toISOString();
+    const emitData = {
+      machine: machine.name,
+      machineKey,
+      machineType,
+      partName,
+      shotTime,
+      readings: clientReadings,
+      cycleTime: readings.cycle_time,
+      timestamp: shotDateTime,
+      observedAt,
+      liveOnly: false,
+      config,
+    };
+
+    io.emit(`plc_data:${machineKey}`, emitData);
+    io.emit("plc_data", emitData);
+    io.emit("cycle_complete", {
+      ...emitData,
+      rawReadings: withoutStoppageEventFields(readings),
+    });
+
+    quadLastShotAt.set(machineKey, telemetry.acquiredAt ? telemetry.acquiredAt.getTime() : Date.now());
+    applyQuadMachineState(machine, {
+      lastCycleAt: shotDateTime,
+      lastShotNumber: readings.shot_number,
+      latestReading: formatLiveReadingSnapshot(machine, partName, readings, shotDateTime),
+      partName,
+      cycleTime: readings.cycle_time,
+    });
+  };
+
+  // Returns { ack: "SAVED" | "DUPLICATE" | null, reason, machine }. Throws when the DB save
+  // fails, so the caller can tell QUAD to resend (ACK status ERROR).
+  const handleQuadTelemetry = async (telemetry) => {
+    const machine = await resolveQuadMachine(telemetry.machineId);
+    if (!machine) return { ack: null, reason: "machine-not-on-quad" };
+    if (!isUbeMachine(machine) || isGaugeMachine(machine) || isLeakTestMachine(machine)) {
+      return { ack: null, reason: "unsupported-machine-type", machine };
+    }
+
+    const previousStatus = quadRecentEvents.get(telemetry.eventUuid);
+    if (previousStatus) return { ack: "DUPLICATE", reason: `already-${previousStatus.toLowerCase()}`, machine };
+
+    const ageMs = telemetry.acquiredAt ? Date.now() - telemetry.acquiredAt.getTime() : Infinity;
+    const isLive = ageMs <= QUAD_LIVE_MAX_AGE_MS;
+    // Plant temperature/humidity are read "now"; only attach them to live shots, not to backlog.
+    const plantEnvironment = isLive ? await getPlantEnvironmentReadings() : {};
+    const built = buildUbeReadingsFromQuad(machine, telemetry, { plantEnvironment });
+    if (isLive && !quadEmittedEvents.has(telemetry.eventUuid)) {
+      emitQuadShot(machine, built, telemetry);
+      rememberQuadEvent(telemetry.eventUuid, true, quadEmittedEvents);
+    }
+
+    if (!isReportSaveEnabledForMachine(machine)) {
+      return { ack: null, reason: "report-save-disabled", machine };
+    }
+
+    const result = await saveToDB(machine, built.partName, withoutStoppageEventFields(built.readings));
+    if (result?.skipped && result.reason === "duplicate-cycle-in-flight") {
+      return { ack: null, reason: result.reason, machine };
+    }
+    // Skipped shots (duplicates, or shots the save rules reject such as an incomplete cycle
+    // time) are acknowledged as DUPLICATE: resending them can never change the result.
+    const ack = result?.skipped ? "DUPLICATE" : "SAVED";
+    rememberQuadEvent(telemetry.eventUuid, ack);
+    return { ack, reason: result?.reason || null, machine, live: isLive };
+  };
+
+  const handleQuadStatus = async (quadMachineId, status) => {
+    const machine = await resolveQuadMachine(quadMachineId);
+    if (!machine) return false;
+    const machineKey = getCanonicalMachineKey(machine);
+    const wasOnline = quadGatewayOnline.get(machineKey) === true;
+    quadGatewayOnline.set(machineKey, status.online);
+    applyQuadMachineState(machine);
+    if (wasOnline !== status.online) {
+      recordConnectionChange(machine, status.online, status.online ? "" : "QUAD gateway offline").catch(() => { });
+    }
+    return true;
+  };
+
+  // RUNNING -> IDLE happens without a new message, so re-check the QUAD state periodically.
+  setInterval(() => {
+    (machines || []).filter((machine) => isQuadMachine(machine)).forEach((machine) => {
+      const machineKey = getCanonicalMachineKey(machine);
+      if (machineState.get(machineKey)?.quadState !== getQuadState(machineKey)) {
+        applyQuadMachineState(machine);
+      }
+    });
+  }, 10000).unref?.();
 
   const reportSerialByMachine = new Map();
 
@@ -4487,6 +4806,7 @@ function startPlcMonitor(io) {
     const machineLabel = `[${getMachineTypeName(machine).toUpperCase()}] ${machine.name} (${machine.ip})`;
     let reconnectAttempt = 0;
     const isMonitorCurrent = () => monitorTokens.get(machineKey) === token;
+    if (isQuadMachine(machine)) return;
 
     while (isMonitorCurrent()) {
       let sock = null;
@@ -5212,6 +5532,16 @@ function startPlcMonitor(io) {
     for (let i = 0; i < machines.length; i++) {
       const machine = machines[i];
       const machineKey = getCanonicalMachineKey(machine);
+      if (isQuadMachine(machine)) {
+        // Data comes from the QUAD gateway over MQTT; never open a direct PLC connection.
+        if (!quadSkipLogged.has(machineKey)) {
+          quadSkipLogged.add(machineKey);
+          console.log(`[QUAD] ${machine.name} (${machine.ip}): direct PLC connection skipped; data source is QUAD ${getQuadMachineId(machine)}`);
+        }
+        applyQuadMachineState(machine);
+        continue;
+      }
+      if (!PLC_DIRECT_POLLING_ENABLED) continue;
       if (monitorTokens.has(machineKey)) continue;
       const token = Symbol(machineKey);
       monitorTokens.set(machineKey, token);
@@ -5413,6 +5743,8 @@ function startPlcMonitor(io) {
     buildReadingsCsv,
     buildReadingsExcelXml,
     buildConnectionEventsExcelXml,
+    handleQuadTelemetry,
+    handleQuadStatus,
   };
 }
 
@@ -5432,6 +5764,9 @@ module.exports = {
   buildReadingsExcelXml,
   buildConnectionEventsExcelXml,
   formatDbRowForClient,
+  buildUbeReadingsFromQuad,
+  buildMachineReadingValueRows,
+  buildMachineReadingValueInserts,
 };
 
 

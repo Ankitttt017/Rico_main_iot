@@ -82,6 +82,9 @@ const HIDDEN_COLUMNS = new Set([
   "manual",
   "metal_injection_datetime",
   "metal_injection_date_time",
+  "plc_cycle_time",
+  "cycle_duration",
+  "actual_cycle_time",
 ]);
 
 const LEAK_TEST_HIDDEN_COLUMNS = new Set([

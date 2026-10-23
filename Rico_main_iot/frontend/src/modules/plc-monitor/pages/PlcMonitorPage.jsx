@@ -996,9 +996,17 @@ function PLCDashboard() {
   const selectedMachine = machines.find((machine) => getMachineKey(machine) === selectedMachineKey || machine.ip === plcConfig.ip);
   const selectedMachineStatus = machineStatuses[selectedMachineKey] || machineStatuses[plcConfig.ip] || {};
   const selectedMachineOnline = Boolean(selectedMachineStatus.connected);
+  const selectedIsQuad = selectedMachineStatus.dataSource === "QUAD";
 
   let effectiveStatusKey = "idle";
-  if (!monitoringRunning || !selectedMachineOnline) {
+  if (selectedIsQuad) {
+    // QUAD gateway machines: OFFLINE from the gateway status, RUNNING when a shot arrived recently.
+    effectiveStatusKey = selectedMachineStatus.quadState === "RUNNING"
+      ? "running"
+      : selectedMachineStatus.quadState === "IDLE"
+        ? "idle"
+        : "stopped";
+  } else if (!monitoringRunning || !selectedMachineOnline) {
     effectiveStatusKey = "stopped";
   } else if (cycleStatus === "running" || cycleStatus === "complete") {
     effectiveStatusKey = "running";
@@ -1240,6 +1248,8 @@ function PLCDashboard() {
               <div className="state-value">
                 {effectiveStatusKey === "running"
                   ? "CYCLE RUNNING"
+                  : selectedIsQuad && effectiveStatusKey === "stopped"
+                  ? "OFFLINE"
                   : effectiveStatusKey === "stopped"
                   ? "STOPPED"
                   : selectedMachineOnline

@@ -24,6 +24,7 @@ const plcMachineConfigRoutes = require("./src/modules/plcMachineConfigs/plcMachi
 const shiftRoutes = require("./src/modules/shifts/shift.routes");
 const createPlcMonitorRoutes = require("./src/modules/plcMonitor/routes/plcMonitorRoutes");
 const { startPlcMonitor } = require("./src/modules/plcMonitor/services/plcMonitorService");
+const { startQuadIngest } = require("./src/modules/plcMonitor/services/quadIngestService");
 
 const app = express();
 const server = http.createServer(app);
@@ -70,6 +71,9 @@ const plcMonitor = String(process.env.PLC_MONITOR_ENABLED || "true").toLowerCase
   }
   : startPlcMonitor(io);
 app.use("/api/plc-monitor", createPlcMonitorRoutes(plcMonitor));
+
+// QUAD gateway shots over MQTT (only when MQTT_URL and QUAD_MACHINES are set)
+startQuadIngest(plcMonitor);
 
 app.use((err, _req, res, _next) => {
   console.error(err);
