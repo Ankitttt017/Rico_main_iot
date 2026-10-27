@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { API_BASE_URL, API_FALLBACK_BASE_URL, ENDPOINTS, buildApiUrl } from './endpoints';
+import { authHeaders, clearSession } from './authToken';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -12,6 +13,25 @@ const fallbackApi = API_FALLBACK_BASE_URL
       timeout: 90000,
     })
   : null;
+
+function attachAuth(instance) {
+  instance.interceptors.request.use((config) => {
+    config.headers = authHeaders(config.headers || {});
+    return config;
+  });
+  instance.interceptors.response.use(undefined, (error) => {
+    // Expired or missing token: back to the login page. A wrong password on login is also a 401, so skip that.
+    const isLogin = String(error?.config?.url || "").endsWith(ENDPOINTS.authLogin);
+    if (error?.response?.status === 401 && !isLogin) {
+      clearSession();
+      window.location.reload();
+    }
+    return Promise.reject(error);
+  });
+}
+
+attachAuth(api);
+if (fallbackApi) attachAuth(fallbackApi);
 
 const responseCache = new Map();
 const DEFAULT_CACHE_TTL = 30000;

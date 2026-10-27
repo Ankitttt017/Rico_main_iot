@@ -1,3 +1,5 @@
+import { getAuthToken } from "./authToken";
+
 function getSameHostBackendUrl(path) {
   if (typeof window === "undefined") return path;
   const { protocol, hostname } = window.location;
@@ -62,13 +64,16 @@ export const ENDPOINTS = {
   workstationDowntimeEventClose: (id) => `/workstation/downtime-events/${id}/close`,
 };
 
+// Used for plain <a href> downloads, which cannot send an Authorization header,
+// so the login token goes in the query string.
 export function buildApiUrl(path, query) {
   const base = API_BASE_URL.replace(/\/$/, "");
   const endpoint = String(path || "").startsWith("/") ? path : `/${path}`;
   const url = `${base}${endpoint}`;
-  if (!query) return url;
 
-  const params = query instanceof URLSearchParams ? query : new URLSearchParams(query);
+  const params = new URLSearchParams(query || undefined);
+  const token = getAuthToken();
+  if (token) params.set("access_token", token);
   const queryString = params.toString();
   return queryString ? `${url}?${queryString}` : url;
 }

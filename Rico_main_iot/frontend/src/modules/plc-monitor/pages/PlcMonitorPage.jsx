@@ -4,6 +4,7 @@ import { io } from "socket.io-client";
 import AppLayout from "../../../components/common/AppLayout";
 import { getPlcLatestReadings } from "../../../services/api";
 import { SOCKET_URL } from "../../../services/endpoints";
+import { getAuthToken } from "../../../services/authToken";
 import { DEFAULT_MACHINES, MACHINE_NAMES, PLC_LATEST_POLL_MS, getMachineKey, mergeMachineList, sortMachinesBySeries } from "../constants";
 import PlcMonitorStyles from "../components/PlcMonitorStyles";
 import PlcReportModal from "../components/PlcReportModal";
@@ -731,6 +732,7 @@ function PLCDashboard() {
 
   useEffect(() => {
     const socket = io(SOCKET_URL, {
+      auth: (cb) => cb({ token: getAuthToken() }),
       reconnection: true,
       reconnectionDelay: 2000,
     });

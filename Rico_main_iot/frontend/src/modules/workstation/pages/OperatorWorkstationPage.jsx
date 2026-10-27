@@ -29,6 +29,7 @@ import {
   createWorkstationDowntimeEvent,
 } from "../../../services/api";
 import { SOCKET_URL } from "../../../services/endpoints";
+import { getAuthToken } from "../../../services/authToken";
 
 const PLANTS = [];
 
@@ -999,6 +1000,7 @@ const OperatorWorkstationPage = ({ onLogout, currentUser }) => {
 
   useEffect(() => {
     const socket = io(SOCKET_URL, {
+      auth: (cb) => cb({ token: getAuthToken() }),
       transports: ["websocket", "polling"],
       reconnection: true,
     });

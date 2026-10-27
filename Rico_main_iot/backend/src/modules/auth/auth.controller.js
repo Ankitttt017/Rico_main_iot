@@ -2,6 +2,7 @@
 
 const crypto = require("crypto");
 const db = require("../../config/db");
+const { signToken } = require("../../middleware/auth");
 
 let schemaReadyPromise = null;
 let schemaWarmupStarted = false;
@@ -318,6 +319,11 @@ async function audit(action, performedBy, targetUser, details = {}) {
   }
 }
 
+// The logged-in user from the verified token; never trust a username sent in the request body.
+function actorUsername(req) {
+  return req.user?.username || "";
+}
+
 async function isSystemAdminActor(username) {
   const actor = String(username || "").trim();
   if (!actor) return false;
@@ -358,7 +364,8 @@ async function login(req, res) {
       );
     }
 
-    res.json({ success: true, data: normalizeUser(user) });
+    const sessionUser = normalizeUser(user);
+    res.json({ success: true, data: { ...sessionUser, token: signToken(sessionUser) } });
   } catch (error) {
     res.status(500).json({ success: false, message: "Unable to login.", error: error.message });
   }
@@ -435,7 +442,7 @@ async function createUser(req, res) {
       ]
     );
     const user = apiUser(result.rows[0]);
-    await audit("USER_CREATED", req.body.performedBy || "admin", username, { role, permissions });
+    await audit("USER_CREATED", actorUsername(req), username, { role, permissions });
     res.status(201).json({ success: true, user, data: user, message: `User "${fullName}" created as ${roleMeta.label}` });
   } catch (error) {
     res.status(500).json({ success: false, message: "Unable to create user.", error: error.message });
@@ -456,7 +463,7 @@ async function updateUser(req, res) {
     const permissions = Array.isArray(req.body.permissions) && req.body.permissions.length ? req.body.permissions : roleMeta.permissions;
     const landingPath = req.body.landingPath || roleMeta.landingPath;
     if (req.body.password) {
-      if (!(await isSystemAdminActor(req.body.performedBy))) {
+      if (!(await isSystemAdminActor(actorUsername(req)))) {
         return res.status(403).json({ success: false, message: "Only a system administrator can update passwords." });
       }
       await db.run(
@@ -500,7 +507,7 @@ async function updateUser(req, res) {
     }
     const { rows } = await db.query("SELECT TOP 1 * FROM dbo.app_users WHERE id = ?", [id]);
     const user = apiUser(rows[0]);
-    await audit("USER_UPDATED", req.body.performedBy || "admin", user.username, { role, permissions });
+    await audit("USER_UPDATED", actorUsername(req), user.username, { role, permissions });
     res.json({ success: true, user, data: user, message: "User updated" });
   } catch (error) {
     res.status(500).json({ success: false, message: "Unable to update user.", error: error.message });
@@ -523,7 +530,7 @@ async function deleteUser(req, res) {
       }
     }
     await db.run("DELETE FROM dbo.app_users WHERE id = ?", [id]);
-    await audit("USER_DELETED", req.body?.performedBy || "admin", rows[0].username);
+    await audit("USER_DELETED", actorUsername(req), rows[0].username);
     res.json({ success: true, message: "User deleted" });
   } catch (error) {
     res.status(500).json({ success: false, message: "Unable to delete user.", error: error.message });
@@ -558,7 +565,7 @@ async function resetPassword(req, res) {
     await ensureSchema();
     const id = Number(req.params.id);
     const password = String(req.body.password || "");
-    if (!(await isSystemAdminActor(req.body.performedBy))) {
+    if (!(await isSystemAdminActor(actorUsername(req)))) {
       return res.status(403).json({ success: false, message: "Only a system administrator can reset passwords." });
     }
     if (!/^(?=.*[A-Z])(?=.*\d).{8,}$/.test(password)) {

@@ -9,11 +9,14 @@ const {
   toggleShiftStatus,
   deleteShift,
 } = require("./shift.controller");
+const { requirePermission } = require("../../middleware/auth");
+
+const canConfigure = requirePermission("system:config");
 
 router.get("/", getAllShifts);
-router.post("/", createShift);
-router.put("/:id", updateShift);
-router.patch("/:id/toggle", toggleShiftStatus);
-router.delete("/:id", deleteShift);
+router.post("/", canConfigure, createShift);
+router.put("/:id", canConfigure, updateShift);
+router.patch("/:id/toggle", canConfigure, toggleShiftStatus);
+router.delete("/:id", canConfigure, deleteShift);
 
 module.exports = router;

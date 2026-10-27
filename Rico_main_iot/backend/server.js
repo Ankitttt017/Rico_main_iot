@@ -13,6 +13,7 @@ const cors = require("cors");
 const http = require("http");
 const { Server } = require("socket.io");
 const db = require("./src/config/db");
+const { requireAuth, socketAuth } = require("./src/middleware/auth");
 const partRoutes = require("./src/modules/parts/part.routes");
 const lineRoutes = require("./src/modules/lines/line.routes");
 const machineRoutes = require("./src/modules/machines/machine.routes");
@@ -33,6 +34,7 @@ const io = new Server(server, {
     origin: "*",
   },
 });
+io.use(socketAuth);
 const PORT = process.env.PORT || 5000;
 
 app.use(cors());
@@ -46,6 +48,9 @@ app.get("/", (_req, res) => {
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, service: "rico-main-iot-backend" });
 });
+
+// Every /api route below needs a login token, except the public ones listed in middleware/auth.js.
+app.use("/api", requireAuth);
 
 app.use("/api", partRoutes);
 app.use("/api", machineRoutes);

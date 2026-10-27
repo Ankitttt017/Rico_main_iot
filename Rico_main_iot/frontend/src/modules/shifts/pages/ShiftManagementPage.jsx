@@ -22,8 +22,8 @@ import {
   ChevronRight,
 } from "lucide-react";
 import toast from "react-hot-toast";
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
+import { API_BASE_URL } from "../../../services/endpoints";
+import { authHeaders } from "../../../services/authToken";
 
 export default function ShiftManagementPage({ onLogout, currentUser }) {
   const [shifts, setShifts] = useState([]);
@@ -59,7 +59,7 @@ export default function ShiftManagementPage({ onLogout, currentUser }) {
   const fetchShifts = async () => {
     setLoading(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/shifts`);
+      const response = await fetch(`${API_BASE_URL}/shifts`, { headers: authHeaders() });
       const data = await response.json();
       if (data.success) {
         setShifts(data.data || []);
@@ -194,7 +194,7 @@ export default function ShiftManagementPage({ onLogout, currentUser }) {
 
       const response = await fetch(url, {
         method,
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(payload),
       });
 
@@ -218,6 +218,7 @@ export default function ShiftManagementPage({ onLogout, currentUser }) {
     try {
       const response = await fetch(`${API_BASE_URL}/shifts/${shift.id}/toggle`, {
         method: "PATCH",
+        headers: authHeaders(),
       });
       const data = await response.json();
       if (data.success) {
@@ -237,6 +238,7 @@ export default function ShiftManagementPage({ onLogout, currentUser }) {
     try {
       const response = await fetch(`${API_BASE_URL}/shifts/${deleteTarget.id}`, {
         method: "DELETE",
+        headers: authHeaders(),
       });
       const data = await response.json();
       if (data.success) {

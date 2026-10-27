@@ -27,7 +27,7 @@ const LoginPage = ({ onLogin }) => {
     setLoading(true);
     try {
       const response = await loginUser({ username, password });
-      onLogin(response.data?.data || username);
+      onLogin(response.data?.data);
     } catch (err) {
       setError(err.response?.data?.message || t("loginErrorInvalid"));
       setLoading(false);

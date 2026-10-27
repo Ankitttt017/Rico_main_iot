@@ -20,7 +20,7 @@ const OperatorWorkstationLoginPage = ({ onLogin }) => {
     setLoading(true);
     try {
       const response = await loginUser({ username: username.trim(), password, role: "operator" });
-      onLogin(response.data?.data || username.trim());
+      onLogin(response.data?.data);
     } catch (err) {
       setError(err.response?.data?.message || "Invalid login for workstation access.");
       setPassword("");

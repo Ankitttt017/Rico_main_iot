@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 import { I18nProvider } from "./context/I18nContext";
 import { SidebarProvider } from "./context/SidebarContext";
+import { clearSession, getAuthToken, setAuthToken } from "./services/authToken";
 
 // ─── Rico IoT Pages ────────────────────────────────────────────────
 const LoginPage = lazy(() => import("./pages/LoginPage"));
@@ -47,26 +48,19 @@ function getSavedUser() {
 }
 
 const App = () => {
+  // Sessions from before token login have no token and go back to the login page.
   const [isLoggedIn, setIsLoggedIn] = useState(
-    () => sessionStorage.getItem("rico_auth") === "true"
+    () => sessionStorage.getItem("rico_auth") === "true" && Boolean(getAuthToken())
   );
   const [currentUser, setCurrentUser] = useState(() => getSavedUser());
   const [workstationUser, setWorkstationUser] = useState(
     () => sessionStorage.getItem("rico_workstation_user") || ""
   );
 
-  const handleLogin = (username) => {
-    const user = typeof username === "object"
-      ? username
-      : {
-          name: username?.trim() || "Admin",
-          role: username?.trim()?.toLowerCase() === "operator" ? "Operator" : "Administrator",
-          role_key: username?.trim()?.toLowerCase() === "operator" ? "OPERATOR" : "SYSTEM_ADMIN",
-          permissions: username?.trim()?.toLowerCase() === "operator"
-            ? ["workstation:view", "workstation:operate"]
-            : ["master:manage", "master:view", "plc:manage", "plc:view", "reports:view", "reports:export", "workstation:view", "workstation:operate", "downtime:view", "downtime:manage", "traceability:view", "camera:view", "ng:view", "roles:manage", "system:config"],
-          landingPath: username?.trim()?.toLowerCase() === "operator" ? "/operator-workstation" : "/dashboard",
-        };
+  const handleLogin = (loginData) => {
+    if (!loginData || typeof loginData !== "object" || !loginData.token) return;
+    const { token, ...user } = loginData;
+    setAuthToken(token);
     sessionStorage.setItem("rico_auth", "true");
     sessionStorage.setItem("rico_user", JSON.stringify(user));
     setCurrentUser(user);
@@ -79,10 +73,7 @@ const App = () => {
   };
 
   const handleLogout = () => {
-    sessionStorage.removeItem("rico_auth");
-    sessionStorage.removeItem("rico_user");
-    sessionStorage.removeItem("rico_workstation_auth");
-    sessionStorage.removeItem("rico_workstation_user");
+    clearSession();
     setCurrentUser(null);
     setIsLoggedIn(false);
     setWorkstationUser("");
