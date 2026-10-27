@@ -176,7 +176,12 @@ export const getWorkstationSummary = (params) => cachedGet(ENDPOINTS.workstation
 export const getWorkstationDowntimeEvents = (params) => cachedGet(ENDPOINTS.workstationDowntimeEvents, { params, ttl: LIVE_CACHE_TTL, staleWhileRefresh: false });
 export const createWorkstationDowntimeEvent = (data) => mutate(api.post(ENDPOINTS.workstationDowntimeEvents, data));
 export const closeWorkstationDowntimeEvent = (id, data) => mutate(api.patch(ENDPOINTS.workstationDowntimeEventClose(id), data));
-export const getPartSheetDownloadUrl = (partId, type, sheetId) => buildApiUrl(ENDPOINTS.partSheetDownload(partId, type, sheetId));
+export const getShifts = () => requestGet(ENDPOINTS.shifts, { params: { _: Date.now() } });
+export const createShift = (data) => mutate(api.post(ENDPOINTS.shifts, data));
+export const updateShift = (id, data) => mutate(api.put(ENDPOINTS.shift(id), data));
+export const toggleShift = (id) => mutate(api.patch(ENDPOINTS.shiftToggle(id)));
+export const deleteShift = (id) => mutate(api.delete(ENDPOINTS.shift(id)));
+export const getPartSheetDownloadUrl =(partId, type, sheetId) => buildApiUrl(ENDPOINTS.partSheetDownload(partId, type, sheetId));
 export const getPlcHistoryExportUrl = ({ ip, limit = 2000, from, to } = {}) => {
   const params = new URLSearchParams();
   if (ip) params.set('ip', ip);

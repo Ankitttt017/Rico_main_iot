@@ -10,10 +10,12 @@ process.on("unhandledRejection", (reason) => {
 
 const express = require("express");
 const cors = require("cors");
+const helmet = require("helmet");
 const http = require("http");
 const { Server } = require("socket.io");
 const db = require("./src/config/db");
 const { requireAuth, socketAuth } = require("./src/middleware/auth");
+const { corsOrigin, loginRateLimiter, hideServerErrors } = require("./src/middleware/security");
 const partRoutes = require("./src/modules/parts/part.routes");
 const lineRoutes = require("./src/modules/lines/line.routes");
 const machineRoutes = require("./src/modules/machines/machine.routes");
@@ -31,15 +33,20 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*",
+    origin: corsOrigin,
   },
 });
 io.use(socketAuth);
 const PORT = process.env.PORT || 5000;
 
-app.use(cors());
+// nginx on the same host forwards /api; trust its X-Forwarded-For only (real client IP for rate limiting).
+app.set("trust proxy", process.env.TRUST_PROXY || "loopback");
+// The API only serves JSON and downloads; the frontend may call it from another port (fallback URL).
+app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
+app.use(cors({ origin: corsOrigin }));
 app.use(express.json({ limit: "20mb" }));
 app.use(express.urlencoded({ extended: true, limit: "20mb" }));
+app.use(hideServerErrors);
 
 app.get("/", (_req, res) => {
   res.json({ ok: true, service: "rico-main-iot-backend" });
@@ -48,6 +55,8 @@ app.get("/", (_req, res) => {
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, service: "rico-main-iot-backend" });
 });
+
+app.post("/api/auth/login", loginRateLimiter);
 
 // Every /api route below needs a login token, except the public ones listed in middleware/auth.js.
 app.use("/api", requireAuth);

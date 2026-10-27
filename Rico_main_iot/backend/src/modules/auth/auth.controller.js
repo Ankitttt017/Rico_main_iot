@@ -7,6 +7,9 @@ const { signToken } = require("../../middleware/auth");
 let schemaReadyPromise = null;
 let schemaWarmupStarted = false;
 
+const MAX_FAILED_LOGINS = Math.max(1, Number(process.env.AUTH_MAX_FAILED_LOGINS || 5));
+const LOCKOUT_MINUTES = Math.max(1, Number(process.env.AUTH_LOCKOUT_MINUTES || 15));
+
 const PERMISSIONS = {
   MASTER_MANAGE: "master:manage",
   MASTER_VIEW: "master:view",
@@ -280,7 +283,6 @@ WHERE role IS NOT NULL`);
         "UPDATE dbo.app_users SET is_active = 1, updated_at = SYSUTCDATETIME() WHERE LOWER(username) = LOWER(?)",
         [ROLE_DEFINITIONS.SYSTEM_ADMIN.defaultUsername]
       );
-      await db.run("UPDATE dbo.app_users SET failed_attempts = 0, locked_until = NULL WHERE locked_until IS NOT NULL OR failed_attempts <> 0");
     })().catch((error) => {
       schemaReadyPromise = null;
       throw error;
@@ -344,8 +346,11 @@ async function login(req, res) {
       return res.status(400).json({ success: false, message: "Username and password are required." });
     }
 
+    // Lock state is computed in SQL so app-server and DB clocks/timezones cannot disagree.
     const { rows } = await db.query(
-      `SELECT TOP 1 *
+      `SELECT TOP 1 *,
+              CASE WHEN locked_until > SYSUTCDATETIME() THEN 1 ELSE 0 END AS is_locked,
+              DATEDIFF(SECOND, SYSUTCDATETIME(), locked_until) AS locked_seconds
        FROM dbo.app_users
        WHERE username = ? AND is_active = 1`,
       [username]
@@ -353,7 +358,28 @@ async function login(req, res) {
     const user = rows[0];
     if (!user) return res.status(401).json({ success: false, message: "Invalid username or password." });
 
+    if (Number(user.is_locked) === 1) {
+      const minutes = Math.max(1, Math.ceil(Number(user.locked_seconds || 0) / 60));
+      return res.status(423).json({
+        success: false,
+        message: `Account locked after too many failed logins. Try again in ${minutes} minute(s) or ask an administrator to reset the password.`,
+      });
+    }
+
     if (!verifyPassword(password, user.password_hash)) {
+      // An expired lock starts a fresh count.
+      await db.run(
+        `UPDATE dbo.app_users
+         SET failed_attempts = CASE WHEN locked_until IS NOT NULL THEN 1 ELSE failed_attempts + 1 END,
+             locked_until = CASE
+               WHEN (CASE WHEN locked_until IS NOT NULL THEN 1 ELSE failed_attempts + 1 END) >= ?
+               THEN DATEADD(MINUTE, ?, SYSUTCDATETIME())
+               ELSE NULL
+             END,
+             updated_at = SYSUTCDATETIME()
+         WHERE id = ?`,
+        [MAX_FAILED_LOGINS, LOCKOUT_MINUTES, user.id]
+      );
       return res.status(401).json({ success: false, message: "Invalid username or password." });
     }
 

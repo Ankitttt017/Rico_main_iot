@@ -62,6 +62,9 @@ export const ENDPOINTS = {
   workstationSummary: "/workstation/summary",
   workstationDowntimeEvents: "/workstation/downtime-events",
   workstationDowntimeEventClose: (id) => `/workstation/downtime-events/${id}/close`,
+  shifts: "/shifts",
+  shift: (id) => `/shifts/${id}`,
+  shiftToggle: (id) => `/shifts/${id}/toggle`,
 };
 
 // Used for plain <a href> downloads, which cannot send an Authorization header,

@@ -22,8 +22,10 @@ import {
   ChevronRight,
 } from "lucide-react";
 import toast from "react-hot-toast";
-import { API_BASE_URL } from "../../../services/endpoints";
-import { authHeaders } from "../../../services/authToken";
+import { createShift, deleteShift, getShifts, toggleShift, updateShift } from "../../../services/api";
+
+// Server message for a failed request (e.g. duplicate shift code), else the fallback text.
+const errorMessage = (error, fallback) => error?.response?.data?.message || fallback;
 
 export default function ShiftManagementPage({ onLogout, currentUser }) {
   const [shifts, setShifts] = useState([]);
@@ -59,8 +61,7 @@ export default function ShiftManagementPage({ onLogout, currentUser }) {
   const fetchShifts = async () => {
     setLoading(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/shifts`, { headers: authHeaders() });
-      const data = await response.json();
+      const { data } = await getShifts();
       if (data.success) {
         setShifts(data.data || []);
         setActiveShift(data.activeShift || null);
@@ -69,7 +70,7 @@ export default function ShiftManagementPage({ onLogout, currentUser }) {
       }
     } catch (error) {
       console.error("Fetch shifts error:", error);
-      toast.error("Network error while loading shifts");
+      toast.error(errorMessage(error, "Network error while loading shifts"));
     } finally {
       setLoading(false);
     }
@@ -179,9 +180,6 @@ export default function ShiftManagementPage({ onLogout, currentUser }) {
 
     setSubmitting(true);
     try {
-      const url = editingShift ? `${API_BASE_URL}/shifts/${editingShift.id}` : `${API_BASE_URL}/shifts`;
-      const method = editingShift ? "PUT" : "POST";
-
       const payload = {
         ...formData,
         break_1_name: formData.breaks[0]?.name || null,
@@ -192,13 +190,9 @@ export default function ShiftManagementPage({ onLogout, currentUser }) {
         break_2_end: formData.breaks[1]?.end_time || null,
       };
 
-      const response = await fetch(url, {
-        method,
-        headers: authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify(payload),
-      });
-
-      const data = await response.json();
+      const { data } = editingShift
+        ? await updateShift(editingShift.id, payload)
+        : await createShift(payload);
       if (data.success) {
         toast.success(editingShift ? "Shift updated successfully!" : "New shift created successfully!");
         setIsModalOpen(false);
@@ -208,7 +202,7 @@ export default function ShiftManagementPage({ onLogout, currentUser }) {
       }
     } catch (error) {
       console.error("Save shift error:", error);
-      toast.error("Network error while saving shift");
+      toast.error(errorMessage(error, "Network error while saving shift"));
     } finally {
       setSubmitting(false);
     }
@@ -216,11 +210,7 @@ export default function ShiftManagementPage({ onLogout, currentUser }) {
 
   const handleToggleStatus = async (shift) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/shifts/${shift.id}/toggle`, {
-        method: "PATCH",
-        headers: authHeaders(),
-      });
-      const data = await response.json();
+      const { data } = await toggleShift(shift.id);
       if (data.success) {
         toast.success(`Shift status changed to ${shift.is_active ? "Inactive" : "Active"}`);
         fetchShifts();
@@ -228,7 +218,7 @@ export default function ShiftManagementPage({ onLogout, currentUser }) {
         toast.error(data.message || "Failed to toggle status");
       }
     } catch (error) {
-      toast.error("Error updating shift status");
+      toast.error(errorMessage(error, "Error updating shift status"));
     }
   };
 
@@ -236,11 +226,7 @@ export default function ShiftManagementPage({ onLogout, currentUser }) {
     if (!deleteTarget) return;
     setDeleting(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/shifts/${deleteTarget.id}`, {
-        method: "DELETE",
-        headers: authHeaders(),
-      });
-      const data = await response.json();
+      const { data } = await deleteShift(deleteTarget.id);
       if (data.success) {
         toast.success("Shift deleted successfully!");
         setDeleteTarget(null);
@@ -249,7 +235,7 @@ export default function ShiftManagementPage({ onLogout, currentUser }) {
         toast.error(data.message || "Failed to delete shift");
       }
     } catch (error) {
-      toast.error("Error deleting shift");
+      toast.error(errorMessage(error, "Error deleting shift"));
     } finally {
       setDeleting(false);
     }
