@@ -2,6 +2,7 @@
 
 process.env.JWT_SECRET = "test-secret";
 process.env.AUTH_ENFORCED = "true";
+process.env.API_KEYS = "third-party-key, second-key";
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
@@ -64,6 +65,21 @@ test("download links may pass the token as access_token on GET only", () => {
   const token = signToken(operator);
   assert.equal(run(requireAuth, { query: { access_token: token } }).nextCalled, true);
   assert.equal(run(requireAuth, { method: "POST", query: { access_token: token } }).nextCalled, false);
+});
+
+test("a configured API key allows GET requests only", () => {
+  const viaHeader = run(requireAuth, { headers: { "x-api-key": "third-party-key" } });
+  assert.equal(viaHeader.nextCalled, true);
+  assert.equal(run(requireAuth, { query: { api_key: "second-key" } }).nextCalled, true);
+  assert.equal(run(requireAuth, { headers: { "x-api-key": "wrong-key" } }).nextCalled, false);
+  assert.equal(run(requireAuth, { method: "POST", headers: { "x-api-key": "third-party-key" } }).nextCalled, false);
+});
+
+test("API key clients have no permissions", () => {
+  const req = { headers: { "x-api-key": "third-party-key" } };
+  run(requireAuth, req);
+  const canManageUsers = requirePermission("roles:manage");
+  assert.equal(run(canManageUsers, { user: { username: "api-client", permissions: [] } }).res.statusCode, 403);
 });
 
 test("requirePermission blocks users without the permission", () => {
