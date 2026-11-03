@@ -98,9 +98,17 @@ const PLANT_ENVIRONMENT_READ_TIMEOUT_MS = Math.max(
   1000,
   Number(process.env.PLC_PLANT_ENVIRONMENT_READ_TIMEOUT_MS || 6000)
 );
+const PLANT_ENVIRONMENT_MAX_AGE_MS = Math.max(
+  PLANT_ENVIRONMENT_CACHE_MS,
+  Number(process.env.PLC_PLANT_ENVIRONMENT_MAX_AGE_MS || 10 * 60 * 1000)
+);
 const UBE_SHOT_TIME_HOUR_DEVICE = String(process.env.PLC_UBE_SHOT_TIME_HOUR_DEVICE || "D2103").trim().toUpperCase();
 const UBE_SHOT_TIME_MINUTE_DEVICE = String(process.env.PLC_UBE_SHOT_TIME_MINUTE_DEVICE || "D2104").trim().toUpperCase();
 const UBE_SHOT_TIME_SECOND_DEVICE = String(process.env.PLC_UBE_SHOT_TIME_SECOND_DEVICE || "D2105").trim().toUpperCase();
+// UBE 850T addresses, used only when a machine's registers do not name its own.
+const UBE_DEFAULT_CYCLE_END_DEVICE = String(process.env.PLC_UBE_CYCLE_END_DEVICE || "M4598").trim().toUpperCase();
+const UBE_DEFAULT_SHOT_DEVICE = String(process.env.PLC_UBE_SHOT_DEVICE || "D1120").trim().toUpperCase();
+const UBE_FALLBACK_DEFAULT_MS = Number(process.env.PLC_UBE_FALLBACK_TIMEOUT_MS || 58000);
 const UBE_CYCLE_END_SAVE_ATTEMPTS = Math.max(
   1,
   Number(process.env.PLC_UBE_CYCLE_END_SAVE_ATTEMPTS || 3)
@@ -192,18 +200,9 @@ async function readUbeShotTimestamp(sock, fallbackDate = new Date()) {
   }
 }
 
-function getPlantFallbackTemperature() {
-  const envVal = Number(process.env.PLC_PLANT_TEMPERATURE_DEFAULT || process.env.PLC_PLANT_TEMPERATURE_FALLBACK || 30.0);
-  return Number.isFinite(envVal) ? Number(envVal.toFixed(2)) : 30.0;
-}
-
-function getPlantFallbackHumidity() {
-  const envVal = Number(process.env.PLC_PLANT_HUMIDITY_DEFAULT || process.env.PLC_PLANT_HUMIDITY_FALLBACK || 60.0);
-  return Number.isFinite(envVal) ? Number(envVal.toFixed(2)) : 60.0;
-}
-
+// One plant sensor serves every UBE machine. A failed read keeps the last real reading for
+// PLC_PLANT_ENVIRONMENT_MAX_AGE_MS, then stores nothing; invented defaults are never saved.
 async function readPlantEnvironmentUnlocked() {
-  if (!PLANT_ENVIRONMENT_ENABLED) return {};
   let sock = null;
 
   try {
@@ -223,51 +222,49 @@ async function readPlantEnvironmentUnlocked() {
       `plant humidity ${PLANT_ENVIRONMENT_HUMIDITY_DEVICE}`
     );
 
-    const normTemp = normalizePlantEnvironmentValue(temperature);
-    const normHum = normalizePlantEnvironmentValue(humidity);
-
     return {
-      plant_temperature: normTemp ?? getPlantFallbackTemperature(),
-      plant_humidity: normHum ?? getPlantFallbackHumidity(),
+      plant_temperature: normalizePlantEnvironmentValue(temperature),
+      plant_humidity: normalizePlantEnvironmentValue(humidity),
     };
   } catch (error) {
     console.warn(
-      `Plant environment PLC read failed (${PLANT_ENVIRONMENT_MACHINE.ip}:${PLANT_ENVIRONMENT_MACHINE.port}): ${error.message}. Using default environmental readings.`
+      `Plant environment PLC read failed (${PLANT_ENVIRONMENT_MACHINE.ip}:${PLANT_ENVIRONMENT_MACHINE.port}): ${error.message}`
     );
+    return null;
   } finally {
     closeSocket(sock);
   }
+}
 
-  return {
-    plant_temperature: getPlantFallbackTemperature(),
-    plant_humidity: getPlantFallbackHumidity(),
-  };
+function lastPlantEnvironment() {
+  if (plantEnvironmentCache.data && Date.now() - plantEnvironmentCache.at < PLANT_ENVIRONMENT_MAX_AGE_MS) {
+    return plantEnvironmentCache.data;
+  }
+  return { plant_temperature: null, plant_humidity: null };
+}
+
+function refreshPlantEnvironment() {
+  if (!plantEnvironmentCache.promise) {
+    plantEnvironmentCache.promise = readPlantEnvironmentUnlocked().then((data) => {
+      if (data) {
+        plantEnvironmentCache.data = data;
+        plantEnvironmentCache.at = Date.now();
+      }
+      plantEnvironmentCache.promise = null;
+      return lastPlantEnvironment();
+    });
+  }
+  return plantEnvironmentCache.promise;
 }
 
 async function getPlantEnvironmentReadings() {
   if (!PLANT_ENVIRONMENT_ENABLED) return {};
-  if (plantEnvironmentCache.data && Date.now() - plantEnvironmentCache.at < PLANT_ENVIRONMENT_CACHE_MS) {
-    return plantEnvironmentCache.data;
-  }
-  if (plantEnvironmentCache.promise) return plantEnvironmentCache.promise;
-
-  plantEnvironmentCache.promise = readPlantEnvironmentUnlocked()
-    .then((data) => {
-      plantEnvironmentCache.data = data;
-      plantEnvironmentCache.at = Date.now();
-      plantEnvironmentCache.promise = null;
-      return data;
-    })
-    .catch((error) => {
-      plantEnvironmentCache.promise = null;
-      console.error(
-        `Plant environment read failed (${PLANT_ENVIRONMENT_MACHINE.ip}:${PLANT_ENVIRONMENT_MACHINE.port}):`,
-        error.message
-      );
-      return plantEnvironmentCache.data || {};
-    });
-
-  return plantEnvironmentCache.promise;
+  const age = Date.now() - plantEnvironmentCache.at;
+  if (plantEnvironmentCache.data && age < PLANT_ENVIRONMENT_CACHE_MS) return plantEnvironmentCache.data;
+  const refresh = refreshPlantEnvironment();
+  // A shot does not wait on the sensor while a recent reading exists.
+  if (plantEnvironmentCache.data && age < PLANT_ENVIRONMENT_MAX_AGE_MS) return plantEnvironmentCache.data;
+  return refresh;
 }
 
 function clampLimit(value, fallback = 200, max = Number(process.env.PLC_HISTORY_MAX_LIMIT || 20000)) {
@@ -456,63 +453,6 @@ function normalizeUbeReadParameter(parameter = {}) {
   return parameter;
 }
 
-const UBE_LIMIT_READ_PARAMETERS = [
-  { name: "DIE-CLOSE CORE IN TIME Upper Limit sec", device: "D4269", type: "decimal", scale: 0.1 },
-  { name: "DIE-CLOSE CORE IN TIME Lower Limit sec", device: "D4319", type: "decimal", scale: 0.1 },
-  { name: "POURING TIME Upper Limit sec", device: "D4270", type: "decimal", scale: 0.1 },
-  { name: "POURING TIME Lower Limit sec", device: "D4320", type: "decimal", scale: 0.1 },
-  { name: "SHOT FWD TIME Upper Limit sec", device: "D4271", type: "decimal", scale: 0.1 },
-  { name: "SHOT FWD TIME Lower Limit sec", device: "D4321", type: "decimal", scale: 0.1 },
-  { name: "CURING TIME Upper Limit sec", device: "D4272", type: "decimal", scale: 0.1 },
-  { name: "CURING TIME Lower Limit sec", device: "D4322", type: "decimal", scale: 0.1 },
-  { name: "DIE OPEN CORE OUT TIME Upper Limit sec", device: "D4273", type: "decimal", scale: 0.1 },
-  { name: "DIE OPEN CORE OUT TIME Lower Limit sec", device: "D4323", type: "decimal", scale: 0.1 },
-  { name: "EJECTOR TIME Upper Limit sec", device: "D4274", type: "decimal", scale: 0.1 },
-  { name: "EJECTOR TIME Lower Limit sec", device: "D4324", type: "decimal", scale: 0.1 },
-  { name: "EXTRACT TIME Upper Limit sec", device: "D4275", type: "decimal", scale: 0.1 },
-  { name: "EXTRACT TIME Lower Limit sec", device: "D4325", type: "decimal", scale: 0.1 },
-  { name: "SPRAY TIME Upper Limit sec", device: "D4276", type: "decimal", scale: 0.1 },
-  { name: "SPRAY TIME Lower Limit sec", device: "D4326", type: "decimal", scale: 0.1 },
-  { name: "V1 Upper Limit m/sec", device: "D4250", type: "decimal", scale: 0.01 },
-  { name: "V1 Lower Limit m/sec", device: "D4300", type: "decimal", scale: 0.01 },
-  { name: "V2 Upper Limit m/sec", device: "D4251", type: "decimal", scale: 0.01 },
-  { name: "V2 Lower Limit m/sec", device: "D4301", type: "decimal", scale: 0.01 },
-  { name: "V3 Upper Limit m/sec", device: "D4252", type: "decimal", scale: 0.01 },
-  { name: "V3 Lower Limit m/sec", device: "D4302", type: "decimal", scale: 0.01 },
-  { name: "V4 Upper Limit m/sec", device: "D4253", type: "decimal", scale: 0.01 },
-  { name: "V4 Lower Limit m/sec", device: "D4303", type: "decimal", scale: 0.01 },
-  { name: "METAL PRESS. Upper Limit Mpa", device: "D4256", type: "decimal", scale: 0.1 },
-  { name: "METAL PRESS. Lower Limit Mpa", device: "D4306", type: "decimal", scale: 0.1 },
-  { name: "FURNACE METAL TEMP. Upper Limit C", device: "D4267", type: "decimal", scale: 1 },
-  { name: "FURNACE METAL TEMP. Lower Limit C", device: "D4317", type: "decimal", scale: 1 },
-  { name: "COOLING WATER FLOW RATE (MOV.) Upper Limit L/min", device: "D4265", type: "decimal", scale: 0.1 },
-  { name: "COOLING WATER FLOW RATE (MOV.) Lower Limit L/min", device: "D4315", type: "decimal", scale: 0.1 },
-  { name: "COOLING WATER FLOW RATE (STA.) Upper Limit L/min", device: "D4266", type: "decimal", scale: 0.1 },
-  { name: "COOLING WATER FLOW RATE (STA.) Lower Limit L/min", device: "D4316", type: "decimal", scale: 0.1 },
-  { name: "ACCEL. POINT Upper Limit mm", device: "D4254", type: "decimal", scale: 1 },
-  { name: "ACCEL. POINT Lower Limit mm", device: "D4304", type: "decimal", scale: 1 },
-  { name: "DEACEL. POINT Upper Limit mm", device: "D4255", type: "decimal", scale: 1 },
-  { name: "DEACEL. POINT Lower Limit mm", device: "D4305", type: "decimal", scale: 1 },
-  { name: "INTEN. TIME Upper Limit msec", device: "D4257", type: "decimal", scale: 1 },
-  { name: "INTEN. TIME Lower Limit msec", device: "D4307", type: "decimal", scale: 1 },
-  { name: "BISCUIT THICKNESS Upper Limit mm", device: "D4258", type: "decimal", scale: 1 },
-  { name: "BISCUIT THICKNESS Lower Limit mm", device: "D4308", type: "decimal", scale: 1 },
-  { name: "JET COOLING PRESSURE Upper Limit kgf/cm2", device: "D4277", type: "decimal", scale: 0.1 },
-  { name: "JET COOLING PRESSURE Lower Limit kgf/cm2", device: "D4327", type: "decimal", scale: 0.1 },
-  { name: "CLAMP TONNAGE(HE.LOW) Upper Limit %", device: "D4259", type: "decimal", scale: 1 },
-  { name: "CLAMP TONNAGE(HE.LOW) Lower Limit %", device: "D4309", type: "decimal", scale: 1 },
-  { name: "CLAMP TONNAGE(HE.LOW) Upper Limit MN", device: "D4260", type: "decimal", scale: 0.01 },
-  { name: "CLAMP TONNAGE(HE.LOW) Lower Limit MN", device: "D4310", type: "decimal", scale: 0.01 },
-  { name: "CLAMP TONNAGE(OP.UP) Upper Limit %", device: "D4261", type: "decimal", scale: 1 },
-  { name: "CLAMP TONNAGE(OP.UP) Lower Limit %", device: "D4311", type: "decimal", scale: 1 },
-  { name: "CLAMP TONNAGE(OP.LOW) Upper Limit %", device: "D4262", type: "decimal", scale: 1 },
-  { name: "CLAMP TONNAGE(OP.LOW) Lower Limit %", device: "D4312", type: "decimal", scale: 1 },
-  { name: "CLAMP TONNAGE(HE.UP) Upper Limit %", device: "D4263", type: "decimal", scale: 1 },
-  { name: "CLAMP TONNAGE(HE.UP) Lower Limit %", device: "D4313", type: "decimal", scale: 1 },
-  { name: "VACUUM PRESSURE Upper Limit mbar", device: "D4264", type: "decimal", scale: 1 },
-  { name: "VACUUM PRESSURE Lower Limit mbar", device: "D4314", type: "decimal", scale: 1 },
-];
-
 function mergeUbeReadParameters(configuredParameters = []) {
   const enabledConfiguredParameters = configuredParameters
     .filter((parameter) => parameter && parameter.enabled !== false);
@@ -532,9 +472,32 @@ function mergeUbeReadParameters(configuredParameters = []) {
   };
 
   enabledConfiguredParameters.forEach(add);
-  UBE_LIMIT_READ_PARAMETERS.forEach(add);
+  // Limits come only from each register's own Min/Max PLC Address in Machine Config.
+  buildConfiguredLimitParameters(enabledConfiguredParameters).forEach(add);
 
   return merged;
+}
+
+function buildConfiguredLimitParameters(parameters = []) {
+  const limits = [];
+  for (const parameter of parameters) {
+    const baseKey = getLegacyColumnForParameter(parameter) || parameter.name;
+    if (!baseKey) continue;
+    for (const [deviceField, suffix] of [["minDevice", "lower_limit"], ["maxDevice", "upper_limit"]]) {
+      const device = String(parameter[deviceField] || "").trim().toUpperCase();
+      if (!device) continue;
+      limits.push({
+        name: `${baseKey}_${suffix}`,
+        device,
+        type: parameter.type,
+        scale: parameter.scale,
+        op: parameter.op,
+        unit: parameter.unit,
+        enabled: true,
+      });
+    }
+  }
+  return limits;
 }
 
 function isReportSaveEnabledForMachine(machine) {
@@ -885,7 +848,7 @@ function canonicalGaugeReadingName(name = "") {
   return "";
 }
 
-function findConfiguredRegisterDevice(machine, names = []) {
+function findConfiguredRegisterDevice(machine, names = [], fallbackDevice = "") {
   const normalizedTargets = new Set(names.map(normalizeRegisterName));
   const register = Array.isArray(machine?.registerConfig)
     ? machine.registerConfig.find((item) =>
@@ -895,7 +858,48 @@ function findConfiguredRegisterDevice(machine, names = []) {
       String(item.device || item.stringDevice || "").trim()
     )
     : null;
-  return String(register?.device || register?.stringDevice || "").trim().toUpperCase();
+  return String(register?.device || register?.stringDevice || fallbackDevice || "").trim().toUpperCase();
+}
+
+// When a cycle-end bit is missed, the shot is read once the shot counter (which advances at metal
+// injection) has been still for as long as this machine's injection-to-cycle-end time. That time is
+// learned from the machine's own shots: the longest recent gap plus a margin, kept under one cycle so
+// the read happens before the next injection. Before anything is learned, 85% of the last PLC cycle
+// time is used (about 58 s on an 850T), then PLC_UBE_FALLBACK_TIMEOUT_MS.
+function createShotFallbackTimer({ defaultMs = UBE_FALLBACK_DEFAULT_MS, historySize = 10, marginMs = 5000 } = {}) {
+  const gaps = [];
+  let cycleTimeMs = null;
+  return {
+    recordCycleEndGap(gapMs) {
+      if (!Number.isFinite(gapMs) || gapMs < 5000 || gapMs > 600000) return;
+      gaps.push(gapMs);
+      if (gaps.length > historySize) gaps.shift();
+    },
+    recordCycleTime(seconds) {
+      const ms = Number(seconds) * 1000;
+      if (seconds !== null && seconds !== "" && Number.isFinite(ms) && ms >= 5000 && ms <= 1200000) cycleTimeMs = ms;
+    },
+    timeoutMs() {
+      if (gaps.length) {
+        const learned = Math.max(...gaps) + marginMs;
+        return cycleTimeMs ? Math.max(Math.max(...gaps), Math.min(learned, Math.round(cycleTimeMs * 0.95))) : learned;
+      }
+      if (cycleTimeMs) return Math.round(cycleTimeMs * 0.85);
+      return defaultMs;
+    },
+  };
+}
+
+async function getLatestCycleTimeSec(machine = {}) {
+  try {
+    const { rows } = await db.query(
+      `SELECT TOP 1 cycle_time FROM ${TABLE} WHERE machine_key = ? OR plc_ip = ? ORDER BY id DESC`,
+      [getCanonicalMachineKey(machine), machine.ip || ""]
+    );
+    return rows[0]?.cycle_time ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function utcDateTimeString(value = new Date()) {
@@ -1225,13 +1229,6 @@ function formatDbRowForClient(row = {}) {
     if (key.endsWith("_upper_limit") || key.endsWith("_lower_limit")) {
       next[key] = scaleLimitValueForApi(key, value);
     }
-  }
-
-  if (next.plant_temperature === null || next.plant_temperature === undefined) {
-    next.plant_temperature = getPlantFallbackTemperature();
-  }
-  if (next.plant_humidity === null || next.plant_humidity === undefined) {
-    next.plant_humidity = getPlantFallbackHumidity();
   }
 
   return next;
@@ -5298,28 +5295,35 @@ function startPlcMonitor(io) {
         // ----------------------------------------------------
         // UBE DIE CASTING MACHINE MONITOR (QUAD Simplified Logic)
         // ----------------------------------------------------
-        const cycleEndDevice = findConfiguredRegisterDevice(
+        const configuredCycleEndDevice = findConfiguredRegisterDevice(machine, [
+          "Cycle Complete",
+          "Cycle End",
+          "cycle_complete",
+          "cycle_end",
+          "complete",
+        ]);
+        const configuredShotDevice = findConfiguredRegisterDevice(
           machine,
-          [
-            "Cycle Complete",
-            "Cycle End",
-            "cycle_complete",
-            "cycle_end",
-            "complete",
-          ],
-          process.env.PLC_UBE_CYCLE_END_DEVICE || "M4598"
+          ["SHOT NO.", "Shot Number", "shot_number", "Shot Count"]
         );
-        const shotDevice = findConfiguredRegisterDevice(
-          machine,
-          ["SHOT NO.", "Shot Number", "shot_number", "Shot Count"],
-          machine.name?.includes("1250") ? "D1536" : "D1120"
-        );
+        const cycleEndDevice = configuredCycleEndDevice || UBE_DEFAULT_CYCLE_END_DEVICE;
+        const shotDevice = configuredShotDevice || UBE_DEFAULT_SHOT_DEVICE;
+        if (!configuredCycleEndDevice || !configuredShotDevice) {
+          console.warn(
+            `[UBE MONITOR] ${machine.name} (${machine.ip}): ${[
+              !configuredCycleEndDevice && `"Cycle End" register not configured, using default ${cycleEndDevice}`,
+              !configuredShotDevice && `"SHOT NO." register not configured, using default ${shotDevice}`,
+            ].filter(Boolean).join("; ")}`
+          );
+        }
+        const shotFallbackTimer = createShotFallbackTimer();
+        shotFallbackTimer.recordCycleTime(await getLatestCycleTimeSec(machine));
         const pollIntervalMs = Number(process.env.PLC_UBE_CYCLE_END_POLL_MS || process.env.PLC_POLL_MS || 100);
         const settleDelayMs = Number(process.env.PLC_UBE_CYCLE_END_SETTLE_MS || 300);
         const liveSnapshotIntervalMs = Number(process.env.PLC_LIVE_SNAPSHOT_INTERVAL_MS || 15000);
 
         console.log(
-          `[UBE MONITOR] Initialized QUAD + Shot-Counter logic for ${machine.name} (${machine.ip}): Trigger=${cycleEndDevice}, ShotDevice=${shotDevice}, Poll=${pollIntervalMs}ms, Settle=${settleDelayMs}ms`
+          `[UBE MONITOR] Initialized QUAD + Shot-Counter logic for ${machine.name} (${machine.ip}): Trigger=${cycleEndDevice}, ShotDevice=${shotDevice}, Fallback=${Math.round(shotFallbackTimer.timeoutMs() / 1000)}s, Poll=${pollIntervalMs}ms, Settle=${settleDelayMs}ms`
         );
 
         let triggerActive = false;
@@ -5388,14 +5392,11 @@ function startPlcMonitor(io) {
           // === PRIMARY TRIGGER: BIT RISING EDGE (0 -> 1) AT FULL CYCLE COMPLETION ===
           const bitTriggered = (cycleEndBit === 1 && !triggerActive);
 
-          // === FALLBACK TRIGGER: WHEN BIT WAS MISSED VIA TIMEOUT (58s for 850T, 70s for 1250T) ===
-          // In UBE machines, D1120 increments early during metal injection (~14s into cycle).
-          // Full cycle completes at ~68s (UBE 850) or ~79s (UBE 1250).
-          // Time remaining after injection is ~54s (UBE 850) or ~62s (UBE 1250).
-          // If 58s (UBE 850) or 70s (UBE 1250) have elapsed since counter change and cycleEndBit never pulsed:
-          // The cycle has 100% completed, and full parameters are in the PLC registers.
-          // Trigger fallback to read all genuine parameters from PLC — NEVER miss a shot!
-          const fallbackTimeoutMs = machine.name?.includes("1250") ? 70000 : 58000;
+          // === FALLBACK TRIGGER: WHEN BIT WAS MISSED VIA TIMEOUT ===
+          // The shot counter advances at metal injection, well before cycle end. Once it has been still
+          // for this machine's own injection-to-cycle-end time (see createShotFallbackTimer), the cycle
+          // has completed and the shot is read even though the cycle-end bit never pulsed.
+          const fallbackTimeoutMs = shotFallbackTimer.timeoutMs();
           const isFallbackTimeout = lastCounterChangeAt > 0 && (nowMs - lastCounterChangeAt >= fallbackTimeoutMs);
           const counterFallbackTriggered = (
             !triggerActive &&
@@ -5411,6 +5412,9 @@ function startPlcMonitor(io) {
               ? `${cycleEndDevice}=1`
               : `Timeout Fallback #${currentShotNumber}`;
             const cycleEndAt = new Date();
+            if (bitTriggered && lastCounterChangeAt > 0) {
+              shotFallbackTimer.recordCycleEndGap(cycleEndAt.getTime() - lastCounterChangeAt);
+            }
 
             let durationSec = null;
             if (lastShotAt && !Number.isNaN(lastShotAt.getTime())) {
@@ -5456,6 +5460,7 @@ function startPlcMonitor(io) {
               }
 
               const shotNum = getFormattedShotNumber(payload) || lastDetectedShotNumber || "-";
+              shotFallbackTimer.recordCycleTime(payload?.rawReadings?.cycle_time);
               const finalCycleTime = payload?.rawReadings?.cycle_time || durationSec;
 
               console.log(
@@ -5765,6 +5770,7 @@ module.exports = {
   buildConnectionEventsExcelXml,
   formatDbRowForClient,
   buildUbeReadingsFromQuad,
+  createShotFallbackTimer,
   buildMachineReadingValueRows,
   buildMachineReadingValueInserts,
 };

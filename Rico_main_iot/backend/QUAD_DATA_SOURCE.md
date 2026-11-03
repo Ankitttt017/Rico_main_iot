@@ -46,6 +46,8 @@ No code change and no DB change is needed. QUAD keeps buffering shots it cannot 
   retained), `quad/<machine_id>/ack` (written by this backend).
 - Values: QUAD's `raw_value` (the unscaled PLC number) goes through the machine's own register
   config and `scaleValue()`, exactly like a direct PLC read. `quality = BAD` -> NULL.
+- Limits: read only from each register's Min PLC Address / Max PLC Address in Machine Config.
+  A register with neither stores no limits, and QUAD must send those addresses.
 - Shot time = cycle end (`acquired_at`, converted to plant time), as in direct mode; the PLC
   shot-time registers go to `metal_injection_datetime`. Production day starts at 06:00.
 - ACK `SAVED` after the DB insert; `DUPLICATE` when the shot is already stored (or the save

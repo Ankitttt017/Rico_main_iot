@@ -965,13 +965,14 @@ export default function UbeMachineSetupPage({ onLogout, currentUser }) {
     setSaving(true);
     try {
       const type = getMachineType(draft);
-      await savePlcMachineConfig({
+      const response = await savePlcMachineConfig({
         ...draft,
         machine_type: type,
         port: Number(draft.port || 5002),
         register_config: getSaveRegisters(draft.register_config, defaultRegistersByType, type),
       });
       toast.success("PLC configuration saved. Monitor will pick it up automatically.");
+      (response?.data?.warnings || []).forEach((warning) => toast(warning, { icon: "⚠️", duration: 10000 }));
       const { rows, defaults } = await load();
       setDraft(nextDraft(rows, type, defaults));
       setTestResult(null);

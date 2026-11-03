@@ -124,15 +124,6 @@ const GAUGE_REPORT_COLUMNS = [
   "gauge_judgement",
 ];
 
-const NOT_AVAILABLE_COLUMNS = new Set([
-  "fix_1_flow",
-  "fix_2_flow",
-  "fix_3_flow",
-  "mov_1_flow",
-  "mov_2_flow",
-  "mov_3_flow",
-]);
-
 const PREFERRED_COLUMNS = [
   SERIAL_COLUMN,
   "recorded_at",
@@ -990,8 +981,12 @@ function getReportDisplayValue(row = {}, key) {
   return row[key];
 }
 
+function hasReportValue(row = {}, key) {
+  const value = getReportDisplayValue(row, key);
+  return value !== null && value !== undefined && String(value).trim() !== "";
+}
+
 function formatValue(value, key) {
-  if (NOT_AVAILABLE_COLUMNS.has(normalizeColumnKey(key))) return "N/A";
   if (value === null || value === undefined || value === "") return "-";
   const normalizedKey = normalizeColumnKey(key);
   if (CLAMP_TONNAGE_PCT_AS_MN_COLUMNS.has(normalizedKey)) {
@@ -1080,7 +1075,6 @@ function getLimitBaseKey(key) {
 function getLimitTone(key) {
   const normalizedKey = normalizeColumnKey(key);
   const baseKey = getLimitBaseKey(normalizedKey);
-  if (!UBE_LIMIT_BASE_SET.has(baseKey)) return null;
   if (normalizedKey === `${baseKey}_lower_limit`) return "lower";
   if (normalizedKey === `${baseKey}_upper_limit`) return "upper";
   return null;
@@ -1371,7 +1365,8 @@ function orderUbeLimitColumns(columns = []) {
   columns.forEach((key) => {
     const normalizedKey = normalizeColumnKey(key);
     const baseKey = getLimitBaseKey(normalizedKey);
-    if (UBE_LIMIT_BASE_SET.has(baseKey)) {
+    // Any parameter with Lower/Upper Limit columns gets them right after it.
+    if (UBE_LIMIT_BASE_SET.has(baseKey) || availableMap.has(`${baseKey}_lower_limit`) || availableMap.has(`${baseKey}_upper_limit`)) {
       pushByNorm(baseKey);
       pushByNorm(`${baseKey}_lower_limit`);
       pushByNorm(`${baseKey}_upper_limit`);
@@ -1395,6 +1390,19 @@ function buildColumns(rows, options = {}) {
       if (!isHiddenForReport(key, hideLeakTestFields, isGauge)) rawKeys.add(key);
     });
   });
+
+  if (!hideLeakTestFields) {
+    // PlcCycleReadings is shared by all die-casting machines, so each row carries every machine's columns.
+    // Keep only the columns this machine filled, and limits only beside a parameter that is shown.
+    Array.from(rawKeys).forEach((key) => {
+      if (!rows.some((row) => hasReportValue(row, key))) rawKeys.delete(key);
+    });
+    const shownKeys = new Set(Array.from(rawKeys).map(normalizeColumnKey));
+    Array.from(rawKeys).forEach((key) => {
+      const baseKey = getLimitBaseKey(key);
+      if (baseKey !== normalizeColumnKey(key) && !shownKeys.has(baseKey)) rawKeys.delete(key);
+    });
+  }
 
   if (rows.length) {
     rawKeys.add(SERIAL_COLUMN);
@@ -1443,7 +1451,8 @@ function buildColumns(rows, options = {}) {
   if (isUbe && rows.length > 0) {
     const plantColumns = PLANT_ENVIRONMENT_COLUMNS.filter((key) =>
       !isHiddenForReport(key, hideLeakTestFields, isGauge) &&
-      !seenNormalizedKeys.has(normalizeColumnKey(key))
+      !seenNormalizedKeys.has(normalizeColumnKey(key)) &&
+      rows.some((row) => hasReportValue(row, key))
     );
     if (plantColumns.length) {
       const vacuumIndex = remainingColumns.findIndex((k) => normalizeColumnKey(k) === "vacuum_pressure");

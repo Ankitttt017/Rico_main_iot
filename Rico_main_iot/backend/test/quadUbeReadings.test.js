@@ -127,3 +127,30 @@ test("falls back to the PLC shot time when acquired_at is missing", () => {
   assert.equal(readings.shot_datetime, "2026-10-23 12:52:51");
   assert.equal(readings.cycle_end_time, undefined);
 });
+
+function shotFrom(rawByDevice) {
+  return { acquiredAt: new Date("2026-10-28T07:00:00Z"), partName: "", rawByDevice: new Map(Object.entries(rawByDevice)), textByDevice: new Map() };
+}
+
+test("limits are read from each register's own Min/Max PLC address", () => {
+  const ube1250 = {
+    ...machine,
+    registerConfig: [
+      { name: "CYCLE TIME sec.", device: "D1556", minDevice: "D781", maxDevice: "D754", type: "decimal", op: "*", scale: 0.1, enabled: true },
+      { name: "Shot Size", device: "D2151", minDevice: "D866", maxDevice: "D839", type: "decimal", op: "*", scale: 1, enabled: true },
+    ],
+  };
+  const { readings } = buildUbeReadingsFromQuad(ube1250, shotFrom({ D1556: 779, D781: 700, D754: 900, D2151: 12, D866: 10, D839: 14, D4269: 55 }));
+  assert.equal(readings.cycle_time, 77.9);
+  assert.equal(readings.cycle_time_lower_limit, 70);
+  assert.equal(readings.cycle_time_upper_limit, 90);
+  assert.equal(readings["Shot Size_lower_limit"], 10);
+  assert.equal(readings["Shot Size_upper_limit"], 14);
+});
+
+test("no limit is read for a register without Min/Max addresses", () => {
+  const noLimits = { ...machine, registerConfig: registerConfig.map((item) => ({ ...item, minDevice: "", maxDevice: "" })) };
+  const { readings } = buildUbeReadingsFromQuad(noLimits, shotFrom({ D4269: 55, D4319: 30 }));
+  assert.equal(readings.die_close_core_in_time_upper_limit, undefined);
+  assert.equal(readings.die_close_core_in_time_lower_limit, undefined);
+});

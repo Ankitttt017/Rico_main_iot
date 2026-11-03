@@ -684,6 +684,14 @@ async function tableExists(tableName) {
   return Number(rows[0]?.table_exists || 0) === 1;
 }
 
+async function columnExists(tableName, columnName) {
+  const { rows } = await db.query(
+    "SELECT CASE WHEN COL_LENGTH(?, ?) IS NULL THEN 0 ELSE 1 END AS column_exists",
+    [tableName, columnName]
+  );
+  return Number(rows[0]?.column_exists || 0) === 1;
+}
+
 async function syncMachineConfigRegisters(machineConfigId, payload = {}, registers = []) {
   const id = cleanInt(machineConfigId);
   if (!id || !Array.isArray(registers)) return;
@@ -766,8 +774,9 @@ async function syncMachineConfigRegisters(machineConfigId, payload = {}, registe
       ]));
     }
   }
-  // Sync alarm entries into dbo.alarms (new table)
-  if (await tableExists("dbo.alarms")) {
+  // Sync alarm entries into dbo.alarms (new table). Some databases already have an older,
+  // unrelated dbo.alarms (type/machineId/resolvedAt), so the table is skipped when it lacks our columns.
+  if (await tableExists("dbo.alarms") && await columnExists("dbo.alarms", "machine_config_id")) {
     await withDeadlockRetry(() => db.run(
       "DELETE FROM dbo.alarms WHERE machine_config_id = ?",
       [id]
@@ -1080,11 +1089,36 @@ async function listMachines(_req, res) {
   }
 }
 
+// Register names the UBE monitor uses to detect a shot (same lists as plcMonitorService).
+const UBE_SHOT_TRIGGER_REGISTERS = [
+  { label: "SHOT NO.", names: ["SHOT NO.", "Shot Number", "shot_number", "Shot Count"], fallbackEnv: "PLC_UBE_SHOT_DEVICE", fallback: "D1120" },
+  { label: "Cycle End", names: ["Cycle Complete", "Cycle End", "cycle_complete", "cycle_end", "complete"], fallbackEnv: "PLC_UBE_CYCLE_END_DEVICE", fallback: "M4598" },
+];
+
+function registerNameKey(value) {
+  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+function ubeShotTriggerWarnings(input = {}) {
+  if (!Object.prototype.hasOwnProperty.call(input, "register_config")) return [];
+  const registers = normalizeRegisters(input.register_config) || [];
+  if (inferMachineType({ ...input, register_config: registers }) !== "ube") return [];
+  const configured = new Set(
+    registers.filter((item) => item.enabled !== false && item.device).map((item) => registerNameKey(item.name))
+  );
+  return UBE_SHOT_TRIGGER_REGISTERS
+    .filter((trigger) => !trigger.names.some((name) => configured.has(registerNameKey(name))))
+    .map((trigger) => {
+      const device = process.env[trigger.fallbackEnv] || trigger.fallback;
+      return `"${trigger.label}" register is not configured; the monitor will use the default UBE 850T address ${device}. Add it if this machine uses a different address.`;
+    });
+}
+
 async function saveMachine(req, res) {
   try {
     await ensureSchema();
     const id = await saveMachineRecord(req.body || {});
-    res.json({ success: true, id });
+    res.json({ success: true, id, warnings: ubeShotTriggerWarnings(req.body || {}) });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }
@@ -1155,4 +1189,5 @@ module.exports = {
   testConnection,
   DEFAULT_UBE_REGISTERS,
   getKnownUbeScale,
+  ubeShotTriggerWarnings,
 };
