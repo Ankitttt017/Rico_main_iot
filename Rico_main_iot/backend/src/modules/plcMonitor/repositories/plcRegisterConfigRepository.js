@@ -72,6 +72,7 @@ function normalizeRegister(register = {}, index = 0) {
   const device = String(register.device || "").trim().toUpperCase();
   const stringDevice = String(register.stringDevice || register.string_device || "").trim().toUpperCase();
   const stringLength = register.stringLength ?? register.string_length ?? "";
+  const knownScale = getKnownUbeScale(name);
 
   let scale = register.scale === "" || register.scale === null || register.scale === undefined
     ? (register.scale_factor === undefined || register.scale_factor === null ? null : Number(register.scale_factor))

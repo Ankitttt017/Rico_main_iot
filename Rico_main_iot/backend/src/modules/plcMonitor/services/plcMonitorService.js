@@ -3227,6 +3227,19 @@ async function saveToDBUnlocked(machine, partName, readings) {
 // Builds the same readings object readAll() builds after a direct PLC read, from the raw
 // register values QUAD sent: same register config, same scaleValue(), same date rules.
 
+function parsePlcShotTime(value) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+  if (!match) return null;
+  const [year, month, day, hour, minute, second] = match.slice(1).map(Number);
+  if (!buildShotDateTimeValue(year, month, day, hour, minute, second)) return null;
+  return { year, month, day, hour, minute, second };
+}
+
+function plantClockToDate(clock) {
+  const utcMs = Date.UTC(clock.year, clock.month - 1, clock.day, clock.hour, clock.minute, clock.second);
+  return new Date(utcMs - PLANT_UTC_OFFSET_MINUTES * 60000);
+}
+
 function plantClockParts(date) {
   const shifted = new Date(date.getTime() + PLANT_UTC_OFFSET_MINUTES * 60000);
   return {
@@ -3264,19 +3277,19 @@ function buildUbeReadingsFromQuad(machine, telemetry, { plantEnvironment = {} } 
     }
   }
 
-  // Shot date/time = cycle end (QUAD reads the shot right after M4598 rises), as in direct mode.
-  let clock = telemetry.acquiredAt ? plantClockParts(telemetry.acquiredAt) : null;
-  const plcHour = normalizeClockPart(telemetry.rawByDevice.get(UBE_SHOT_TIME_HOUR_DEVICE), 23);
-  const plcMinute = normalizeClockPart(telemetry.rawByDevice.get(UBE_SHOT_TIME_MINUTE_DEVICE), 59);
-  const plcSecond = normalizeClockPart(telemetry.rawByDevice.get(UBE_SHOT_TIME_SECOND_DEVICE), 59);
+  // Shot date/time = the PLC's own shot time (QUAD shot.shot_time), the time the HMI and QUAD show,
+  // always. acquired_at (when QUAD read the shot) is used only when the message has no readable PLC time.
+  const plcClock = parsePlcShotTime(telemetry.plcShotTime);
+  const clock = plcClock || (telemetry.acquiredAt ? plantClockParts(telemetry.acquiredAt) : null);
+  // Shot-time registers come from the machine's own SHOT HOUR/MINUTE/SECOND registers
+  // (850T: D2103-D2105, 1250T: D2403-D2405); the 850T addresses are only the fallback.
+  const plcHour = normalizeClockPart(telemetry.rawByDevice.get(
+    getConfiguredRegisterDevice(machine, ["SHOT HOUR"], UBE_SHOT_TIME_HOUR_DEVICE)), 23);
+  const plcMinute = normalizeClockPart(telemetry.rawByDevice.get(
+    getConfiguredRegisterDevice(machine, ["SHOT MINUTE"], UBE_SHOT_TIME_MINUTE_DEVICE)), 59);
+  const plcSecond = normalizeClockPart(telemetry.rawByDevice.get(
+    getConfiguredRegisterDevice(machine, ["SHOT SECOND"], UBE_SHOT_TIME_SECOND_DEVICE)), 59);
   const hasPlcClock = plcHour !== null && plcMinute !== null && plcSecond !== null;
-  if (!clock && telemetry.plcShotTime) {
-    const match = telemetry.plcShotTime.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
-    if (match) {
-      const [year, month, day, hour, minute, second] = match.slice(1).map(Number);
-      clock = { year, month, day, hour, minute, second };
-    }
-  }
   if (!clock) throw new QuadMessageError("message has neither acquired_at nor a PLC shot time");
 
   const shotDate = buildShotDateValue(clock.year, clock.month, clock.day);
@@ -3341,10 +3354,10 @@ function buildUbeReadingsFromQuad(machine, telemetry, { plantEnvironment = {} } 
     }
   }
 
-  if (telemetry.acquiredAt) {
-    readings.cycle_start_time = telemetry.acquiredAt.toISOString();
-    readings.cycle_end_time = telemetry.acquiredAt.toISOString();
-  }
+  // recorded_at follows the shot time chosen above.
+  const shotAt = plantClockToDate(clock).toISOString();
+  readings.cycle_start_time = shotAt;
+  readings.cycle_end_time = shotAt;
 
   STOPPAGE_READING_KEYS.forEach((key) => delete readings[key]);
 

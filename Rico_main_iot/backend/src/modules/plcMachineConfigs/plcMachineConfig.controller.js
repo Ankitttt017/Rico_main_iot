@@ -1172,10 +1172,12 @@ async function testConnection(req, res) {
     connected: false,
     message: `PLC connection timeout after ${timeoutMs}ms`,
   }));
+  // "error" keeps this message visible: production hides 5xx messages without it.
   socket.once("error", (error) => finish(502, {
     success: false,
     connected: false,
-    message: error.message,
+    message: `Could not connect to PLC ${ip}:${port}${error.code ? ` (${error.code})` : ""}. Check the IP address and port.`,
+    error: error.message,
   }));
   socket.connect(port, ip);
 }

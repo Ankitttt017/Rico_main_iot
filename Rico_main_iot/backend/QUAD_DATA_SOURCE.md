@@ -48,8 +48,9 @@ No code change and no DB change is needed. QUAD keeps buffering shots it cannot 
   config and `scaleValue()`, exactly like a direct PLC read. `quality = BAD` -> NULL.
 - Limits: read only from each register's Min PLC Address / Max PLC Address in Machine Config.
   A register with neither stores no limits, and QUAD must send those addresses.
-- Shot time = cycle end (`acquired_at`, converted to plant time), as in direct mode; the PLC
-  shot-time registers go to `metal_injection_datetime`. Production day starts at 06:00.
+- Shot time = the PLC shot time QUAD sends (`shot.shot_time`), the time the HMI shows, always.
+  `acquired_at` (when QUAD read the shot) is used only when the message has no readable PLC time.
+  Production day starts at 06:00.
 - ACK `SAVED` after the DB insert; `DUPLICATE` when the shot is already stored (or the save
   rules reject it, e.g. incomplete cycle time); `ERROR` when the DB insert fails (QUAD resends
   in about 60 s). Unreadable messages get no ACK (QUAD resends after 300 s).

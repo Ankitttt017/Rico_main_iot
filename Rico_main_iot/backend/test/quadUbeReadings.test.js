@@ -93,8 +93,8 @@ test("QUAD shot produces the same values the direct PLC reader stored", () => {
   for (const [column, expected] of Object.entries(DIRECT_ROW_SHOT_4474)) {
     assert.deepEqual(readings[column], expected, column);
   }
-  assert.equal(readings.cycle_end_time, "2026-10-23T07:22:51.634Z");
-  assert.equal(readings.cycle_start_time, "2026-10-23T07:22:51.634Z");
+  assert.equal(readings.cycle_end_time, "2026-10-23T07:22:51.000Z");
+  assert.equal(readings.cycle_start_time, "2026-10-23T07:22:51.000Z");
   assert.equal(readings.metal_injection_datetime, "2026-10-23 12:52:51");
 });
 
@@ -115,6 +115,7 @@ test("old backlog shots (value == raw_value) are scaled from raw_value", () => {
 test("shots before 06:00 belong to the previous production day", () => {
   const message = structuredClone(sample);
   message.acquired_at = "2026-10-23T23:00:05+00:00"; // 04:30:05 IST on 24 Oct
+  message.shot.shot_time = "2026-10-24 04:30:05";
   const { readings } = buildUbeReadingsFromQuad(machine, parseQuadTelemetry(message));
   assert.equal(readings.shot_datetime, "2026-10-24 04:30:05");
   assert.equal(readings.shot_date, "2026-10-23");
@@ -125,7 +126,30 @@ test("falls back to the PLC shot time when acquired_at is missing", () => {
   delete message.acquired_at;
   const { readings } = buildUbeReadingsFromQuad(machine, parseQuadTelemetry(message));
   assert.equal(readings.shot_datetime, "2026-10-23 12:52:51");
-  assert.equal(readings.cycle_end_time, undefined);
+  assert.equal(readings.cycle_end_time, "2026-10-23T07:22:51.000Z");
+});
+
+// UBE 850T-02 shot 4549, 4 Nov 2026: the PLC/HMI time is 12:05:30, QUAD read it 60 s later.
+test("shot time is the PLC/HMI shot time, not the time QUAD read the shot", () => {
+  const message = structuredClone(sample);
+  message.shot.shot_time = "2026-11-04 12:05:30";
+  message.acquired_at = "2026-11-04T06:36:30.140708+00:00"; // 12:06:30 IST
+  const { readings, shotDateTime } = buildUbeReadingsFromQuad(machine, parseQuadTelemetry(message));
+  assert.equal(shotDateTime, "2026-11-04 12:05:30");
+  assert.equal(readings.shot_time, "12:05:30");
+  assert.equal(readings.cycle_end_time, "2026-11-04T06:35:30.000Z");
+});
+
+test("the PLC time is used even when it is far from acquired_at", () => {
+  const message = structuredClone(sample);
+  message.shot.shot_time = "2026-10-23 11:00:00"; // almost 2 h before acquired_at
+  assert.equal(buildUbeReadingsFromQuad(machine, parseQuadTelemetry(message)).shotDateTime, "2026-10-23 11:00:00");
+});
+
+test("acquired_at is used only when the message has no readable PLC time", () => {
+  const unreadable = structuredClone(sample);
+  unreadable.shot.shot_time = "not a time";
+  assert.equal(buildUbeReadingsFromQuad(machine, parseQuadTelemetry(unreadable)).shotDateTime, "2026-10-23 12:52:51");
 });
 
 function shotFrom(rawByDevice) {
@@ -153,4 +177,18 @@ test("no limit is read for a register without Min/Max addresses", () => {
   const { readings } = buildUbeReadingsFromQuad(noLimits, shotFrom({ D4269: 55, D4319: 30 }));
   assert.equal(readings.die_close_core_in_time_upper_limit, undefined);
   assert.equal(readings.die_close_core_in_time_lower_limit, undefined);
+});
+
+test("PLC shot-time registers come from the machine's own SHOT HOUR/MINUTE/SECOND registers", () => {
+  const ube1250 = {
+    ...machine,
+    registerConfig: [
+      { name: "SHOT HOUR", device: "D2403", type: "int", scale: 1, enabled: true },
+      { name: "SHOT MINUTE", device: "D2404", type: "int", scale: 1, enabled: true },
+      { name: "SHOT SECOND", device: "D2405", type: "int", scale: 1, enabled: true },
+    ],
+  };
+  // 850T addresses carry other values here; only D2403-D2405 belong to this machine.
+  const { readings } = buildUbeReadingsFromQuad(ube1250, shotFrom({ D2403: 12, D2404: 29, D2405: 58, D2103: 1, D2104: 2, D2105: 3 }));
+  assert.equal(readings.metal_injection_datetime, "2026-10-28 12:29:58");
 });
