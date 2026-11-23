@@ -56,6 +56,8 @@ function normalizeConfiguredMachine(machine = {}, index = 0) {
     ip,
     port: Number(machine.port || machine.plc_port || 5002),
     protocol: String(machine.protocol || machine.plc_protocol || "SLMP").trim().toUpperCase(),
+    dataSource: String(machine.dataSource || machine.data_source || "").trim().toUpperCase() === "QUAD" ? "QUAD" : "PLC",
+    quadIp: String(machine.quadIp || machine.quad_ip || "").trim() || null,
     name,
     kind,
     registerConfig,
@@ -83,6 +85,8 @@ async function getConfiguredMachines(forceRefresh = false) {
         ip: row.ipAddress,
         port: row.port,
         protocol: row.protocol,
+        data_source: row.dataSource,
+        quad_ip: row.quadIp,
         register_config: row.registers,
       }, index))
       .filter((machine) => machine.ip);

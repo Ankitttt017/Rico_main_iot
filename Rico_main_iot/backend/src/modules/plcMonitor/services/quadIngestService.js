@@ -19,7 +19,7 @@ function topicParts(topic) {
 
 function startQuadIngest(plcMonitor, { mqttLib = require("mqtt"), logger = console } = {}) {
   if (!isQuadIngestEnabled()) {
-    logger.log("[QUAD] MQTT ingest disabled (MQTT_URL or QUAD_MACHINES not set)");
+    logger.log("[QUAD] MQTT ingest disabled (MQTT_URL not set)");
     return { stop: async () => { } };
   }
   if (typeof plcMonitor?.handleQuadTelemetry !== "function") {
@@ -77,7 +77,8 @@ function startQuadIngest(plcMonitor, { mqttLib = require("mqtt"), logger = conso
       const result = await plcMonitor.handleQuadTelemetry(telemetry);
       if (!result.ack) {
         if (result.reason !== "duplicate-cycle-in-flight") {
-          logger.warn(`[QUAD] ${telemetry.machineId} shot ${telemetry.eventUuid} not acknowledged: ${result.reason}`);
+          const from = telemetry.gatewayIp ? ` (QUAD IP ${telemetry.gatewayIp})` : "";
+          logger.warn(`[QUAD] ${telemetry.machineId}${from} shot ${telemetry.eventUuid} not acknowledged: ${result.reason}`);
         }
         return;
       }

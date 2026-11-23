@@ -1,6 +1,7 @@
 # QUAD gateway (MQTT) data source
 
-A machine listed in `QUAD_MACHINES` gets its shots from the QUAD edge gateway over MQTT
+A machine with **Data Source = QUAD Gateway** and a **QUAD IP Address** in Machine Config
+(or listed in `QUAD_MACHINES`) gets its shots from the QUAD edge gateway over MQTT
 instead of a direct PLC (SLMP) connection. Everything else works as before: shots are saved
 in `PlcCycleReadings` with the same columns and units, the Real Time Monitor and the
 Production Reports show them, and all other machines keep their direct PLC connection.
@@ -14,7 +15,7 @@ PLC -> QUAD (Pi) --MQTT--> Mosquitto --> Rico backend --> PlcCycleReadings + Rea
 
 | Variable | Example | Meaning |
 |---|---|---|
-| `QUAD_MACHINES` | `192.168.117.201=UBE-850T-02` | `<machine key or PLC IP>=<QUAD machine_id>`, comma separated |
+| `QUAD_MACHINES` | `192.168.117.201=UBE-850T-02` | Only for QUADs that send no `gateway_ip`: `<machine key or PLC IP>=<QUAD machine_id>`, comma separated |
 | `MQTT_URL` | `mqtt://localhost:1883` | Broker. On production the broker runs on the same server. |
 | `MQTT_USERNAME` / `MQTT_PASSWORD` | `rico_backend` / ... | Broker login |
 | `MQTT_CLIENT_ID` | `rico-iot-backend` (default) | Fixed id = persistent session. Never use `quad-bridge-01`. |
@@ -22,9 +23,33 @@ PLC -> QUAD (Pi) --MQTT--> Mosquitto --> Rico backend --> PlcCycleReadings + Rea
 | `QUAD_LIVE_MAX_AGE_MS` | `300000` (default) | Older shots (QUAD backlog) are saved but not pushed to the live screen |
 | `PLC_DIRECT_POLLING_ENABLED` | `false` | **Local testing only**: no direct PLC connections at all |
 
-The MQTT subscriber starts only when both `MQTT_URL` and `QUAD_MACHINES` are set.
+The MQTT subscriber starts when `MQTT_URL` is set.
 
-## Switch a machine to QUAD
+## Which machine a message belongs to
+
+- Message with `gateway_ip` (IP of the QUAD Pi): the machine whose Machine Config has
+  Data Source = QUAD Gateway and that QUAD IP. Matched **only** by IP: a Pi whose IP is not
+  configured is never saved under another machine, even with the same `machine_id`.
+- Message without `gateway_ip`: the machine whose `QUAD_MACHINES` entry has the topic `machine_id`.
+- No match: nothing is saved and no ACK is sent (log: `not acknowledged: machine-not-on-quad`);
+  QUAD keeps the shot and resends it.
+- Rows are saved under the machine's own name and PLC IP (`machine_key`, `plc_ip`), as with
+  the direct connection; the QUAD IP is only used for the match.
+
+## Switch a machine to QUAD (Machine Config)
+
+1. The QUAD Pi is connected to the broker (online) and sends `gateway_ip`; its old backlog is
+   marked SYNCED so it does not resend shots the direct connection already saved.
+2. Machine Config -> edit the machine -> Data Source = QUAD Gateway (MQTT), QUAD IP Address =
+   the Pi's IP -> Save. One QUAD IP belongs to one machine.
+3. Within 15 s the direct PLC connection closes. Log:
+   `[QUAD] <machine>: direct PLC connection skipped; data source is QUAD <QUAD IP>`.
+4. Check the Real Time Monitor and that new shot numbers appear in the Production Report.
+
+Roll back: Data Source = Direct PLC -> Save. The direct connection starts again within 15 s.
+No restart.
+
+## Switch a machine to QUAD (`QUAD_MACHINES`, QUADs without `gateway_ip`)
 
 1. Stop the QUAD Bridge (`python -m server.quad_bridge`) if it is running; otherwise every shot
    is saved twice.
@@ -35,7 +60,7 @@ The MQTT subscriber starts only when both `MQTT_URL` and `QUAD_MACHINES` are set
 5. Check the Real Time Monitor (Machine State ONLINE/RUNNING) and that new shot numbers appear
    in the Production Report without gaps.
 
-## Roll back to the direct PLC connection
+## Roll back a `QUAD_MACHINES` machine to the direct PLC connection
 
 Remove the machine from `QUAD_MACHINES` (or remove the line) and restart the backend.
 No code change and no DB change is needed. QUAD keeps buffering shots it cannot deliver.

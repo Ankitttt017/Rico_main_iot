@@ -56,7 +56,7 @@ test("rejects messages that cannot be acknowledged or mapped", () => {
 });
 
 test("parses gateway status messages", () => {
-  assert.deepEqual(parseQuadStatus('{"status":"online","gateway_id":"QUAD-01"}'), { online: true, gatewayId: "QUAD-01" });
-  assert.deepEqual(parseQuadStatus(Buffer.from('{"status":"OFFLINE"}')), { online: false, gatewayId: null });
+  assert.deepEqual(parseQuadStatus('{"status":"online","gateway_id":"QUAD-01"}'), { online: true, gatewayId: "QUAD-01", gatewayIp: null });
+  assert.deepEqual(parseQuadStatus(Buffer.from('{"status":"OFFLINE"}')), { online: false, gatewayId: null, gatewayIp: null });
   assert.equal(parseQuadStatus('{"status":"rebooting"}'), null);
 });

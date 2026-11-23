@@ -1176,6 +1176,16 @@ IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
    AND COL_LENGTH('dbo.plc_machine_configs', 'plant_code') IS NULL
   ALTER TABLE dbo.plc_machine_configs ADD plant_code NVARCHAR(40) NULL;
 
+-- Data Source: NULL/'PLC' = direct PLC connection, 'QUAD' = QUAD gateway (MQTT).
+-- quad_ip: IP of the machine's QUAD Pi; QUAD messages carrying gateway_ip are matched on it.
+IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
+   AND COL_LENGTH('dbo.plc_machine_configs', 'data_source') IS NULL
+  ALTER TABLE dbo.plc_machine_configs ADD data_source NVARCHAR(20) NULL;
+
+IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
+   AND COL_LENGTH('dbo.plc_machine_configs', 'quad_ip') IS NULL
+  ALTER TABLE dbo.plc_machine_configs ADD quad_ip VARCHAR(50) NULL;
+
 IF OBJECT_ID(N'dbo.plc_machine_configs', N'U') IS NOT NULL
    AND COL_LENGTH('dbo.plc_machine_configs', 'register_config_json') IS NOT NULL
 BEGIN

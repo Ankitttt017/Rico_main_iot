@@ -21,6 +21,8 @@ export const DEFAULT_PLC_DRAFT = {
   ip_address: "",
   port: "",
   protocol: "SLMP",
+  data_source: "PLC",
+  quad_ip: "",
   sequence_no: null,
   is_active: true,
   register_config: [],
@@ -137,6 +139,8 @@ export function withRegisterDefaults(machine) {
     ...machine,
     machine_type: type,
     protocol: machine.protocol || "SLMP",
+    data_source: machine.data_source === "QUAD" ? "QUAD" : "PLC",
+    quad_ip: machine.quad_ip || "",
     register_config: Array.isArray(machine.register_config) ? machine.register_config : [],
   };
 }
@@ -615,6 +619,24 @@ export function MachineForm({
                   <option key={protocol.value} value={protocol.value}>{protocol.label}</option>
                 ))}
               </select>
+            </label>
+            <label>
+              <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-slate-400">Data Source</span>
+              <select className={inputClass} value={draft.data_source === "QUAD" ? "QUAD" : "PLC"} onChange={(event) => setField("data_source", event.target.value)}>
+                <option value="PLC">Direct PLC</option>
+                <option value="QUAD">QUAD Gateway (MQTT)</option>
+              </select>
+            </label>
+            <label>
+              <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-slate-400">
+                QUAD IP Address{draft.data_source === "QUAD" ? " *" : ""}
+              </span>
+              <input
+                className={inputClass}
+                value={draft.quad_ip || ""}
+                onChange={(event) => setField("quad_ip", event.target.value.replace(/[^\d.]/g, ""))}
+                placeholder="192.168.117.73"
+              />
             </label>
             <label>
               <span className="mb-1 block text-[11px] font-black uppercase tracking-wide text-slate-400">Status</span>
@@ -1146,6 +1168,9 @@ export default function UbeMachineSetupPage({ onLogout, currentUser }) {
                     <td className="px-4 py-3">
                       <p className="font-mono font-black text-slate-800">{machine.ip_address}:{machine.port}</p>
                       <p className="text-xs font-bold text-slate-400">{protocolLabel(machine.protocol)}</p>
+                      {machine.data_source === "QUAD" && (
+                        <p className="mt-1 text-xs font-black text-violet-700">QUAD {machine.quad_ip}</p>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-black uppercase text-blue-700">{machineTypeLabel(getMachineType(machine))}</span>

@@ -372,12 +372,17 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
     const machineKey = normalizeLookupText(keyFromMachine(machine) || machine?.machine_key || machine?.machine_code);
     const machineName = normalizeLookupText(machine?.name || machine?.machine_name);
     const machineIp = normalizeLookupText(machine?.ip_address || machine?.plc_ip);
-    const existing = configs.find((config) => {
+    // The config linked to this machine; otherwise only a config not linked to any machine may
+    // match by key/name/IP. Another machine's config is never opened (and saved) here.
+    const linked = machine?.id
+      ? configs.find((config) => String(config.machine_id || "") === String(machine.id))
+      : null;
+    const existing = linked || configs.find((config) => {
+      if (config.machine_id) return false;
       const configKey = normalizeLookupText(config.machine_key);
       const configName = normalizeLookupText(config.machine_name);
       const configIp = normalizeLookupText(config.ip_address);
       return (
-        String(config.machine_id || "") === String(machine?.id || "") ||
         (machineKey && configKey === machineKey) ||
         (machineName && configName === machineName) ||
         (machineIp && configIp === machineIp)
@@ -755,7 +760,7 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
                   }} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50">Close</button>
                 </div>
                 <div className="flex-1 overflow-y-auto">
-                  <div className="grid gap-4 p-5 md:grid-cols-3 lg:grid-cols-6">
+                  <div className="grid gap-4 p-5 md:grid-cols-3 lg:grid-cols-5">
                     <MachineSelect
                       label="Plant"
                       value={machineDraft.plant_code}
@@ -789,18 +794,6 @@ const MachineDashboard = ({ onLogout, currentUser }) => {
                       onChange={applyLineToDraft}
                       options={assignLineOptions}
                     />
-                    <label className="flex flex-col gap-1">
-                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Asset Type</span>
-                      <input value={machineDraft.asset || ""} onChange={(event) => {
-                        const asset = event.target.value;
-                        setMachineDraft((current) => ({ ...current, asset }));
-                        const nextType = inferAssetType({ ...machineDraft, asset });
-                        setPlcDraft((current) => ({
-                          ...current,
-                          machine_type: nextType,
-                        }));
-                      }} placeholder="Die Casting / CNC / Leak Test" className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none focus:border-teal-500 focus:ring-4 focus:ring-teal-50" />
-                    </label>
                     <label className="flex flex-col gap-1">
                       <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Machine</span>
                       <input value={machineDraft.name || ""} onChange={(event) => {

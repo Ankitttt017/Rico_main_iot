@@ -61,6 +61,8 @@ const {
   QUAD_RUNNING_WINDOW_MS,
   QUAD_LIVE_MAX_AGE_MS,
   getQuadMachineId,
+  getConfiguredQuadIp,
+  findQuadMachine: findQuadMachineIn,
   isQuadMachine,
 } = require("../config/quadConfig");
 const { QuadMessageError, getQuadRawValue } = require("./quadPayloadMapper");
@@ -3827,6 +3829,9 @@ function startPlcMonitor(io) {
 
   const quadGatewayOnline = new Map();
   const quadLastShotAt = new Map();
+  // Last online/offline per QUAD IP, also for QUADs not (yet) set as a machine's data source:
+  // the retained status arrives once, so a machine switched to QUAD later still knows it.
+  const quadStatusByIp = new Map();
   const quadRecentEvents = new Map();
   const QUAD_RECENT_EVENT_LIMIT = 5000;
   const quadSkipLogged = new Set();
@@ -3839,6 +3844,10 @@ function startPlcMonitor(io) {
 
   const applyQuadMachineState = (machine, patch = {}) => {
     const machineKey = getCanonicalMachineKey(machine);
+    const quadIp = getConfiguredQuadIp(machine);
+    if (!quadGatewayOnline.has(machineKey) && quadIp && quadStatusByIp.has(quadIp)) {
+      quadGatewayOnline.set(machineKey, quadStatusByIp.get(quadIp));
+    }
     const quadState = getQuadState(machineKey);
     updateMachineState(machine, {
       dataSource: "QUAD",
@@ -3855,18 +3864,12 @@ function startPlcMonitor(io) {
     });
   };
 
-  const findQuadMachineIn = (list, quadMachineId) => {
-    const wanted = String(quadMachineId || "").trim().toLowerCase();
-    if (!wanted) return null;
-    return (list || []).find(
-      (machine) => String(getQuadMachineId(machine) || "").toLowerCase() === wanted
-    ) || null;
-  };
-  const findQuadMachine = (quadMachineId) => findQuadMachineIn(machines, quadMachineId);
+  // source: { machineId, gatewayIp } of a QUAD message (gateway_ip -> Machine Config QUAD IP,
+  // otherwise topic machine_id -> QUAD_MACHINES).
   // Right after a restart the broker delivers queued shots before the machine list is loaded.
-  const resolveQuadMachine = async (quadMachineId) =>
-    findQuadMachine(quadMachineId) ||
-    findQuadMachineIn(await getConfiguredMachines().catch(() => []), quadMachineId);
+  const resolveQuadMachine = async (source) =>
+    findQuadMachineIn(machines, source) ||
+    findQuadMachineIn(await getConfiguredMachines().catch(() => []), source);
 
   const rememberQuadEvent = (eventUuid, status, events = quadRecentEvents) => {
     events.set(eventUuid, status);
@@ -3924,7 +3927,7 @@ function startPlcMonitor(io) {
   // Returns { ack: "SAVED" | "DUPLICATE" | null, reason, machine }. Throws when the DB save
   // fails, so the caller can tell QUAD to resend (ACK status ERROR).
   const handleQuadTelemetry = async (telemetry) => {
-    const machine = await resolveQuadMachine(telemetry.machineId);
+    const machine = await resolveQuadMachine(telemetry);
     if (!machine) return { ack: null, reason: "machine-not-on-quad" };
     if (!isUbeMachine(machine) || isGaugeMachine(machine) || isLeakTestMachine(machine)) {
       return { ack: null, reason: "unsupported-machine-type", machine };
@@ -3959,7 +3962,8 @@ function startPlcMonitor(io) {
   };
 
   const handleQuadStatus = async (quadMachineId, status) => {
-    const machine = await resolveQuadMachine(quadMachineId);
+    if (status?.gatewayIp) quadStatusByIp.set(status.gatewayIp, status.online);
+    const machine = await resolveQuadMachine({ machineId: quadMachineId, gatewayIp: status?.gatewayIp });
     if (!machine) return false;
     const machineKey = getCanonicalMachineKey(machine);
     const wasOnline = quadGatewayOnline.get(machineKey) === true;
@@ -5594,16 +5598,26 @@ function startPlcMonitor(io) {
         prevConfig.ip !== machine.ip ||
         Number(prevConfig.port) !== Number(machine.port) ||
         prevConfig.name !== machine.name ||
+        getConfiguredQuadIp(prevConfig) !== getConfiguredQuadIp(machine) ||
         machineRegisterConfigSignature(prevConfig) !== machineRegisterConfigSignature(machine)
       );
 
       if (configChanged) {
+        // Stops the running direct PLC loop (it closes its socket); startMachineMonitors()
+        // below starts it again, or skips it when the machine now gets its data from QUAD.
         monitorTokens.delete(machineKey);
+        quadSkipLogged.delete(machineKey);
+        // Another QUAD (or none) now feeds this machine: its online state comes from that QUAD.
+        if (getConfiguredQuadIp(prevConfig) !== getConfiguredQuadIp(machine)) quadGatewayOnline.delete(machineKey);
+        const quadId = getQuadMachineId(machine);
         machineState.set(machineKey, {
           ...currentState,
           ...machine,
           connected: false,
           error: null,
+          dataSource: quadId ? "QUAD" : "PLC",
+          quadMachineId: quadId,
+          quadState: quadId ? currentState?.quadState : null,
           shotStatus: "Machine register config changed; restarting monitor.",
           machineType: getMachineTypeName(machine),
         });

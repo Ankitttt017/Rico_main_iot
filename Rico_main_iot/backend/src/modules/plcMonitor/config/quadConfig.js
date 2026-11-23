@@ -2,11 +2,15 @@
 
 // QUAD edge gateway (MQTT) settings.
 //
-// QUAD_MACHINES lists the machines whose data comes from QUAD instead of a direct PLC
-// connection, as "<machine key or PLC IP>=<QUAD machine_id>" pairs separated by commas:
-//   QUAD_MACHINES=192.168.117.201=UBE-850T-02
-// Machines not listed keep their direct PLC connection. Removing a machine from the list
-// (and restarting the backend) restores the direct connection.
+// A machine gets its data from QUAD instead of a direct PLC connection when:
+//   1. Machine Config has Data Source = QUAD and a QUAD IP address. QUAD messages that carry
+//      "gateway_ip" are matched to the machine by that IP. Changes apply within the machine
+//      config refresh (15 s), no restart.
+//   2. Or the machine is listed in QUAD_MACHINES (older QUADs that do not send gateway_ip),
+//      as "<machine key or PLC IP>=<QUAD machine_id>" pairs separated by commas:
+//        QUAD_MACHINES=192.168.117.201=UBE-850T-02
+//      Messages without gateway_ip are matched by the machine_id in the topic.
+// Other machines keep their direct PLC connection.
 
 function parseQuadMachines(value) {
   const byMachineKey = new Map();
@@ -42,7 +46,12 @@ const QUAD_RUNNING_WINDOW_MS = Math.max(30000, Number(process.env.QUAD_RUNNING_W
 // Shots older than this (QUAD backlog) are saved to the DB but not pushed to the live screen.
 const QUAD_LIVE_MAX_AGE_MS = Math.max(30000, Number(process.env.QUAD_LIVE_MAX_AGE_MS || 300000));
 
-function getQuadMachineId(machine = {}) {
+function normalizeQuadIp(value) {
+  return String(value || "").trim();
+}
+
+// QUAD machine_id from QUAD_MACHINES, or null.
+function getEnvQuadMachineId(machine = {}) {
   const candidates = [machine.key, machine.machine_key, machine.ip]
     .map((value) => String(value || "").trim().toLowerCase())
     .filter(Boolean);
@@ -52,12 +61,35 @@ function getQuadMachineId(machine = {}) {
   return null;
 }
 
+// QUAD IP from Machine Config when its Data Source is QUAD, or null.
+function getConfiguredQuadIp(machine = {}) {
+  if (String(machine.dataSource || "").trim().toUpperCase() !== "QUAD") return null;
+  return normalizeQuadIp(machine.quadIp) || null;
+}
+
+// Label of the QUAD feeding this machine (for logs and the live screen), or null.
+function getQuadMachineId(machine = {}) {
+  return getEnvQuadMachineId(machine) || getConfiguredQuadIp(machine);
+}
+
 function isQuadMachine(machine = {}) {
   return Boolean(getQuadMachineId(machine));
 }
 
+// A message that carries gateway_ip is matched only by that IP (Machine Config); a message
+// without it only by its topic machine_id (QUAD_MACHINES). A QUAD whose IP is not configured
+// is never saved under another machine that happens to use the same machine_id.
+function findQuadMachine(machines, { machineId, gatewayIp } = {}) {
+  const list = machines || [];
+  const ip = normalizeQuadIp(gatewayIp);
+  if (ip) return list.find((machine) => getConfiguredQuadIp(machine) === ip) || null;
+  const wanted = String(machineId || "").trim().toLowerCase();
+  if (!wanted) return null;
+  return list.find((machine) => String(getEnvQuadMachineId(machine) || "").toLowerCase() === wanted) || null;
+}
+
 function isQuadIngestEnabled() {
-  return Boolean(QUAD_MQTT.url) && QUAD_MACHINES.size > 0;
+  return Boolean(QUAD_MQTT.url);
 }
 
 module.exports = {
@@ -66,7 +98,10 @@ module.exports = {
   QUAD_RUNNING_WINDOW_MS,
   QUAD_LIVE_MAX_AGE_MS,
   parseQuadMachines,
+  normalizeQuadIp,
+  getConfiguredQuadIp,
   getQuadMachineId,
+  findQuadMachine,
   isQuadMachine,
   isQuadIngestEnabled,
 };

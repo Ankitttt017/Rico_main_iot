@@ -29,6 +29,13 @@ function cleanText(value) {
   return text || null;
 }
 
+// IPv4 address of the QUAD Pi ("gateway_ip"), or null.
+function parseGatewayIp(value) {
+  const text = String(value ?? "").trim();
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(text)) return null;
+  return text.split(".").every((part) => Number(part) <= 255) ? text : null;
+}
+
 function parseAcquiredAt(value) {
   if (!value) return null;
   const date = new Date(String(value).trim());
@@ -80,6 +87,7 @@ function parseQuadTelemetry(input) {
     eventUuid,
     machineId,
     gatewayId: message.gateway_id || null,
+    gatewayIp: parseGatewayIp(message.gateway_ip),
     acquiredAt: parseAcquiredAt(message.acquired_at),
     plcShotTime: shot.shot_time ? String(shot.shot_time).trim() : null,
     shotResult: shot.result || null,
@@ -113,7 +121,11 @@ function parseQuadStatus(input) {
   }
   const status = String(message?.status || "").trim().toLowerCase();
   if (status !== "online" && status !== "offline") return null;
-  return { online: status === "online", gatewayId: message?.gateway_id || null };
+  return {
+    online: status === "online",
+    gatewayId: message?.gateway_id || null,
+    gatewayIp: parseGatewayIp(message?.gateway_ip),
+  };
 }
 
 module.exports = {
@@ -121,5 +133,6 @@ module.exports = {
   parseQuadTelemetry,
   parseQuadStatus,
   getQuadRawValue,
+  parseGatewayIp,
   toUnsignedWord,
 };

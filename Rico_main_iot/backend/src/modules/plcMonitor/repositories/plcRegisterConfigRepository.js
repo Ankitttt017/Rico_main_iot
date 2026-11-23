@@ -242,6 +242,8 @@ function normalizeMachineRegisterConfig(row = {}, profileRegistersByKey = new Ma
     ipAddress: row.ip_address || null,
     port: row.port || null,
     protocol: row.protocol || "SLMP",
+    dataSource: String(row.data_source || "").trim().toUpperCase() === "QUAD" ? "QUAD" : "PLC",
+    quadIp: String(row.quad_ip || "").trim() || null,
     registers: finalRegisters,
   };
 }
@@ -251,6 +253,21 @@ async function plcMachineConfigTableExists() {
     SELECT CASE WHEN OBJECT_ID('dbo.plc_machine_configs', 'U') IS NULL THEN 0 ELSE 1 END AS table_exists
   `);
   return Number(rows[0]?.table_exists || 0) === 1;
+}
+
+// data_source / quad_ip are added by the Machine Config API (and schema.mssql.sql); until then
+// the machine list still loads, with every machine on its direct PLC connection.
+let quadColumnsReady = false;
+async function quadColumnsSelect() {
+  if (!quadColumnsReady) {
+    const { rows } = await db.query(`
+      SELECT CASE WHEN COL_LENGTH('dbo.plc_machine_configs', 'data_source') IS NOT NULL
+                   AND COL_LENGTH('dbo.plc_machine_configs', 'quad_ip') IS NOT NULL
+             THEN 1 ELSE 0 END AS ready
+    `);
+    quadColumnsReady = Number(rows[0]?.ready || 0) === 1;
+  }
+  return quadColumnsReady ? ", pc.data_source, pc.quad_ip" : "";
 }
 
 async function plcRegistersTableExists() {
@@ -325,7 +342,7 @@ async function loadActiveMachineRegisterConfigs() {
 
   const { rows } = await db.query(`
     SELECT pc.id, pc.machine_id, pc.machine_key, pc.machine_name, pc.machine_type,
-           pc.ip_address, pc.port, pc.protocol, pc.register_config_json
+           pc.ip_address, pc.port, pc.protocol, pc.register_config_json${await quadColumnsSelect()}
     FROM dbo.plc_machine_configs pc WITH (NOLOCK)
     LEFT JOIN dbo.iot_machines m WITH (NOLOCK) ON m.id = pc.machine_id
     WHERE pc.is_active = 1
@@ -348,7 +365,7 @@ async function loadRegisterConfigByMachineId(machineId) {
 
   const { rows } = await db.query(`
     SELECT TOP 1 pc.id, pc.machine_id, pc.machine_key, pc.machine_name, pc.machine_type,
-           pc.ip_address, pc.port, pc.protocol, pc.register_config_json
+           pc.ip_address, pc.port, pc.protocol, pc.register_config_json${await quadColumnsSelect()}
     FROM dbo.plc_machine_configs pc WITH (NOLOCK)
     LEFT JOIN dbo.iot_machines m WITH (NOLOCK) ON m.id = pc.machine_id
     WHERE pc.is_active = 1
@@ -374,7 +391,7 @@ async function loadRegisterConfigByMachineKey(machineKey) {
 
   const { rows } = await db.query(`
     SELECT TOP 1 pc.id, pc.machine_id, pc.machine_key, pc.machine_name, pc.machine_type,
-           pc.ip_address, pc.port, pc.protocol, pc.register_config_json
+           pc.ip_address, pc.port, pc.protocol, pc.register_config_json${await quadColumnsSelect()}
     FROM dbo.plc_machine_configs pc WITH (NOLOCK)
     LEFT JOIN dbo.iot_machines m WITH (NOLOCK) ON m.id = pc.machine_id
     WHERE pc.is_active = 1

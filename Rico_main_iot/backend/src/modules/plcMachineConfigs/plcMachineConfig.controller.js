@@ -330,6 +330,11 @@ function inferMachineType(input = {}) {
   return explicit || "generic";
 }
 
+// "QUAD": data comes from the QUAD gateway (MQTT); "PLC": direct PLC connection.
+function dataSourceType(value) {
+  return String(value || "").trim().toUpperCase() === "QUAD" ? "QUAD" : "PLC";
+}
+
 function protocolType(value) {
   const compact = String(value || "SLMP").trim().toUpperCase().replace(/[\s/_-]+/g, "");
   if (compact === "GENERICTCPTEXT" || compact === "TCPTEXT") return "GENERIC_TCP_TEXT";
@@ -414,6 +419,14 @@ async function ensureSchema() {
         IF COL_LENGTH('dbo.plc_machine_configs', 'plant_code') IS NULL
         BEGIN
           ALTER TABLE dbo.plc_machine_configs ADD plant_code NVARCHAR(40) NULL;
+        END;
+        IF COL_LENGTH('dbo.plc_machine_configs', 'data_source') IS NULL
+        BEGIN
+          ALTER TABLE dbo.plc_machine_configs ADD data_source NVARCHAR(20) NULL;
+        END;
+        IF COL_LENGTH('dbo.plc_machine_configs', 'quad_ip') IS NULL
+        BEGIN
+          ALTER TABLE dbo.plc_machine_configs ADD quad_ip VARCHAR(50) NULL;
         END;
       `);
       await db.run(`
@@ -608,6 +621,8 @@ function normalizeMachine(row = {}) {
     ip_address: row.ip_address,
     port: Number(row.port || 5002),
     protocol: row.protocol || "SLMP",
+    data_source: dataSourceType(row.data_source),
+    quad_ip: row.quad_ip || null,
     sequence_no: row.sequence_no ?? null,
     is_active: row.is_active === undefined ? true : Boolean(row.is_active),
     register_config: Array.isArray(normalizedRegisterConfig) ? normalizedRegisterConfig : null,
@@ -900,6 +915,40 @@ async function syncMachineNameReferences({ ip, machineKey, machineName }) {
   }
 }
 
+// Same machine: the same machine asset, or (config without an asset) the same machine name.
+function isSameMachineConfig(existing = {}, input = {}, name = "") {
+  const existingAsset = cleanInt(existing.machine_id);
+  const inputAsset = cleanInt(input.machine_id);
+  if (existingAsset || inputAsset) return existingAsset === inputAsset;
+  const normalize = (value) => String(value || "").trim().toLowerCase();
+  return Boolean(name) && normalize(existing.machine_name) === normalize(name);
+}
+
+// Data Source / QUAD IP to store. A request without these fields keeps the stored values.
+// A QUAD IP belongs to one machine only; Data Source QUAD needs one.
+async function resolveQuadSettings(input = {}, id = null, plcIp = null) {
+  const has = (field) => Object.prototype.hasOwnProperty.call(input, field);
+  let stored = { data_source: "PLC", quad_ip: null };
+  if (id && (!has("data_source") || !has("quad_ip"))) {
+    const { rows } = await db.query("SELECT TOP 1 data_source, quad_ip FROM dbo.plc_machine_configs WHERE id = ?", [id]);
+    if (rows[0]) stored = { data_source: dataSourceType(rows[0].data_source), quad_ip: rows[0].quad_ip || null };
+  }
+  const dataSource = has("data_source") ? dataSourceType(input.data_source) : stored.data_source;
+  const quadIp = has("quad_ip") ? cleanText(input.quad_ip) : stored.quad_ip;
+
+  if (quadIp && !isValidIpv4(quadIp)) throw new Error(`QUAD IP "${quadIp}" is not a valid IP address.`);
+  if (dataSource === "QUAD" && !quadIp) throw new Error("QUAD IP address is required when Data Source is QUAD Gateway.");
+  if (quadIp && quadIp === plcIp) throw new Error("QUAD IP must be the QUAD Pi's own IP, not the PLC IP.");
+  if (quadIp) {
+    const { rows } = await db.query(
+      "SELECT TOP 1 machine_name FROM dbo.plc_machine_configs WHERE quad_ip = ? AND (? IS NULL OR id <> ?)",
+      [quadIp, id, id]
+    );
+    if (rows.length) throw new Error(`QUAD IP ${quadIp} is already assigned to ${rows[0].machine_name}.`);
+  }
+  return { data_source: dataSource, quad_ip: quadIp };
+}
+
 async function saveMachineRecord(input = {}) {
   const name = cleanText(input.machine_name || input.name);
   if (!name) throw new Error("Machine name is required");
@@ -910,13 +959,19 @@ async function saveMachineRecord(input = {}) {
   const registerConfig = hasRegisterConfigInput ? normalizeRegisters(input.register_config) || [] : null;
   const type = inferMachineType({ ...input, ip_address: ip, register_config: registerConfig });
   const existingByIp = await db.query(
-    "SELECT TOP 1 id, register_config_json FROM dbo.plc_machine_configs WHERE ip_address = ? AND (? IS NULL OR id <> ?) ORDER BY id",
+    "SELECT TOP 1 id, machine_id, machine_name, register_config_json FROM dbo.plc_machine_configs WHERE ip_address = ? AND (? IS NULL OR id <> ?) ORDER BY id",
     [ip, id, id]
   );
   if (existingByIp.rows.length) {
-    if (id) throw new Error(`PLC IP ${ip} is already assigned to another machine config.`);
-    id = existingByIp.rows[0].id;
+    // A save without an id may update the config of the same machine only; never take over
+    // (rename, relink and replace the registers of) another machine's config.
+    const existing = existingByIp.rows[0];
+    if (id || !isSameMachineConfig(existing, input, name)) {
+      throw new Error(`PLC IP ${ip} is already used by ${existing.machine_name}.`);
+    }
+    id = existing.id;
   }
+  const quadSettings = await resolveQuadSettings(input, id, ip);
   let existingRegisterConfigJson = existingByIp.rows[0]?.register_config_json || null;
   if (!existingRegisterConfigJson && id) {
     const existingById = await db.query(
@@ -947,6 +1002,8 @@ async function saveMachineRecord(input = {}) {
     ip_address: ip,
     port: cleanInt(input.port, 5002),
     protocol: protocolType(input.protocol),
+    data_source: quadSettings.data_source,
+    quad_ip: quadSettings.quad_ip,
     sequence_no: cleanInt(input.sequence_no),
     is_active: input.is_active === undefined ? 1 : Number(Boolean(input.is_active)),
     register_config_json: hasRegisterConfigInput
@@ -957,15 +1014,20 @@ async function saveMachineRecord(input = {}) {
 
   if (id) {
     const { rows } = await db.query(
-      "SELECT TOP 1 id FROM dbo.plc_machine_configs WHERE id = ?",
+      "SELECT TOP 1 id, machine_id, machine_name FROM dbo.plc_machine_configs WHERE id = ?",
       [id]
     );
     if (!rows.length) throw new Error("Machine config not found");
+    // A config linked to one machine asset is never moved to another asset by a save.
+    const storedAsset = cleanInt(rows[0].machine_id);
+    if (storedAsset && payload.machine_id && storedAsset !== payload.machine_id) {
+      throw new Error(`This PLC config belongs to ${rows[0].machine_name}. Edit it from that machine.`);
+    }
 
     await withDeadlockRetry(() => db.run(`
       UPDATE dbo.plc_machine_configs
       SET machine_id = ?, machine_key = ?, machine_name = ?, machine_type = ?, plant_code = ?, ip_address = ?, port = ?,
-          protocol = ?, sequence_no = ?, is_active = ?,
+          protocol = ?, data_source = ?, quad_ip = ?, sequence_no = ?, is_active = ?,
           register_config_json = ?, notes = ?, updated_at = SYSUTCDATETIME()
       WHERE id = ?
     `, [
@@ -977,6 +1039,8 @@ async function saveMachineRecord(input = {}) {
       payload.ip_address,
       payload.port,
       payload.protocol,
+      payload.data_source,
+      payload.quad_ip,
       payload.sequence_no,
       payload.is_active,
       payload.register_config_json,
@@ -1005,9 +1069,9 @@ async function saveMachineRecord(input = {}) {
   const result = await withDeadlockRetry(() => db.run(`
     INSERT INTO dbo.plc_machine_configs
       (machine_id, machine_key, machine_name, machine_type, plant_code, ip_address, port, protocol,
-       sequence_no, is_active, register_config_json, notes)
+       data_source, quad_ip, sequence_no, is_active, register_config_json, notes)
     OUTPUT INSERTED.id
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, [
     payload.machine_id,
     payload.machine_key,
@@ -1017,6 +1081,8 @@ async function saveMachineRecord(input = {}) {
     payload.ip_address,
     payload.port,
     payload.protocol,
+    payload.data_source,
+    payload.quad_ip,
     payload.sequence_no,
     payload.is_active,
     payload.register_config_json,
@@ -1055,6 +1121,8 @@ async function listMachines(_req, res) {
         pc.ip_address,
         pc.port,
         pc.protocol,
+        pc.data_source,
+        pc.quad_ip,
         pc.sequence_no,
         pc.is_active,
         pc.register_config_json,
