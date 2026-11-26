@@ -58,41 +58,11 @@ const TWO_DIGIT_FIELDS = new Set([
   "shot_second",
 ]);
 
-const DISPLAY_DIVIDE_BY_TEN_FIELDS = new Set([
-  "cycle_time",
-  "die_close_core_in_time",
-  "pouring_time",
-  "shot_fwd_time",
-  "curing_time",
-  "die_open_core_out_time",
-  "ejector_time",
-  "extract_time",
-  "spray_time",
-  "metal_pressure",
-  "cooling_water_mov",
-  "cooling_water_sta",
-  "jet_cooling_pressure",
-  "clamp_tonnage_he_up_pct",
-  "clamp_tonnage_op_low_pct",
-  "clamp_tonnage_op_up_pct",
-]);
-
 const DISPLAY_DIVIDE_BY_HUNDRED_FIELDS = new Set([
   "v1_speed",
   "v2_speed",
   "v3_speed",
   "v4_speed",
-]);
-
-const DISPLAY_DIVIDE_BY_HUNDRED_LIMITS = new Set([
-  "v1_speed_upper_limit",
-  "v1_speed_lower_limit",
-  "v2_speed_upper_limit",
-  "v2_speed_lower_limit",
-  "v3_speed_upper_limit",
-  "v3_speed_lower_limit",
-  "v4_speed_upper_limit",
-  "v4_speed_lower_limit",
 ]);
 
 function getNumericDisplayValue(value) {
@@ -104,38 +74,8 @@ function getScaledDisplayValue(normalizedName, value) {
   const numericValue = getNumericDisplayValue(value);
   if (numericValue === null) return value;
 
-  // Limits (Upper / Lower limit limits) if unscaled in config
-  if (normalizedName.endsWith("_upper_limit") || normalizedName.endsWith("_lower_limit")) {
-    if (
-      DISPLAY_DIVIDE_BY_HUNDRED_LIMITS.has(normalizedName) ||
-      normalizedName.startsWith("v1_speed") ||
-      normalizedName.startsWith("v2_speed") ||
-      normalizedName.startsWith("v3_speed") ||
-      normalizedName.startsWith("v4_speed")
-    ) {
-      if (numericValue > 10) {
-        return Number((numericValue / 100).toFixed(2));
-      }
-      return numericValue;
-    }
-    const baseName = normalizedName.replace(/_(upper|lower)_limit$/, "");
-    if (
-      baseName === "metal_pressure" ||
-      baseName === "cooling_water_sta" ||
-      baseName === "curing_time" ||
-      baseName === "extract_time" ||
-      baseName === "spray_time" ||
-      baseName === "jet_cooling_pressure"
-    ) {
-      return numericValue;
-    }
-    if (DISPLAY_DIVIDE_BY_TEN_FIELDS.has(baseName)) {
-      if (numericValue > 10) {
-        return Number((numericValue / 10).toFixed(1));
-      }
-      return numericValue;
-    }
-  }
+  // Upper / lower limits are shown as stored: the backend already scales them with the
+  // register's Min/Max PLC address and Scale from Machine Config.
 
   if (normalizedName === "clamp_tonnage" || normalizedName === "clamp_tonnage_t") {
     if (numericValue !== null && numericValue > 0) {
